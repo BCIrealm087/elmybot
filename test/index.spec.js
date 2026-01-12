@@ -2,6 +2,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF } from 'cloud
 import { describe, it, expect } from 'vitest';
 import worker from '../src';
 
+// old/unused tests
 describe('Hello World worker', () => {
 	it('responds with Hello World! (unit style)', async () => {
 		const request = new Request('http://example.com');
