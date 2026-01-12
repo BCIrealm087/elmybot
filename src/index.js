@@ -36,15 +36,6 @@ function ephemeral(content) {
   });
 }
 
-// Discord permission bit: Manage Guild = 0x20
-const PERM_MANAGE_GUILD = 0x20n;
-
-function hasManageGuild(interaction) {
-  const permsStr = interaction.member?.permissions;
-  if (!permsStr) return false;
-  return (BigInt(permsStr) & PERM_MANAGE_GUILD) === PERM_MANAGE_GUILD;
-}
-
 function getOption(interaction, name) {
   const opts = interaction.data?.options ?? [];
   return opts.find(o => o.name === name)?.value;
@@ -122,9 +113,6 @@ export default {
     const stub = env.SCHEDULER.get(id);
 
     if (name === "pingat") {
-      if (!hasManageGuild(interaction)) {
-        return ephemeral("You need **Manage Server** to schedule/cancel pings.");
-      }
 
       let ts = Number(getOption(interaction, "timestamp"));
       const roleId = String(getOption(interaction, "role") ?? "");
@@ -158,9 +146,6 @@ export default {
     }
 
     if (name === "pingat_cancel") {
-      if (!hasManageGuild(interaction)) {
-        return ephemeral("You need **Manage Server** to cancel pings.");
-      }
       const jobId = String(getOption(interaction, "job_id") ?? "").trim();
       return stub.fetch("https://do/cancel", {
         method: "POST",
