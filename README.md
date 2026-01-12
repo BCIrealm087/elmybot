@@ -12,7 +12,7 @@ with a per-guild Durable Object for reliable scheduling.
 
 **Who it's for**
 - Server moderators and admins who need time-based role announcements.
-- Product owners looking for a simple, auditable scheduling workflow.
+- Server owners looking for a simple, auditable scheduling workflow.
 
 **Why Cloudflare Workers + Durable Objects**
 - **Edge-first**: interactions respond quickly to Discord.
