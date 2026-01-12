@@ -1,9 +1,14 @@
 // register-commands.js
-import 'dotenv/config';
+// One-off script to register global slash commands for the bot.
+import "dotenv/config";
 
 const appId = process.env.APP_ID;
 const token = process.env.DISCORD_TOKEN;
 
+/**
+ * Global slash commands visible in every server the bot is installed in.
+ * See https://discord.com/developers/docs/interactions/application-commands
+ */
 const commands = [
   { name: "alive", description: "Replies if alive." },
   {

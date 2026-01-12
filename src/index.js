@@ -2,8 +2,17 @@ import nacl from "tweetnacl";
 
 import { isModeratorOrOwner } from "./permissions";
 
+/**
+ * Cloudflare Worker entrypoint for Discord interactions.
+ * Handles request verification, command routing, and delegates scheduling
+ * to a Durable Object per guild.
+ */
+
 const encoder = new TextEncoder();
 
+/**
+ * Convert a hex string to Uint8Array for signature verification.
+ */
 function hexToU8(hex) {
   if (typeof hex !== "string" || hex.length % 2 !== 0) return null;
   const out = new Uint8Array(hex.length / 2);
@@ -13,6 +22,9 @@ function hexToU8(hex) {
   return out;
 }
 
+/**
+ * Verify the Ed25519 signature for a Discord interaction request.
+ */
 function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText }) {
   const sig = hexToU8(signatureHex);
   const pk = hexToU8(publicKeyHex);
@@ -22,6 +34,9 @@ function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText 
   return nacl.sign.detached.verify(msg, sig, pk);
 }
 
+/**
+ * Build a JSON response with the expected Discord response headers.
+ */
 function jsonResponse(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -29,6 +44,9 @@ function jsonResponse(obj, status = 200) {
   });
 }
 
+/**
+ * Generate an ephemeral response (visible only to the invoking user).
+ */
 function ephemeral(content) {
   return jsonResponse({
     type: 4,
@@ -36,12 +54,18 @@ function ephemeral(content) {
   });
 }
 
+/**
+ * Helper to pull a single option value by name from an interaction.
+ */
 function getOption(interaction, name) {
   const opts = interaction.data?.options ?? [];
   return opts.find(o => o.name === name)?.value;
 }
 
 const protectedCommands = new Set(["pingat", "pingat_list", "pingat_cancel"]);
+/**
+ * Commands that affect schedules are permission-gated.
+ */
 async function checkPermissions(interaction, env) {
   const allowed = (protectedCommands.has(interaction.data?.name))
     ? await isModeratorOrOwner(interaction, env)
@@ -61,6 +85,9 @@ async function checkPermissions(interaction, env) {
 }
 
 export default {
+  /**
+   * Cloudflare Worker fetch handler (Discord interactions entrypoint).
+   */
   async fetch(request, env) {
     // Optional health
     if (request.method === "GET") return new Response("OK");
@@ -159,11 +186,17 @@ export default {
 };
 
 export class GuildScheduler {
+  /**
+   * Durable Object per guild responsible for storing and firing schedules.
+   */
   constructor(state, env) {
     this.state = state;
     this.env = env;
   }
 
+  /**
+   * Persist jobs sorted by run time and set the next alarm.
+   */
   async setNextAlarmFromJobs() {
     const jobs = (await this.state.storage.get("jobs")) ?? [];
     jobs.sort((a, b) => a.runAtMs - b.runAtMs);
@@ -176,6 +209,9 @@ export class GuildScheduler {
     }
   }
 
+  /**
+   * Durable Object fetch handler for scheduling/listing/canceling.
+   */
   async fetch(request) {
     const url = new URL(request.url);
 
@@ -270,6 +306,9 @@ export class GuildScheduler {
     return new Response("Not Found", { status: 404 });
   }
 
+  /**
+   * Alarm handler: delivers due pings and reschedules repeating jobs.
+   */
   async alarm() {
     // Alarms are at-least-once; keep alarm handler idempotent-ish.
     const jobs = (await this.state.storage.get("jobs")) ?? [];

@@ -1,16 +1,21 @@
-// Permission bit flags (BigInt)
+/**
+ * Permission bit flags (BigInt) from Discord's permissions model.
+ * Only the subset used by this bot is listed here.
+ */
 const PERMS = {
-  KICK_MEMBERS:       0x0000000000000002n, // (1 << 1) :contentReference[oaicite:1]{index=1}
-  BAN_MEMBERS:        0x0000000000000004n, // (1 << 2) :contentReference[oaicite:2]{index=2}
-  ADMINISTRATOR:      0x0000000000000008n, // (1 << 3) :contentReference[oaicite:3]{index=3}
-  MANAGE_GUILD:       0x0000000000000020n, // (1 << 5) :contentReference[oaicite:4]{index=4}
-  MANAGE_MESSAGES:    0x0000000000002000n, // (1 << 13) :contentReference[oaicite:5]{index=5}
-  MANAGE_ROLES:       0x0000000010000000n, // (1 << 28) :contentReference[oaicite:6]{index=6}
-  MODERATE_MEMBERS:   0x0000010000000000n, // (1 << 40) :contentReference[oaicite:7]{index=7}
+  KICK_MEMBERS: 0x0000000000000002n, // (1 << 1)
+  BAN_MEMBERS: 0x0000000000000004n, // (1 << 2)
+  ADMINISTRATOR: 0x0000000000000008n, // (1 << 3)
+  MANAGE_GUILD: 0x0000000000000020n, // (1 << 5)
+  MANAGE_MESSAGES: 0x0000000000002000n, // (1 << 13)
+  MANAGE_ROLES: 0x0000000010000000n, // (1 << 28)
+  MODERATE_MEMBERS: 0x0000010000000000n, // (1 << 40)
 };
 
-// Define what "moderator" means for *your* server.
-// Tweak this list if you want stricter/looser behavior.
+/**
+ * Define what "moderator" means for *your* server.
+ * Tweak this list if you want stricter/looser behavior.
+ */
 const MODERATOR_ANY_OF = [
   PERMS.ADMINISTRATOR,
   PERMS.MANAGE_GUILD,
@@ -21,14 +26,21 @@ const MODERATOR_ANY_OF = [
   PERMS.MANAGE_ROLES,
 ];
 
+/**
+ * Returns true if the permissions string contains any of the provided flags.
+ * Discord serializes permissions as a stringified integer.
+ */
 function hasAnyPerm(permsStr, flags) {
   if (!permsStr) return false;
-  const p = BigInt(permsStr); // permissions are serialized as strings :contentReference[oaicite:8]{index=8}
+  const p = BigInt(permsStr); // permissions are serialized as strings
   return flags.some((f) => (p & f) === f);
 }
 
+/**
+ * Fetches the guild owner id so we can allow the server owner.
+ * Falls back to null when the Discord API call fails.
+ */
 async function fetchGuildOwnerId(env, guildId) {
-  // Guild object includes owner_id :contentReference[oaicite:9]{index=9}
   const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
     headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
   });
@@ -37,6 +49,9 @@ async function fetchGuildOwnerId(env, guildId) {
   return guild.owner_id ?? null;
 }
 
+/**
+ * Checks whether the invoking user is a moderator (by permission) or the guild owner.
+ */
 export async function isModeratorOrOwner(interaction, env) {
   if (!interaction.guild_id || !interaction.member) return false;
 
