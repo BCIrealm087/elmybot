@@ -62,7 +62,7 @@ function getOption(interaction, name) {
   return opts.find(o => o.name === name)?.value;
 }
 
-const protectedCommands = new Set(["pingat", "pingat_list", "pingat_cancel"]);
+const protectedCommands = new Set(["pinrolegat", "pingmeat", "pingat_list", "pingat_cancel"]);
 /**
  * Commands that affect schedules are permission-gated.
  */
@@ -139,10 +139,19 @@ export default {
     const id = env.SCHEDULER.idFromName(interaction.guild_id);
     const stub = env.SCHEDULER.get(id);
 
-    if (name === "pingat") {
-
+    let pingTargetId = null;
+    let targetType = null;
+    if (name === "pingroleat" ){ 
+      pingTargetId = String(getOption(interaction, "role") ?? "");
+      targetType = "role";
+    }
+    else if (name === "pingmeat") {
+      pingTargetId = String(getOption(interaction, "user") ?? "");
+      if (!/^\d{5,30}$/.test(pingTargetId)) return ephemeral("Invalid user.");
+      targetType = "user";
+    }
+    if (pingTargetId !== null) {
       let ts = Number(getOption(interaction, "timestamp"));
-      const roleId = String(getOption(interaction, "role") ?? "");
       const repeatDaily = Boolean(getOption(interaction, "repeat_daily") ?? false);
 
       if (!Number.isFinite(ts) || !Number.isInteger(ts)) {
@@ -158,7 +167,8 @@ export default {
         body: JSON.stringify({
           guildId: interaction.guild_id,
           channelId: interaction.channel_id,
-          roleId,
+          targetType,
+          targetId: pingTargetId,
           scheduledUnix: ts,
           repeatDaily,
           createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null,
@@ -218,6 +228,13 @@ export class GuildScheduler {
     if (url.pathname === "/schedule" && request.method === "POST") {
       const job = await request.json();
 
+      if (job.targetType !== "role" && job.targetType !== "user") {
+        return jsonResponse({
+          type: 4,
+          data: { flags: 64, allowed_mentions: { parse: [] }, content: "Invalid target type." }
+        });
+      }
+
       const jobs = (await this.state.storage.get("jobs")) ?? [];
       const id = crypto.randomUUID();
 
@@ -225,7 +242,8 @@ export class GuildScheduler {
         id,
         guildId: job.guildId,
         channelId: job.channelId,
-        roleId: job.roleId,
+        targetType: job.targetType,
+        targetId: job.targetId,
         scheduledUnix: job.scheduledUnix,
         runAtMs: job.scheduledUnix * 1000,
         repeatDaily: Boolean(job.repeatDaily),
@@ -260,11 +278,12 @@ export class GuildScheduler {
         });
       }
 
-      const shown = jobs.slice(0, 15).map(j =>
-        `• <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>) — <@&${j.roleId}> in <#${j.channelId}>` +
-        (j.repeatDaily ? " 🔁 daily" : "") +
-        ` — id: \`${j.id}\``
-      ).join("\n");
+      const shown = jobs.slice(0, 15).map(j => {
+        const mention = j.targetType === "role" ? `<@&${j.targetId}>` : `<@${j.targetId}>`;
+        return `• <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>) — ${mention} in <#${j.channelId}>` +
+          (j.repeatDaily ? " 🔁 daily" : "") +
+          ` — id: \`${j.id}\``;
+      }).join("\n");
 
       return jsonResponse({
         type: 4,
@@ -319,7 +338,15 @@ export class GuildScheduler {
 
     for (const job of due) {
       // Send message to Discord
-      const content = `<@&${job.roleId}> (scheduled ping for <t:${job.scheduledUnix}:F>)`;
+      const mention =
+        job.targetType === "role" ? `<@&${job.targetId}>` : `<@${job.targetId}>`;
+
+      const allowed_mentions =
+        job.targetType === "role"
+          ? { roles: [job.targetId] }
+          : { users: [job.targetId] };
+
+      const content = `${mention} (scheduled ping for <t:${job.scheduledUnix}:F>)`;
 
       const r = await fetch(`https://discord.com/api/v10/channels/${job.channelId}/messages`, {
         method: "POST",
@@ -327,10 +354,7 @@ export class GuildScheduler {
           Authorization: `Bot ${this.env.DISCORD_TOKEN}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          content,
-          allowed_mentions: { roles: [job.roleId] },
-        }),
+        body: JSON.stringify({ content, allowed_mentions }),
       });
 
       if (!r.ok) {

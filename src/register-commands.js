@@ -12,7 +12,7 @@ const token = process.env.DISCORD_TOKEN;
 const commands = [
   { name: "alive", description: "Replies if alive." },
   {
-    name: "pingat",
+    name: "pingroleat",
     description: "Schedule a role ping at a Unix timestamp (seconds).",
     options: [
       { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
@@ -20,12 +20,21 @@ const commands = [
       { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
     ]
   },
-  { name: "pingat_list", description: "List scheduled role pings for this server." },
+  { name: "pingat_list", description: "List scheduled pings for this server." },
   {
     name: "pingat_cancel",
-    description: "Cancel a scheduled role ping by job ID.",
+    description: "Cancel a scheduled ping by job ID.",
     options: [
       { name: "job_id", description: "Job ID", type: 3, required: true }
+    ]
+  },
+  {
+    name: "pingmeat",
+    description: "Schedule a user ping at a Unix timestamp (seconds).",
+    options: [
+      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
+      { name: "user", description: "User to ping", type: 6, required: true }, // USER,
+      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
     ]
   }
 ];
