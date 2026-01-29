@@ -1,5 +1,6 @@
 import nacl from "tweetnacl";
 
+import { commandMap, getOption } from "./commands.js";
 import { isModeratorOrOwner } from "./permissions.js";
 
 /**
@@ -64,14 +65,6 @@ function ephemeral(content) {
   });
 }
 
-/**
- * Helper to pull a single option value by name from an interaction.
- */
-function getOption(interaction, name) {
-  const opts = interaction.data?.options ?? [];
-  return opts.find(o => o.name === name)?.value;
-}
-
 function deferredEphemeral() {
   // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
   // Immediate ACK so we never miss the 3-second deadline.
@@ -104,15 +97,11 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-const protectedCommands = new Set([
-  "pingroleat", "pingmeat", "doat_list", "doat_cancel", 
-  "sayat"
-]);
 /**
  * Commands that affect schedules are permission-gated.
  */
-async function checkGuildPermissions(interaction, env) {
-  const allowed = (protectedCommands.has(interaction.data?.name))
+async function checkGuildPermissions(interaction, env, command) {
+  const allowed = command?.requiresModerator
     ? await isModeratorOrOwner(interaction, env)
     : true;
   return {
@@ -127,28 +116,6 @@ async function checkGuildPermissions(interaction, env) {
         }
       : undefined
   };
-}
-
-const doAtNameHandlers = {
-  "pingroleat": {
-    subject: (interaction)=>String(getOption(interaction, "role") ?? ""),
-    errorPayload: (subject)=>(!/^\d{5,30}$/.test(subject)) ? ephemeral("Invalid role.") : null,
-    type: "ping-role"
-  },
-  "pingmeat": {
-    subject: (interaction)=>String(getOption(interaction, "user") ?? ""),
-    errorPayload: (subject)=>(!/^\d{5,30}$/.test(subject)) ? ephemeral("Invalid user.") : null,
-    type: "ping-user"
-  },
-  "sayat": {
-    subject: (interaction)=>String(getOption(interaction, "message") ?? ""),
-    errorPayload: (subject)=>(
-      subject.length === 0 ? ephemeral("Message cannot be empty.")
-      : subject.length > 2000 ? ephemeral("Message too long (max 2000 chars).")
-      : null
-    ),
-    type: "channel-message"
-  }
 }
 
 const doAtTypeHandlers = {
@@ -185,6 +152,7 @@ function pruneDelivered(delivered, nowMs) {
 async function runDeferredCommand(interaction, env) {
   try {
     const name = interaction.data?.name;
+    const command = commandMap.get(name);
 
     // Commands below require guild context
     if (!interaction.guild_id) {
@@ -192,7 +160,7 @@ async function runDeferredCommand(interaction, env) {
       return;
     }
 
-    const permission = await checkGuildPermissions(interaction, env);
+    const permission = await checkGuildPermissions(interaction, env, command);
     if (!permission.allowed) {
       // permission.rejection is an interaction response { type: 4, data: {...} }
       await editOriginalInteractionResponse(interaction, permission.rejection.data);
@@ -203,17 +171,15 @@ async function runDeferredCommand(interaction, env) {
     const id = env.SCHEDULER.idFromName(interaction.guild_id);
     const stub = env.SCHEDULER.get(id);
 
-    const doAtHandler = doAtNameHandlers[name];
-    if (doAtHandler) {
-      const doAtSubject = doAtHandler.subject(interaction);
-      const errorPayload = doAtHandler.errorPayload(doAtSubject);
-      if (errorPayload) {
-        const payload = await errorPayload.json(); // {type:4,data:{...}}
-        await editOriginalInteractionResponse(interaction, payload.data);
+    if (command?.schedule) {
+      const doAtSubject = command.schedule.subjectExtractor(interaction);
+      const validationError = command.schedule.validator?.(doAtSubject);
+      if (validationError) {
+        await editOriginalInteractionResponse(interaction, { content: validationError, allowed_mentions: { parse: [] } });
         return;
       }
 
-      const doAtType = doAtHandler.type;
+      const doAtType = command.schedule.doAtType;
 
       let ts = Number(getOption(interaction, "timestamp"));
       const repeatDaily = Boolean(getOption(interaction, "repeat_daily") ?? false);
@@ -248,15 +214,15 @@ async function runDeferredCommand(interaction, env) {
       return;
     }
 
-    if (name === "doat_list") {
+    if (command?.action === "list") {
       const r = await stub.fetch("https://do/list");
       const payload = await r.json();
       await editOriginalInteractionResponse(interaction, payload.data);
       return;
     }
 
-    if (name === "doat_cancel") {
-      const jobId = String(getOption(interaction, "job_id") ?? "").trim();
+    if (command?.action === "cancel") {
+      const jobId = command.jobIdExtractor(interaction);
 
       const r = await stub.fetch("https://do/cancel", {
         method: "POST",
@@ -319,16 +285,14 @@ export default {
     if (interaction.type !== 2) return new Response("Unhandled interaction type", { status: 400 });
 
     const name = interaction.data?.name;
+    const command = commandMap.get(name);
 
-    if (name === "alive") {
-      return jsonResponse({ type: 4, data: { content: "I'm here!!1" } });
+    if (command?.response && command.defer === false) {
+      return jsonResponse({ type: 4, data: command.response });
     }
 
     // Only defer the commands that might do slow work (permissions / DO / network)
-    const isDeferredCmd =
-      doAtNameHandlers[name] ||
-      name === "doat_list" ||
-      name === "doat_cancel";
+    const isDeferredCmd = command?.defer === true;
 
     if (!isDeferredCmd) {
       return jsonResponse({ type: 4, data: { content: `Unknown command: /${name}` } });
