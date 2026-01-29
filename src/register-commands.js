@@ -2,8 +2,22 @@
 // One-off script to register global slash commands for the bot.
 import "dotenv/config";
 
-const appId = process.env.APP_ID;
-const token = process.env.DISCORD_TOKEN;
+const args = process.argv.slice(2);
+const test = args.includes("--test");
+
+const [appIdKey, tokenKey, envMsg] = (test)
+  ? ["TEST_APP_ID", "TEST_DISCORD_TOKEN", "Running in test environment"]
+  : ["APP_ID", "DISCORD_TOKEN", "Running in production environment"];
+
+console.log(envMsg);
+
+const appId = process.env[appIdKey];
+const token = process.env[tokenKey];
+
+const envMissing = [];
+if (!appId) envMissing.push(appIdKey);
+if (!token) envMissing.push(tokenKey);
+if (envMissing.length > 0) throw new Error(`Some required environment variables are missing: ${envMissing.join(", ")}`);
 
 /**
  * Global slash commands visible in every server the bot is installed in.
@@ -20,9 +34,9 @@ const commands = [
       { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
     ]
   },
-  { name: "pingat_list", description: "List scheduled pings for this server." },
+  { name: "doat_list", description: "List scheduled messages for this server." },
   {
-    name: "pingat_cancel",
+    name: "doat_cancel",
     description: "Cancel a scheduled ping by job ID.",
     options: [
       { name: "job_id", description: "Job ID", type: 3, required: true }
@@ -34,6 +48,15 @@ const commands = [
     options: [
       { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
       { name: "user", description: "User to ping", type: 6, required: true }, // USER,
+      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
+    ]
+  },
+  {
+    name: "sayat",
+    description: "Schedule a message at a Unix timestamp (seconds).",
+    options: [
+      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
+      { name: "message", description: "Message", type: 3, required: true }, // MESSAGE,
       { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
     ]
   }
