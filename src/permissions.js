@@ -42,7 +42,7 @@ function hasAnyPerm(permsStr, flags) {
  */
 async function fetchGuildOwnerId(env, guildId) {
   const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-    headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+    headers: { Authorization: `Bot ${env.DISCORD_TOKEN}` },
   });
   if (!res.ok) return null;
   const guild = await res.json();
