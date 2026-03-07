@@ -1,6 +1,13 @@
 import nacl from "tweetnacl";
 
-import { isModeratorOrOwner } from "./permissions.js";
+import { commands } from "./commands.js";
+import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
+import { PERMS, PERM_STRINGS, getPerms } from "./permissions.js";
+
+/**
+ * Durable objects
+ */
+export { GuildScheduler } from "message-scheduling.js";
 
 /**
  * Cloudflare Worker entrypoint for Discord interactions.
@@ -44,40 +51,12 @@ function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText 
   }
 }
 
-/**
- * Build a JSON response with the expected Discord response headers.
- */
-function jsonResponse(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { "content-type": "application/json; charset=utf-8" },
-  });
-}
-
-/**
- * Generate an ephemeral response (visible only to the invoking user).
- */
-function ephemeral(content) {
-  return jsonResponse({
-    type: 4,
-    data: { content, flags: 64, allowed_mentions: { parse: [] } },
-  });
-}
-
-/**
- * Helper to pull a single option value by name from an interaction.
- */
-function getOption(interaction, name) {
-  const opts = interaction.data?.options ?? [];
-  return opts.find(o => o.name === name)?.value;
-}
-
 function deferredEphemeral() {
   // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
   // Immediate ACK so we never miss the 3-second deadline.
   return jsonResponse({
     type: 5,
-    data: { flags: 64, allowed_mentions: { parse: [] } },
+    data: ephemeralData(content),
   });
 }
 
@@ -90,6 +69,7 @@ async function editOriginalInteractionResponse(interaction, messageData) {
     allowed_mentions: messageData?.allowed_mentions ?? { parse: [] },
     embeds: messageData?.embeds,
     components: messageData?.components,
+    flags: messageData?.flags,
   };
 
   const r = await fetch(url, {
@@ -104,182 +84,38 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-const protectedCommands = new Set([
-  "pingroleat", "pingmeat", "doat_list", "doat_cancel", 
-  "sayat"
-]);
-/**
- * Commands that affect schedules are permission-gated.
- */
-async function checkGuildPermissions(interaction, env) {
-  const allowed = (protectedCommands.has(interaction.data?.name))
-    ? await isModeratorOrOwner(interaction, env)
-    : true;
+async function checkGuildPermissions(allowedCallers, interaction, env) {
+  if (allowedCallers.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
+  const perms = Set(await getPerms(interaction, env));
+  const isAllowed = allowedCallers.some(perm => perms.has(perm));
   return {
-    allowed, 
-    rejection: (!allowed)
-      ? {
-          type: 4,
-          data: {
-            content: "Only moderators or the server owner can use this command.",
-            flags: 64, // ephemeral
-          },
-        }
+    isAllowed, 
+    rejection: (!isAllowed)
+      ? `Only members that fall into one of [${allowedCallers.map(v=>PERM_STRINGS[v].toUpperCase().join(", "))}] can use this command.`
       : undefined
   };
 }
 
-const doAtNameHandlers = {
-  "pingroleat": {
-    subject: (interaction)=>String(getOption(interaction, "role") ?? ""),
-    errorPayload: (subject)=>(!/^\d{5,30}$/.test(subject)) ? ephemeral("Invalid role.") : null,
-    type: "ping-role"
-  },
-  "pingmeat": {
-    subject: (interaction)=>String(getOption(interaction, "user") ?? ""),
-    errorPayload: (subject)=>(!/^\d{5,30}$/.test(subject)) ? ephemeral("Invalid user.") : null,
-    type: "ping-user"
-  },
-  "sayat": {
-    subject: (interaction)=>String(getOption(interaction, "message") ?? ""),
-    errorPayload: (subject)=>(
-      subject.length === 0 ? ephemeral("Message cannot be empty.")
-      : subject.length > 2000 ? ephemeral("Message too long (max 2000 chars).")
-      : null
-    ),
-    type: "channel-message"
+class CommandError extends Error {
+  constructor(message) {
+    super (message);
   }
 }
 
-const doAtTypeHandlers = {
-  "ping-role": {
-    innerContent: (j)=>`<@&${j.doAtSubject}>`, 
-    allowedMentions: (j)=>({ roles: [j.doAtSubject] }), 
-    outerContent: (j, innerContent)=>`${innerContent} (scheduled role ping for <t:${j.scheduledUnix}:F>)`
-  },
-  "ping-user": {
-    innerContent: (j)=>`<@${j.doAtSubject}>`, 
-    allowedMentions: (j)=>({ users: [j.doAtSubject] }), 
-    outerContent: (j, innerContent)=>`${innerContent} (scheduled user ping for <t:${j.scheduledUnix}:F>)`
-  },
-  "channel-message": {
-    innerContent: (j)=>j.doAtSubject, 
-    allowedMentions: (_)=>({ parse: [] }), 
-    outerContent: (_, innerContent)=>innerContent
-  }
-}
-
-const DELIVERED_TTL_MS = 14 * 24 * 60 * 60 * 1000; // keep 14 days of dedupe keys
-
-function deliveryKey(job) {
-  // One key per “instance” of the job (id + scheduled time)
-  return `${job.id}:${job.scheduledUnix}`;
-}
-
-function pruneDelivered(delivered, nowMs) {
-  for (const [k, v] of Object.entries(delivered)) {
-    if (typeof v !== "number" || v < nowMs - DELIVERED_TTL_MS) delete delivered[k];
-  }
-}
-
-async function runDeferredCommand(interaction, env) {
+async function runCommand(interaction, env, command) {
+  let commandResult;
   try {
-    const name = interaction.data?.name;
-
-    // Commands below require guild context
-    if (!interaction.guild_id) {
-      await editOriginalInteractionResponse(interaction, { content: "Use this command inside a server.", allowed_mentions: { parse: [] } });
-      return;
+    if (command.guild) {
+      if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
+      if (!command.allowed) throw new CommandError("Error: permissions for this command have not been set.")
+      const checkResults = await checkGuildPermissions(interaction, env);
+      if (checkResults.rejection) throw new CommandError(checkResults.rejection);
     }
-
-    const permission = await checkGuildPermissions(interaction, env);
-    if (!permission.allowed) {
-      // permission.rejection is an interaction response { type: 4, data: {...} }
-      await editOriginalInteractionResponse(interaction, permission.rejection.data);
-      return;
-    }
-
-    // Route all scheduling to the guild's Durable Object
-    const id = env.SCHEDULER.idFromName(interaction.guild_id);
-    const stub = env.SCHEDULER.get(id);
-
-    const doAtHandler = doAtNameHandlers[name];
-    if (doAtHandler) {
-      const doAtSubject = doAtHandler.subject(interaction);
-      const errorPayload = doAtHandler.errorPayload(doAtSubject);
-      if (errorPayload) {
-        const payload = await errorPayload.json(); // {type:4,data:{...}}
-        await editOriginalInteractionResponse(interaction, payload.data);
-        return;
-      }
-
-      const doAtType = doAtHandler.type;
-
-      let ts = Number(getOption(interaction, "timestamp"));
-      const repeatDaily = Boolean(getOption(interaction, "repeat_daily") ?? false);
-
-      if (!Number.isFinite(ts) || !Number.isInteger(ts)) {
-        await editOriginalInteractionResponse(interaction, { content: "`timestamp` must be an integer Unix timestamp in seconds.", allowed_mentions: { parse: [] } });
-        return;
-      }
-      if (ts > 10_000_000_000) ts = Math.floor(ts / 1000); // accept ms
-      const now = Math.floor(Date.now() / 1000);
-      if (ts <= now) {
-        await editOriginalInteractionResponse(interaction, { content: "That timestamp is in the past.", allowed_mentions: { parse: [] } });
-        return;
-      }
-
-      const r = await stub.fetch("https://do/schedule", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          guildId: interaction.guild_id,
-          channelId: interaction.channel_id,
-          doAtType,
-          doAtSubject,
-          scheduledUnix: ts,
-          repeatDaily,
-          createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null,
-        }),
-      });
-
-      const payload = await r.json(); // {type:4,data:{...}}
-      await editOriginalInteractionResponse(interaction, payload.data);
-      return;
-    }
-
-    if (name === "doat_list") {
-      const r = await stub.fetch("https://do/list");
-      const payload = await r.json();
-      await editOriginalInteractionResponse(interaction, payload.data);
-      return;
-    }
-
-    if (name === "doat_cancel") {
-      const jobId = String(getOption(interaction, "job_id") ?? "").trim();
-
-      const r = await stub.fetch("https://do/cancel", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jobId }),
-      });
-
-      const payload = await r.json();
-      await editOriginalInteractionResponse(interaction, payload.data);
-      return;
-    }
-
-    await editOriginalInteractionResponse(interaction, {
-      content: `Unknown command: /${name}`,
-      allowed_mentions: { parse: [] },
-    });
-  } catch (err) {
-    console.error("Deferred command failed:", err);
-    await editOriginalInteractionResponse(interaction, {
-      content: "❌ Something went wrong while processing that command.",
-      allowed_mentions: { parse: [] },
-    });
+    commandResult = command.exec(interaction, env);
+  } catch (e) {
+    commandResult = ephemeralData((e instanceof CommandError) ? e.message : "Unknown error.");
   }
+  return commandResult; // expected to satisfy the 'data' field of the json response to be sent back to the discord API
 }
 
 export default {
@@ -320,302 +156,20 @@ export default {
 
     const name = interaction.data?.name;
 
-    if (name === "alive") {
-      return jsonResponse({ type: 4, data: { content: "I'm here!!1" } });
+    const command = commands[name];
+    if (!command) return ephemeral(`Unknown command: /${name}`)
+
+    let commandResult;
+    if (!command.deferred) {
+      commandResult = await runCommand(interaction, env, command);
+      return jsonResponse({ type: 4, data: commandResult });
     }
-
-    // Only defer the commands that might do slow work (permissions / DO / network)
-    const isDeferredCmd =
-      doAtNameHandlers[name] ||
-      name === "doat_list" ||
-      name === "doat_cancel";
-
-    if (!isDeferredCmd) {
-      return jsonResponse({ type: 4, data: { content: `Unknown command: /${name}` } });
-    }
-
     // ACK immediately (must be within 3 seconds or token invalidated)
-    ctx.waitUntil(runDeferredCommand(interaction, env));
+    // waitUntil has 30 seconds to finish - (https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil ; 02 mar. 2026)
+    ctx.waitUntil(async () => {
+      commandResult = await runCommand(interaction, env, command);
+      editOriginalInteractionResponse(interaction, commandResult);
+    });
     return deferredEphemeral();
   },
 };
-
-export class GuildScheduler {
-  /**
-   * Durable Object per guild responsible for storing and firing schedules.
-   */
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
-  }
-
-  /**
-   * Durable Object fetch handler for scheduling/listing/canceling.
-   */
-  async fetch(request) {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/schedule" && request.method === "POST") {
-      const job = await request.json();
-
-      if (!(job.doAtType in doAtTypeHandlers)) {
-        return jsonResponse({
-          type: 4,
-          data: { flags: 64, allowed_mentions: { parse: [] }, content: "Invalid target type." }
-        });
-      }
-
-      const id = crypto.randomUUID();
-
-      // Normalize types defensively (worker should already enforce, but DO shouldn't trust input blindly)
-      const scheduledUnix = Number(job.scheduledUnix);
-      const j = {
-        id,
-        guildId: job.guildId,
-        channelId: job.channelId,
-        doAtType: job.doAtType,
-        doAtSubject: job.doAtSubject,
-        scheduledUnix,
-        runAtMs: scheduledUnix * 1000,
-        repeatDaily: job.repeatDaily === true, // avoid Boolean("false") pitfalls
-        createdBy: job.createdBy ?? null,
-      };
-
-      // Atomic: read -> modify -> write jobs
-      await this.state.storage.transaction(async (txn) => {
-        const jobs = (await txn.get("jobs")) ?? [];
-        jobs.push(j);
-        jobs.sort((a, b) => a.runAtMs - b.runAtMs);
-        await txn.put("jobs", jobs);
-      });
-
-      // Compute alarm from CURRENT stored state to avoid "last writer sets later alarm" race
-      const jobsNow = (await this.state.storage.get("jobs")) ?? [];
-      // sort defensively in case older data exists
-      jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
-
-      const next = jobsNow[0];
-      if (next) {
-        await this.state.storage.setAlarm(next.runAtMs);
-      } else {
-        await this.state.storage.deleteAlarm();
-      }
-
-      return jsonResponse({
-        type: 4,
-        data: {
-          flags: 64,
-          allowed_mentions: { parse: [] },
-          content:
-            `✅ Scheduled job for <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>)` +
-            (j.repeatDaily ? `\n🔁 Repeats daily.` : "") +
-            `\nJob ID: \`${j.id}\``,
-        },
-      });
-    }
-
-    if (url.pathname === "/list") {
-      const jobs = (await this.state.storage.get("jobs")) ?? [];
-      jobs.sort((a, b) => a.runAtMs - b.runAtMs);
-
-      if (jobs.length === 0) {
-        return jsonResponse({
-          type: 4,
-          data: { flags: 64, allowed_mentions: { parse: [] }, content: "No scheduled jobs." },
-        });
-      }
-
-      const shown = jobs.slice(0, 15).map(j => {
-        const innerContent = doAtTypeHandlers[j.doAtType].innerContent(j);
-        return `• <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>) — ${innerContent} in <#${j.channelId}>` +
-          (j.repeatDaily ? " 🔁 daily" : "") +
-          ` — id: \`${j.id}\``;
-      }).join("\n");
-
-      return jsonResponse({
-        type: 4,
-        data: {
-          flags: 64,
-          allowed_mentions: { parse: [] },
-          content: `📌 Scheduled jobs (${jobs.length} total):\n${shown}`,
-        },
-      });
-    }
-
-    if (url.pathname === "/cancel" && request.method === "POST") {
-      const body = await request.json();
-      const jobId = String(body?.jobId ?? "").trim();
-
-      if (!jobId) {
-        return jsonResponse({
-          type: 4,
-          data: { flags: 64, allowed_mentions: { parse: [] }, content: "Provide a valid `job_id`." },
-        });
-      }
-
-      // Atomic remove (read -> modify -> write)
-      const result = await this.state.storage.transaction(async (txn) => {
-        const jobs = (await txn.get("jobs")) ?? [];
-        const idx = jobs.findIndex((j) => j.id === jobId);
-
-        if (idx === -1) return { found: false };
-
-        const removed = jobs[idx];
-        jobs.splice(idx, 1);
-        jobs.sort((a, b) => a.runAtMs - b.runAtMs);
-        await txn.put("jobs", jobs);
-
-        return { found: true, removed };
-      });
-
-      if (!result.found) {
-        return jsonResponse({
-          type: 4,
-          data: { flags: 64, allowed_mentions: { parse: [] }, content: `No job found: \`${jobId}\`` },
-        });
-      }
-
-      // Set/clear alarm based on CURRENT persisted state (avoid alarm override races)
-      const jobsNow = (await this.state.storage.get("jobs")) ?? [];
-      jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
-
-      const next = jobsNow[0];
-      if (next) {
-        await this.state.storage.setAlarm(next.runAtMs);
-      } else {
-        await this.state.storage.deleteAlarm();
-      }
-
-      return jsonResponse({
-        type: 4,
-        data: {
-          flags: 64,
-          allowed_mentions: { parse: [] },
-          content: `🗑️ Cancelled job \`${jobId}\` scheduled for <t:${result.removed.scheduledUnix}:F>.`,
-        },
-      });
-    }
-
-    return new Response("Not Found", { status: 404 });
-  }
-
-  /**
-   * Alarm handler: delivers due pings and reschedules repeating jobs.
-   */
-  async alarm() {
-    // Load delivered once; keep it in-memory and persist updates as we go.
-    let delivered = (await this.state.storage.get("delivered")) ?? {};
-    if (typeof delivered !== "object" || delivered === null) delivered = {};
-    pruneDelivered(delivered, Date.now());
-
-    while (true) {
-      const nowMs = Date.now();
-
-      // Always read the latest jobs from storage (don't keep a stale local copy)
-      const jobsNow = (await this.state.storage.get("jobs")) ?? [];
-      jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
-
-      const job = jobsNow[0];
-      if (!job || job.runAtMs > nowMs) break; // nothing due
-
-      const key = deliveryKey(job);
-      const alreadyDelivered = delivered[key] !== undefined;
-
-      // 1) Deliver outside transaction
-      if (!alreadyDelivered) {
-        const handler = doAtTypeHandlers[job.doAtType];
-        if (!handler) {
-          // Corrupt/unknown job type: remove it so alarms don't get stuck
-          await this.state.storage.transaction(async (txn) => {
-            const curJobs = (await txn.get("jobs")) ?? [];
-            const idx = curJobs.findIndex(
-              (j) => j.id === job.id && j.scheduledUnix === job.scheduledUnix
-            );
-            if (idx !== -1) {
-              curJobs.splice(idx, 1);
-              curJobs.sort((a, b) => a.runAtMs - b.runAtMs);
-              await txn.put("jobs", curJobs);
-            }
-          });
-          continue;
-        }
-
-        const innerContent = handler.innerContent(job);
-        const allowedMentions = handler.allowedMentions(job);
-        const content = handler.outerContent(job, innerContent);
-
-        const r = await fetch(
-          `https://discord.com/api/v10/channels/${job.channelId}/messages`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${this.env.DISCORD_TOKEN}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({ content, allowed_mentions: allowedMentions }),
-          }
-        );
-
-        if (!r.ok) {
-          // Keep your existing behavior: job remains in jobs; CF retries the alarm later.
-          pruneDelivered(delivered, Date.now());
-          await this.state.storage.put("delivered", delivered);
-          throw new Error(`Discord API error ${r.status}: ${await r.text()}`);
-        }
-
-        // Mark delivered ASAP to prevent duplicates if something fails after sending
-        delivered[key] = Date.now();
-        pruneDelivered(delivered, delivered[key]);
-        await this.state.storage.put("delivered", delivered);
-      }
-
-      // 2) Atomically remove/reschedule this exact occurrence
-      await this.state.storage.transaction(async (txn) => {
-        const curJobs = (await txn.get("jobs")) ?? [];
-        curJobs.sort((a, b) => a.runAtMs - b.runAtMs);
-
-        const idx = curJobs.findIndex(
-          (j) => j.id === job.id && j.scheduledUnix === job.scheduledUnix
-        );
-
-        if (idx === -1) return; // canceled/changed while we were working; that's fine
-
-        const cur = curJobs[idx];
-        curJobs.splice(idx, 1);
-
-        if (cur.repeatDaily) {
-          let nextUnix = cur.scheduledUnix + 86400;
-          let nextMs = cur.runAtMs + 86_400_000;
-
-          // catch up if we're behind
-          while (nextMs <= Date.now()) {
-            nextUnix += 86400;
-            nextMs += 86_400_000;
-          }
-
-          curJobs.push({
-            ...cur,
-            scheduledUnix: nextUnix,
-            runAtMs: nextMs,
-          });
-        }
-
-        curJobs.sort((a, b) => a.runAtMs - b.runAtMs);
-        await txn.put("jobs", curJobs);
-      });
-    }
-
-    // Final prune + persist (cheap housekeeping)
-    pruneDelivered(delivered, Date.now());
-    await this.state.storage.put("delivered", delivered);
-
-    // Point alarm at next job based on persisted truth
-    const finalJobs = (await this.state.storage.get("jobs")) ?? [];
-    finalJobs.sort((a, b) => a.runAtMs - b.runAtMs);
-
-    const next = finalJobs[0];
-    if (next) await this.state.storage.setAlarm(next.runAtMs);
-    else await this.state.storage.deleteAlarm();
-  }
-
-}
