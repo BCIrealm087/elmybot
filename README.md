@@ -39,16 +39,20 @@ Discord -> Worker (src/index.js) -> Durable Object (GuildScheduler)
 ### `/alive`
 Health check used by admins to confirm the bot is responsive.
 
-### `/pingat`
+### `/pingroleat`
 Schedule a role ping at a specific Unix timestamp.
 - **timestamp**: Unix timestamp in seconds (required)
 - **role**: role to mention (required)
 - **repeat_daily**: if true, repeats every day (optional)
 
-### `/pingat_list`
+### `/pingmeat`
+
+### `/sayat`
+
+### `/doat_list`
 List the next scheduled pings for the server.
 
-### `/pingat_cancel`
+### `/doat_cancel`
 Cancel a scheduled ping by job ID.
 
 ## Permissions model
@@ -109,6 +113,7 @@ Environment variables required at runtime:
 ## Key files
 
 - `src/index.js`: Worker entrypoint, routing, and Durable Object implementation.
+- `src/commands.js`: Centralized command definitions.
 - `src/permissions.js`: Permission helpers for moderator/owner checks.
 - `src/register-commands.js`: Script to register slash commands.
 - `wrangler.jsonc`: Cloudflare Worker/Durable Object configuration.

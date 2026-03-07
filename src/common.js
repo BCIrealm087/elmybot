@@ -17,7 +17,9 @@ export function jsonResponse(obj, status = 200) {
 }
 
 export function ephemeralData(content) {
-  return { content, flags: 64, allowed_mentions: { parse: [] } };
+  return (content === null || content === undefined)
+    ? { flags: 64, allowed_mentions: { parse: [] } }
+    : { content, flags: 64, allowed_mentions: { parse: [] } }
 }
 
 /**

@@ -50,7 +50,7 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
   } catch(e) {
     schedulingResult = ephemeralData((e instanceof SchedulingError) ? e.message : "Unknown error.");
   }
-  return response;
+  return schedulingResult;
 }
 
 const DELIVERED_TTL_MS = 14 * 24 * 60 * 60 * 1000; // keep 14 days of dedupe keys

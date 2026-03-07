@@ -1,5 +1,6 @@
-import { PERMS } from "./permissions";
-import { getOption } from "./common";
+import { PERMS } from "./permissions.js";
+import { getOption } from "./common.js";
+import { scheduleMessage } from "./message-scheduling.js";
 
 // exec's return value should fit the 'data' field of the json response expected by discord following a command invocation
 export const commands = {
@@ -40,8 +41,8 @@ export const commands = {
     deferred: true,
     exec: (interaction, env) => {
       return scheduleMessage(interaction, env, {
-        subject: (interaction)=>String(getOption(interaction, "user") ?? ""),
-        errorPayload: (subject)=>(!/^\d{5,30}$/.test(subject)) ? "Invalid user." : null,
+        getSubject: (interaction)=>String(getOption(interaction, "user") ?? ""),
+        getError: (subject)=>(!/^\d{5,30}$/.test(subject)) ? "Invalid user." : null,
         type: "ping-user"
       });
     }
@@ -59,8 +60,8 @@ export const commands = {
     deferred: true,
     exec: (interaction, env) => {
       return scheduleMessage(interaction, env, {
-        subject: (interaction)=>String(getOption(interaction, "message") ?? ""),
-        errorPayload: (subject)=>(
+        getSubject: (interaction)=>String(getOption(interaction, "message") ?? ""),
+        getError: (subject)=>(
           subject.length === 0 ? "Message cannot be empty."
           : subject.length > 2000 ? "Message too long (max 2000 chars)."
           : null
@@ -75,7 +76,9 @@ export const commands = {
     guild: true,
     allowed: [PERMS.OWNER, PERMS.MODERATORS],
     deferred: true,
-    exec: async () => {
+    exec: async (interaction, env) => {
+      const id = env.SCHEDULER.idFromName(interaction.guild_id);
+      const stub = env.SCHEDULER.get(id);
       const r = await stub.fetch("https://do/list");
       return await r.json();
     }
@@ -89,9 +92,11 @@ export const commands = {
     options: [
       { name: "job_id", description: "Job ID", type: 3, required: true }
     ],
-    exec: async (interaction) => {
+    exec: async (interaction, env) => {
+      const id = env.SCHEDULER.idFromName(interaction.guild_id);
+      const stub = env.SCHEDULER.get(id);
       const jobId = String(getOption(interaction, "job_id") ?? "").trim();
-
+      
       const r = await stub.fetch("https://do/cancel", {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -86,10 +86,10 @@ export async function isModeratorOrOwner(interaction, env) {
 
 export async function getPerms(interaction, env) {
   if (!interaction.guild_id || !interaction.member) return [];
-  const perms = [PERMS.MEMBER];
+  const perms = [PERMS.MEMBERS];
   const permsStr = interaction.member.permissions;
   if (hasAnyPerm(permsStr, MODERATOR_ANY_OF))
-    perms.push(PERMS.MODERATOR);
+    perms.push(PERMS.MODERATORS);
 
   const ownerId = await fetchGuildOwnerId(env, interaction.guild_id);
   const userId =

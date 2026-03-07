@@ -7,7 +7,7 @@ import { PERMS, PERM_STRINGS, getPerms } from "./permissions.js";
 /**
  * Durable objects
  */
-export { GuildScheduler } from "message-scheduling.js";
+export { GuildScheduler } from "./message-scheduling.js";
 
 /**
  * Cloudflare Worker entrypoint for Discord interactions.
@@ -56,7 +56,7 @@ function deferredEphemeral() {
   // Immediate ACK so we never miss the 3-second deadline.
   return jsonResponse({
     type: 5,
-    data: ephemeralData(content),
+    data: ephemeralData(null),
   });
 }
 
@@ -84,14 +84,14 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-async function checkGuildPermissions(allowedCallers, interaction, env) {
-  if (allowedCallers.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
-  const perms = Set(await getPerms(interaction, env));
+async function checkGuildPermissions(allowedGroups, interaction, env) {
+  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
+  const perms = new Set(await getPerms(interaction, env));
   const isAllowed = allowedCallers.some(perm => perms.has(perm));
   return {
     isAllowed, 
     rejection: (!isAllowed)
-      ? `Only members that fall into one of [${allowedCallers.map(v=>PERM_STRINGS[v].toUpperCase().join(", "))}] can use this command.`
+      ? `Only members that fall into one of [${allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
       : undefined
   };
 }
@@ -108,10 +108,10 @@ async function runCommand(interaction, env, command) {
     if (command.guild) {
       if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
       if (!command.allowed) throw new CommandError("Error: permissions for this command have not been set.")
-      const checkResults = await checkGuildPermissions(interaction, env);
+      const checkResults = await checkGuildPermissions(command.allowed, interaction, env);
       if (checkResults.rejection) throw new CommandError(checkResults.rejection);
     }
-    commandResult = command.exec(interaction, env);
+    commandResult = await command.exec(interaction, env);
   } catch (e) {
     commandResult = ephemeralData((e instanceof CommandError) ? e.message : "Unknown error.");
   }
@@ -166,10 +166,10 @@ export default {
     }
     // ACK immediately (must be within 3 seconds or token invalidated)
     // waitUntil has 30 seconds to finish - (https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil ; 02 mar. 2026)
-    ctx.waitUntil(async () => {
-      commandResult = await runCommand(interaction, env, command);
-      editOriginalInteractionResponse(interaction, commandResult);
-    });
+    ctx.waitUntil(
+      runCommand(interaction, env, command)
+        .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
+    );
     return deferredEphemeral();
   },
 };
