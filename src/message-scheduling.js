@@ -42,7 +42,7 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
 }
 
 export const getStandardOptions = (interaction) => ({
-  repeats: Boolean(getOption(interaction, "repeats_daily") ?? false), 
+  repeats: Boolean(getOption(interaction, "repeat_daily") ?? false), 
   ts: Number(getOption(interaction, "timestamp"))
 })
 

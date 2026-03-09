@@ -1,121 +1,200 @@
 # elmybot
 
-A lightweight Discord bot that schedules role pings, built as a Cloudflare Worker
-with a per-guild Durable Object for reliable scheduling.
+A Discord scheduling bot built on **Cloudflare Workers + Durable Objects**.
 
-## Product overview
+Discord does not run this bot continuously. Instead, Discord sends HTTPS interaction requests to the Worker, which validates, routes, and delegates scheduling to a per-guild Durable Object instance.
 
-**What it does**
-- Lets moderators schedule a role ping for a specific time.
-- Supports listing and canceling scheduled pings.
-- Can optionally repeat a ping daily.
+## Current capabilities
 
-**Who it's for**
-- Server moderators and admins who need time-based role announcements.
-- Server owners looking for a simple, auditable scheduling workflow.
+- Schedules future deliveries in a server channel:
+  - role ping (`/pingroleat`)
+  - user ping (`/pingmeat`)
+  - plain channel message at a fixed timestamp (`/sayat`)
+  - plain channel message at bounded random intervals (`/sayat_random`)
+- Lists scheduled jobs (`/doat_list`)
+- Cancels jobs by ID (`/doat_cancel`)
+- Supports repeating schedules (daily for fixed-time handlers; interval-based repeats for random handler)
+- Restricts scheduling/list/cancel commands to moderators or the guild owner
 
-**Why Cloudflare Workers + Durable Objects**
-- **Edge-first**: interactions respond quickly to Discord.
-- **Durable scheduling**: each guild has its own scheduler state.
-- **Minimal infrastructure**: no separate database or servers to run.
+## Architecture
 
-## Architecture at a glance
-
-```
-Discord -> Worker (src/index.js) -> Durable Object (GuildScheduler)
-                                     -> Discord API (send messages)
+```text
+Discord -> Worker (src/index.js)
+          -> GuildScheduler Durable Object (src/message-scheduling.js)
+          -> Discord REST API (message delivery + guild owner lookup)
 ```
 
-### Request flow
-1. Discord sends an interaction to the Worker.
-2. The Worker verifies the request signature.
-3. The Worker routes the command and checks permissions.
-4. Scheduling commands call the guild's Durable Object.
-5. The Durable Object stores jobs and sets the next alarm.
-6. On alarm, the Durable Object sends the role ping to Discord.
+### Worker responsibilities
 
-## Commands
+`src/index.js` handles:
 
-### `/alive`
-Health check used by admins to confirm the bot is responsive.
+1. Request method checks (`POST` for interactions; `GET` health returns `OK`).
+2. Discord signature verification using:
+   - `X-Signature-Ed25519`
+   - `X-Signature-Timestamp`
+   - message = `timestamp + rawBody`
+3. Interaction parsing and routing by command name.
+4. Immediate `PONG` for interaction type `1`.
+5. Deferred handling for commands marked `deferred`:
+   - immediate ACK with interaction response type `5`
+   - background execution with `ctx.waitUntil(...)`
+   - PATCH to `.../webhooks/{application_id}/{token}/messages/@original`
 
-### `/pingroleat`
-Schedule a role ping at a specific Unix timestamp.
-- **timestamp**: Unix timestamp in seconds (required)
-- **role**: role to mention (required)
-- **repeat_daily**: if true, repeats every day (optional)
+## Command model
 
-### `/pingmeat`
+Command definitions are centralized in `src/commands.js`.
 
-### `/sayat`
+### Public utility
 
-### `/sayat_random`
+- `/alive`: simple responsiveness check.
 
-### `/doat_list`
-List the next scheduled pings for the server.
+### Scheduling commands (guild-only, permission-gated)
 
-### `/doat_cancel`
-Cancel a scheduled ping by job ID.
+- `/pingroleat`
+  - `timestamp` (required)
+  - `role` (required)
+  - optional repeat toggle
+  - schedules `doAtType: "ping-role"`
+
+- `/pingmeat`
+  - `timestamp` (required)
+  - `user` (required)
+  - optional repeat toggle
+  - schedules `doAtType: "ping-user"`
+
+- `/sayat`
+  - `timestamp` (required)
+  - `message` (required)
+  - optional repeat toggle
+  - schedules `doAtType: "channel-message-standard"`
+
+- `/sayat_random`
+  - `message` (required)
+  - `min_interval` (optional, default 7200s)
+  - `max_interval` (optional, default 21600s)
+  - `repeats` (optional)
+  - schedules `doAtType: "channel-message-random"`
+
+### Scheduler management commands (guild-only, permission-gated)
+
+- `/doat_list`: list pending jobs.
+- `/doat_cancel job_id:<id>`: cancel one job.
 
 ## Permissions model
 
-Scheduling is restricted to server moderators and owners. A user is allowed if:
-- They have any of the configured moderator permissions (e.g. Manage Messages), or
-- They are the server owner (verified via the Discord API).
+Implemented in `src/permissions.js`.
 
-You can change what counts as "moderator" in `src/permissions.js` (see
-`MODERATOR_ANY_OF`).
+- Everyone can run `/alive`.
+- Scheduling/list/cancel commands require moderator-or-owner.
+- Moderator is inferred from Discord permission bitfields (`ADMINISTRATOR`, `MANAGE_GUILD`, etc.).
+- Owner is checked by fetching guild metadata from Discord API and matching `owner_id`.
 
-## Data model
+## Durable Object scheduler
 
-Scheduled jobs are stored in Durable Object storage under the `jobs` key as an
-array of items shaped like:
+Implemented in `src/message-scheduling.js` as `GuildScheduler`.
 
-```
+### Storage
+
+- `jobs`: array of scheduled jobs, sorted by `runAtMs` ascending.
+- `delivered`: dedupe map (`${job.id}:${job.ts}` -> delivered timestamp) with TTL pruning.
+
+Job shape currently includes:
+
+```js
 {
-  id: string,
-  guildId: string,
-  channelId: string,
-  roleId: string,
-  ts: number,
-  runAtMs: number,
-  repeats: boolean,
-  createdBy: string | null
+  id,
+  guildId,
+  channelId,
+  doAtType,
+  subject,
+  ts,
+  runAtMs,
+  data,
+  repeats,
+  createdBy
 }
 ```
 
-The scheduler sorts jobs by `runAtMs` and sets the next alarm accordingly.
+### Scheduling and alarm behavior
+
+- Mutations use `state.storage.transaction(...)` for atomic read-modify-write.
+- After schedule/cancel/deliver mutations, the next alarm is recomputed from persisted `jobs`.
+- One alarm is kept for the next due job (`setAlarm(next.runAtMs)`).
+- `alarm()` loops while due jobs exist:
+  1. load current jobs
+  2. deliver earliest due job
+  3. remove or reschedule it
+  4. continue until no due jobs remain
+
+### Delivery + mention safety
+
+Delivery endpoint:
+
+- `POST https://discord.com/api/v10/channels/{channelId}/messages`
+- `Authorization: Bot ${DISCORD_TOKEN}`
+
+Mention policy:
+
+- Role pings: explicit role mention with `allowed_mentions.roles`.
+- User pings: explicit user mention with `allowed_mentions.users`.
+- Plain messages: `allowed_mentions: { parse: [] }`.
+- Interaction responses default to ephemeral with mention parsing disabled.
+
+## Project structure
+
+- `src/index.js` — Worker entrypoint, verification, routing, deferred flow.
+- `src/commands.js` — slash command registry and execution wiring.
+- `src/message-scheduling.js` — scheduler helpers + `GuildScheduler` Durable Object.
+- `src/permissions.js` — permission constants and moderator/owner checks.
+- `src/common.js` — shared response/option helpers.
+- `src/register-commands.js` — slash command registration script.
+- `wrangler.jsonc` — Worker config, DO binding, migrations, test env binding.
 
 ## Configuration
 
-Environment variables required at runtime:
+### Required runtime env/secrets
 
-- **PUBLIC_KEY**: Discord application public key (used to verify requests).
-- **DISCORD_TOKEN**: Bot token used to post messages.
-- **DISCORD_BOT_TOKEN**: Bot token used for guild owner lookups.
-- **SCHEDULER**: Durable Object binding name.
+- `PUBLIC_KEY` — Discord application public key (signature verification).
+- `DISCORD_TOKEN` — bot token used for channel message delivery.
+- `DISCORD_BOT_TOKEN` — bot token used for guild owner lookups.
+
+### Discord command registration script env vars
+
+`src/register-commands.js` supports production and test modes:
+
+- production (default): `APP_ID`, `DISCORD_TOKEN`
+- test (`--test`): `TEST_APP_ID`, `TEST_DISCORD_TOKEN`
 
 ## Local development
 
 1. Install dependencies:
+
    ```bash
    npm install
    ```
 
-2. Register slash commands (optional but useful for testing):
+2. Register slash commands (optional):
+
    ```bash
-   node src/register-commands.js
+   npm run register
+   # or: node src/register-commands.js --test
    ```
 
-3. Run the worker locally:
+3. Start Worker locally:
+
    ```bash
    npm run dev
    ```
 
-## Key files
+4. Run tests:
 
-- `src/index.js`: Worker entrypoint, routing, and Durable Object implementation.
-- `src/commands.js`: Centralized command definitions.
-- `src/permissions.js`: Permission helpers for moderator/owner checks.
-- `src/register-commands.js`: Script to register slash commands.
-- `wrangler.jsonc`: Cloudflare Worker/Durable Object configuration.
+   ```bash
+   npm test
+   ```
+
+## Cloudflare deployment notes
+
+- Durable Object binding name: `SCHEDULER`
+- Durable Object class: `GuildScheduler`
+- DO migration tags in `wrangler.jsonc` are append-only once deployed.
+- Non-inheritable environment bindings (for example test/prod env blocks) must be explicitly repeated.
