@@ -41,12 +41,12 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
 }
 
 export const getStandardOptions = (interaction) => ({
-  repeats: Boolean(getOption(interaction, "repeats") ?? false), 
+  repeats: Boolean(getOption(interaction, "repeats_daily") ?? false), 
   ts: Number(getOption(interaction, "timestamp"))
 })
 
 export const evalStandardTimestamp = (options) => {
-  const ts = options.ts;
+  let ts = options.ts;
   if (!Number.isFinite(ts) || !Number.isInteger(ts)) return "`timestamp` must be an integer Unix timestamp in seconds.";
 
   if (ts > 10_000_000_000) ts = Math.floor(ts / 1000); // accept ms
@@ -91,7 +91,7 @@ function formatInterval(seconds) {
 function getDailyTimeFromTimestamp(j, rescheduling=false) {
   if (!rescheduling){ 
     const ts = Number(j.ts);
-    [ts, ts*1000];
+    return [ts, ts*1000];
   }
   let nextUnix = j.ts + 86400;
   let nextMs = j.runAtMs + 86_400_000;
@@ -136,11 +136,21 @@ const doAtTypeHandlers = {
     innerContent: (j)=>j.subject, 
     allowedMentions: (_)=>({ parse: [] }), 
     outerContent: (_, innerContent)=>innerContent,
-    targetTime: (j, _) => {
-      const now = Math.floor(Date.now() / 1000);
+    targetTime: (j, rescheduling=false) => {
       const offset = Math.floor(Math.random() * (j.maxInterval - j.minInterval + 1)) + j.minInterval;
-
-      return now + offset;
+      if (!rescheduling) {
+        const ts = (Date.now() / 1000) + offset;
+        return [ts, ts*1000]
+      }
+      if (!j.ts || !j.runAtMs) throw new Error(`Scheduler error: job \`${j.id}\` lacks valid timestamp data.`);
+      let nextUnix = j.ts + offset;
+      let nextMs = j.runAtMs + (offset*1000);
+      const now = Date.now();
+      if (nextMs <= now) {
+        nextUnix = (now / 1000) + offset;
+        nextMs = nextUnix*1000;
+      }
+      return [nextUnix, nextMs];
     },
     repeatDescription: (j) => `randomly (min.: ${formatInterval(j.minInterval)} - max.: ${formatInterval(j.maxInterval)})`
   }
@@ -225,8 +235,9 @@ export class GuildScheduler {
           flags: 64, allowed_mentions: { parse: [] }, content: "No scheduled jobs."
         });
       }
-      const handler = doAtTypeHandlers[j.doAtType];
+
       const shown = jobs.slice(0, 15).map(j => {
+        const handler = doAtTypeHandlers[j.doAtType];
         const innerContent = handler.innerContent(j);
         return `• <t:${j.ts}:F> (<t:${j.ts}:R>) — ${innerContent} in <#${j.channelId}>` +
           (j.repeats ? ` 🔁 ${handler.repeatDescription}` : "") +

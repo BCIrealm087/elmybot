@@ -7,7 +7,7 @@ import {
 
 function makeDoAt({
   description, subjectOption = undefined, optionsOverride = undefined,
-  extraOptions = undefined, getOptions, 
+  extraOptions = [], getOptions, 
   evaluator, doAtType
 }) {
   if (!subjectOption && !optionsOverride) throw new Error("Either `subjectOption` or `optionsOverride` must be defined.");
@@ -71,7 +71,7 @@ export const commands = {
       { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
       { name: "min_interval", description: "Min. interval", type: 4, required: false },
       { name: "max_interval", description: "Max. interval", type: 4, required: false },
-      { name: "repeats", description: "If true, repeats every day", type: 5, required: false }
+      { name: "repeats", description: "If true, at bounded random intervals", type: 5, required: false }
     ],
     getOptions: (interaction)=>({
       subject: String(getOption(interaction, "message") ?? ""),
