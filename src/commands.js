@@ -66,7 +66,7 @@ export const commands = {
   }),
 
   "sayat_random": makeDoAt({
-    description: "Schedule a message to be sent after a semi-random interval. Interval can be optionally bounded (in seconds; default min. 2h max. 6h).",
+    description: "Schedule a message to be sent after a semi-random interval (in seconds; default min. 2h max. 6h).",
     optionsOverride: [
       { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
       { name: "min_interval", description: "Min. interval", type: 4, required: false },
@@ -76,17 +76,23 @@ export const commands = {
     getOptions: (interaction)=>({
       subject: String(getOption(interaction, "message") ?? ""),
       repeats: Boolean(getOption(interaction, "repeats") ?? false),
-      minInterval: Number(getOption(interaction, "min_interval") ?? 7200),
-      maxInterval: Number(getOption(interaction, "max_interval") ?? 21600)
+      data: {
+        minInterval: Number(getOption(interaction, "min_interval") ?? 7200), 
+        maxInterval: Number(getOption(interaction, "max_interval") ?? 21600)
+      }
     }),
-    evaluator: (options) => evalMessage(options) || (
-      ![options.minInterval, options.maxInterval].every(v=>Number.isFinite(v) && Number.isInteger(v)) ? "Intervals must be integers representing seconds."
-      : options.minInterval <= 0 || options.maxInterval <= 0 ? "Intervals cannot be null or negative."
-      : options.minInterval < 600 ? "Message cannot be sent more frequently than every 10 minutes."
-      : options.minInterval > 86400 || options.maxInterval > 86400 ? "Message cannot be scheduled to be sent after more than 24 hours. Check the `repeats` option."
-      : options.minInterval > options.maxInterval ? "Minimum interval cannot be smaller than the maximum interval."
-      : null
-    ),
+    evaluator: (options) => {
+      const minInterval = options.data.minInterval;
+      const maxInterval = options.data.maxInterval;
+      return evalMessage(options) || (
+        ![minInterval, maxInterval].every(v=>Number.isFinite(v) && Number.isInteger(v)) ? "Intervals must be integers representing seconds."
+        : minInterval <= 0 || maxInterval <= 0 ? "Intervals cannot be null or negative."
+        : minInterval < 600 ? "Mininum interval cannot be less than 10 minutes (600 seconds)."
+        : minInterval > 86400 || maxInterval > 86400 ? "Message cannot be scheduled to be sent after more than 24 hours. Check the `repeats` option."
+        : minInterval > maxInterval ? "Minimum interval cannot be smaller than the maximum interval."
+        : null
+      );
+    },
     doAtType: "channel-message-random"
   }),
 

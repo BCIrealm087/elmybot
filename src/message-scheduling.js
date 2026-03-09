@@ -14,6 +14,7 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
     const stub = env.SCHEDULER.get(id);
 
     const options = doAtHandler.getOptions(interaction);
+    if (!options.data) options.data = { };
     // eval returns falsy if there were no errors, otherwise returns error description. Side effects may be applied to `options` here
     const error = doAtHandler.eval(options);
     if (error) {
@@ -136,23 +137,32 @@ const doAtTypeHandlers = {
     innerContent: (j)=>j.subject, 
     allowedMentions: (_)=>({ parse: [] }), 
     outerContent: (_, innerContent)=>innerContent,
-    targetTime: (j, rescheduling=false) => {
-      const offset = Math.floor(Math.random() * (j.maxInterval - j.minInterval + 1)) + j.minInterval;
+    targetTime: (j, rescheduling = false) => {
+      const randomOffset =
+        Math.random() * (j.data.maxInterval - j.data.minInterval + 1) +
+        j.data.minInterval;
+
       if (!rescheduling) {
-        const ts = (Date.now() / 1000) + offset;
-        return [ts, ts*1000]
+        const nextUnix = Math.floor(Date.now() / 1000 + randomOffset);
+        return [nextUnix, nextUnix * 1000];
       }
-      if (!j.ts || !j.runAtMs) throw new Error(`Scheduler error: job \`${j.id}\` lacks valid timestamp data.`);
-      let nextUnix = j.ts + offset;
-      let nextMs = j.runAtMs + (offset*1000);
+
+      if (!j.ts || !j.runAtMs) {
+        throw new Error(`Scheduler error: job \`${j.id}\` lacks valid timestamp data.`);
+      }
+
+      const offset = Math.floor(randomOffset);
       const now = Date.now();
+      const nextMs = j.runAtMs + offset * 1000;
+
       if (nextMs <= now) {
-        nextUnix = (now / 1000) + offset;
-        nextMs = nextUnix*1000;
+        const nextUnix = Math.floor(now / 1000 + offset);
+        return [nextUnix, nextUnix * 1000];
       }
-      return [nextUnix, nextMs];
+
+      return [j.ts + offset, nextMs];
     },
-    repeatDescription: (j) => `randomly (min.: ${formatInterval(j.minInterval)} - max.: ${formatInterval(j.maxInterval)})`
+    repeatDescription: (j) => `randomly (min.: ${formatInterval(j.data.minInterval)} - max.: ${formatInterval(j.data.maxInterval)})`
   }
 }
 
@@ -192,6 +202,7 @@ export class GuildScheduler {
         subject: job.subject,
         ts,
         runAtMs: runAtMs,
+        data: job.data,
         repeats: job.repeats === true, // avoid Boolean("false") pitfalls
         createdBy: job.createdBy ?? null,
       };
@@ -221,7 +232,7 @@ export class GuildScheduler {
           allowed_mentions: { parse: [] },
           content:
             `✅ Scheduled job for <t:${j.ts}:F> (<t:${j.ts}:R>)` +
-            (j.repeats ? `\n🔁 Repeats ${handler.repeatDescription}.` : "") +
+            (j.repeats ? `\n🔁 Repeats ${handler.repeatDescription(j)}.` : "") +
             `\nJob ID: \`${j.id}\``,
         });
     }
@@ -240,15 +251,15 @@ export class GuildScheduler {
         const handler = doAtTypeHandlers[j.doAtType];
         const innerContent = handler.innerContent(j);
         return `• <t:${j.ts}:F> (<t:${j.ts}:R>) — ${innerContent} in <#${j.channelId}>` +
-          (j.repeats ? ` 🔁 ${handler.repeatDescription}` : "") +
+          (j.repeats ? ` 🔁 ${handler.repeatDescription(j)}` : "") +
           ` — id: \`${j.id}\``;
       }).join("\n");
 
       return jsonResponse({
-          flags: 64,
-          allowed_mentions: { parse: [] },
-          content: `📌 Scheduled jobs (${jobs.length} total):\n${shown}`,
-        });
+        flags: 64,
+        allowed_mentions: { parse: [] },
+        content: `📌 Scheduled jobs (${jobs.length} total):\n${shown}`,
+      });
     }
 
     if (url.pathname === "/cancel" && request.method === "POST") {
