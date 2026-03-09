@@ -1,4 +1,4 @@
-import { jsonResponse, getOption, ephemeralData } from "./common";
+import { jsonResponse, getOption, ephemeralData } from "./common.js";
 
 class SchedulingError extends Error {
   constructor(message) {
@@ -13,36 +13,23 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
     const id = env.SCHEDULER.idFromName(interaction.guild_id);
     const stub = env.SCHEDULER.get(id);
 
-    const doAtSubject = doAtHandler.getSubject(interaction);
-    const error = doAtHandler.getError(doAtSubject);
+    const options = doAtHandler.getOptions(interaction);
+    // eval returns falsy if there were no errors, otherwise returns error description. Side effects may be applied to `options` here
+    const error = doAtHandler.eval(options);
     if (error) {
       throw new SchedulingError(error);
     }
 
     const doAtType = doAtHandler.type;
 
-    let ts = Number(getOption(interaction, "timestamp"));
-    const repeatDaily = Boolean(getOption(interaction, "repeat_daily") ?? false);
-
-    if (!Number.isFinite(ts) || !Number.isInteger(ts)) {
-      throw new SchedulingError("`timestamp` must be an integer Unix timestamp in seconds.");
-    }
-    if (ts > 10_000_000_000) ts = Math.floor(ts / 1000); // accept ms
-    const now = Math.floor(Date.now() / 1000);
-    if (ts <= now) {
-      throw new SchedulingError("That timestamp is in the past.");
-    }
-
     const r = await stub.fetch("https://do/schedule", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        ...options,
         guildId: interaction.guild_id,
         channelId: interaction.channel_id,
         doAtType,
-        doAtSubject,
-        scheduledUnix: ts,
-        repeatDaily,
         createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null,
       }),
     });
@@ -53,11 +40,34 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
   return schedulingResult;
 }
 
+export const getStandardOptions = (interaction) => ({
+  repeats: Boolean(getOption(interaction, "repeats") ?? false), 
+  ts: Number(getOption(interaction, "timestamp"))
+})
+
+export const evalStandardTimestamp = (options) => {
+  const ts = options.ts;
+  if (!Number.isFinite(ts) || !Number.isInteger(ts)) return "`timestamp` must be an integer Unix timestamp in seconds.";
+
+  if (ts > 10_000_000_000) ts = Math.floor(ts / 1000); // accept ms
+  options.ts = ts;
+  const now = Math.floor(Date.now() / 1000);
+  if (ts <= now) return "That timestamp is in the past.";
+
+  return null;
+}
+
+export const evalMessage = (options) => (
+  options.subject.length === 0 ? "Message cannot be empty."
+  : options.subject.length > 2000 ? "Message too long (max 2000 chars)."
+  : null
+)
+
 const DELIVERED_TTL_MS = 14 * 24 * 60 * 60 * 1000; // keep 14 days of dedupe keys
 
 function deliveryKey(job) {
   // One key per “instance” of the job (id + scheduled time)
-  return `${job.id}:${job.scheduledUnix}`;
+  return `${job.id}:${job.ts}`;
 }
 
 function pruneDelivered(delivered, nowMs) {
@@ -66,21 +76,73 @@ function pruneDelivered(delivered, nowMs) {
   }
 }
 
+function formatInterval(seconds) {
+  if (seconds >= 3600) {
+    return `${(seconds / 3600).toFixed(1)}h`;
+  }
+
+  if (seconds >= 60) {
+    return `${(seconds / 60).toFixed(1)}min`;
+  }
+
+  return `${seconds}s`;
+}
+
+function getDailyTimeFromTimestamp(j, rescheduling=false) {
+  if (!rescheduling){ 
+    const ts = Number(j.ts);
+    [ts, ts*1000];
+  }
+  let nextUnix = j.ts + 86400;
+  let nextMs = j.runAtMs + 86_400_000;
+
+  // catch up if we're behind
+  const DAY_MS = 86_400_000;
+  const DAY_S = 86_400;
+
+  const now = Date.now();
+
+  if (nextMs <= now) {
+    const daysBehind = Math.floor((now - nextMs) / DAY_MS) + 1;
+    nextUnix += daysBehind * DAY_S;
+    nextMs += daysBehind * DAY_MS;
+  }
+  return [nextUnix, nextMs];
+}
+
 const doAtTypeHandlers = {
   "ping-role": {
-    innerContent: (j)=>`<@&${j.doAtSubject}>`, 
-    allowedMentions: (j)=>({ roles: [j.doAtSubject] }), 
-    outerContent: (j, innerContent)=>`${innerContent} (scheduled role ping for <t:${j.scheduledUnix}:F>)`
+    innerContent: (j)=>`<@&${j.subject}>`, 
+    allowedMentions: (j)=>({ roles: [j.subject] }), 
+    outerContent: (j, innerContent)=>`${innerContent} (scheduled role ping for <t:${j.ts}:F>)`,
+    targetTime: getDailyTimeFromTimestamp, 
+    repeatDescription: (_)=>"daily"
   },
   "ping-user": {
-    innerContent: (j)=>`<@${j.doAtSubject}>`, 
-    allowedMentions: (j)=>({ users: [j.doAtSubject] }), 
-    outerContent: (j, innerContent)=>`${innerContent} (scheduled user ping for <t:${j.scheduledUnix}:F>)`
+    innerContent: (j)=>`<@${j.subject}>`, 
+    allowedMentions: (j)=>({ users: [j.subject] }), 
+    outerContent: (j, innerContent)=>`${innerContent} (scheduled user ping for <t:${j.ts}:F>)`,
+    targetTime: getDailyTimeFromTimestamp, 
+    repeatDescription: (_)=>"daily"
   },
-  "channel-message": {
-    innerContent: (j)=>j.doAtSubject, 
+  "channel-message-standard": {
+    innerContent: (j)=>j.subject, 
     allowedMentions: (_)=>({ parse: [] }), 
-    outerContent: (_, innerContent)=>innerContent
+    outerContent: (_, innerContent)=>innerContent,
+    targetTime: getDailyTimeFromTimestamp, 
+    repeatDescription: (_)=>"daily"
+  },
+  "channel-message-random": {
+    innerContent: (j)=>j.subject, 
+    allowedMentions: (_)=>({ parse: [] }), 
+    outerContent: (_, innerContent)=>innerContent,
+    targetTime: (j, _) => {
+      const now = Math.floor(Date.now() / 1000);
+      const offset = Math.floor(Math.random() * (j.maxInterval - j.minInterval + 1)) + j.minInterval;
+
+      return now + offset;
+    },
+    repeatDescription: (j) => `randomly (min.: ${formatInterval(j.minInterval)} - max.: ${formatInterval(j.maxInterval)})`
   }
 }
 
@@ -101,8 +163,8 @@ export class GuildScheduler {
 
     if (url.pathname === "/schedule" && request.method === "POST") {
       const job = await request.json();
-
-      if (!(job.doAtType in doAtTypeHandlers)) {
+      const handler = doAtTypeHandlers[job.doAtType];
+      if (!handler) {
         return jsonResponse({
           flags: 64, allowed_mentions: { parse: [] }, content: "Invalid target type."
         });
@@ -111,16 +173,16 @@ export class GuildScheduler {
       const id = crypto.randomUUID();
 
       // Normalize types defensively (worker should already enforce, but DO shouldn't trust input blindly)
-      const scheduledUnix = Number(job.scheduledUnix);
+      const [ts, runAtMs] = handler.targetTime(job);
       const j = {
         id,
         guildId: job.guildId,
         channelId: job.channelId,
         doAtType: job.doAtType,
-        doAtSubject: job.doAtSubject,
-        scheduledUnix,
-        runAtMs: scheduledUnix * 1000,
-        repeatDaily: job.repeatDaily === true, // avoid Boolean("false") pitfalls
+        subject: job.subject,
+        ts,
+        runAtMs: runAtMs,
+        repeats: job.repeats === true, // avoid Boolean("false") pitfalls
         createdBy: job.createdBy ?? null,
       };
 
@@ -148,8 +210,8 @@ export class GuildScheduler {
           flags: 64,
           allowed_mentions: { parse: [] },
           content:
-            `✅ Scheduled job for <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>)` +
-            (j.repeatDaily ? `\n🔁 Repeats daily.` : "") +
+            `✅ Scheduled job for <t:${j.ts}:F> (<t:${j.ts}:R>)` +
+            (j.repeats ? `\n🔁 Repeats ${handler.repeatDescription}.` : "") +
             `\nJob ID: \`${j.id}\``,
         });
     }
@@ -163,11 +225,11 @@ export class GuildScheduler {
           flags: 64, allowed_mentions: { parse: [] }, content: "No scheduled jobs."
         });
       }
-
+      const handler = doAtTypeHandlers[j.doAtType];
       const shown = jobs.slice(0, 15).map(j => {
-        const innerContent = doAtTypeHandlers[j.doAtType].innerContent(j);
-        return `• <t:${j.scheduledUnix}:F> (<t:${j.scheduledUnix}:R>) — ${innerContent} in <#${j.channelId}>` +
-          (j.repeatDaily ? " 🔁 daily" : "") +
+        const innerContent = handler.innerContent(j);
+        return `• <t:${j.ts}:F> (<t:${j.ts}:R>) — ${innerContent} in <#${j.channelId}>` +
+          (j.repeats ? ` 🔁 ${handler.repeatDescription}` : "") +
           ` — id: \`${j.id}\``;
       }).join("\n");
 
@@ -223,7 +285,7 @@ export class GuildScheduler {
       return jsonResponse({
           flags: 64,
           allowed_mentions: { parse: [] },
-          content: `🗑️ Cancelled job \`${jobId}\` scheduled for <t:${result.removed.scheduledUnix}:F>.`,
+          content: `🗑️ Cancelled job \`${jobId}\` scheduled for <t:${result.removed.ts}:F>.`,
         });
     }
 
@@ -260,7 +322,7 @@ export class GuildScheduler {
           await this.state.storage.transaction(async (txn) => {
             const curJobs = (await txn.get("jobs")) ?? [];
             const idx = curJobs.findIndex(
-              (j) => j.id === job.id && j.scheduledUnix === job.scheduledUnix
+              (j) => j.id === job.id && j.ts === job.ts
             );
             if (idx !== -1) {
               curJobs.splice(idx, 1);
@@ -288,7 +350,7 @@ export class GuildScheduler {
         );
 
         if (!r.ok) {
-          // Keep your existing behavior: job remains in jobs; CF retries the alarm later.
+          // Job remains in jobs; CF retries the alarm later.
           pruneDelivered(delivered, Date.now());
           await this.state.storage.put("delivered", delivered);
           throw new Error(`Discord API error ${r.status}: ${await r.text()}`);
@@ -306,7 +368,7 @@ export class GuildScheduler {
         curJobs.sort((a, b) => a.runAtMs - b.runAtMs);
 
         const idx = curJobs.findIndex(
-          (j) => j.id === job.id && j.scheduledUnix === job.scheduledUnix
+          (j) => j.id === job.id && j.ts === job.ts
         );
 
         if (idx === -1) return; // canceled/changed while we were working; that's fine
@@ -314,19 +376,12 @@ export class GuildScheduler {
         const cur = curJobs[idx];
         curJobs.splice(idx, 1);
 
-        if (cur.repeatDaily) {
-          let nextUnix = cur.scheduledUnix + 86400;
-          let nextMs = cur.runAtMs + 86_400_000;
-
-          // catch up if we're behind
-          while (nextMs <= Date.now()) {
-            nextUnix += 86400;
-            nextMs += 86_400_000;
-          }
+        if (cur.repeats) {
+          const [nextUnix, nextMs] = doAtTypeHandlers[job.doAtType].targetTime(cur, true);
 
           curJobs.push({
             ...cur,
-            scheduledUnix: nextUnix,
+            ts: nextUnix,
             runAtMs: nextMs,
           });
         }

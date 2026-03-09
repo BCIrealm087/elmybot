@@ -1,6 +1,37 @@
 import { PERMS } from "./permissions.js";
 import { getOption } from "./common.js";
-import { scheduleMessage } from "./message-scheduling.js";
+import {
+  scheduleMessage, getStandardOptions, evalStandardTimestamp,
+  evalMessage
+} from "./message-scheduling.js";
+
+function makeDoAt({
+  description, subjectOption = undefined, optionsOverride = undefined,
+  extraOptions = undefined, getOptions, 
+  evaluator, doAtType
+}) {
+  if (!subjectOption && !optionsOverride) throw new Error("Either `subjectOption` or `optionsOverride` must be defined.");
+  if (subjectOption && optionsOverride) throw new Error("Please only define one of `subjectOption` or `optionsOverride`, not both.");
+  return {
+    description,
+    guild: true, 
+    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    options: (subjectOption) ? [
+      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
+      subjectOption,
+      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false },
+      ...extraOptions
+    ] : optionsOverride,
+    deferred: true,
+    exec: (interaction, env) => {
+      return scheduleMessage(interaction, env, {
+        getOptions,
+        eval: evaluator,
+        type: doAtType
+      });
+    }
+  }
+}
 
 // exec's return value should fit the 'data' field of the json response expected by discord following a command invocation
 export const commands = {
@@ -10,66 +41,54 @@ export const commands = {
     exec: () => ({ content: "I'm here!!1" })
   },
 
-  "pingroleat": {
-    description: "Schedule a role ping at a Unix timestamp (seconds).",
-    guild: true, 
-    allowed: [PERMS.OWNER, PERMS.MODERATORS],
-    options: [
-      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
-      { name: "role", description: "Role to ping", type: 8, required: true },
-      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
-    ], 
-    deferred: true,
-    exec: (interaction, env) => {
-      return scheduleMessage(interaction, env, {
-        getSubject: (interaction)=>String(getOption(interaction, "role") ?? ""),
-        getError: (subject)=>(!/^\d{5,30}$/.test(subject)) ? "Invalid role." : null,
-        type: "ping-role"
-      });
-    }
-  },
+  "pingroleat": makeDoAt({
+    description: "Schedule a role ping at an Unix timestamp (seconds).",
+    subjectOption: { name: "role", description: "Role to ping", type: 8, required: true },
+    getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "role") ?? "") }),
+    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid role." : null || evalStandardTimestamp(options),
+    doAtType: "ping-role"
+  }),
 
-  "pingmeat": {
+  "pingmeat": makeDoAt({
     description: "Schedule an user ping at a Unix timestamp (seconds).",
-    guild: true, 
-    allowed: [PERMS.OWNER, PERMS.MODERATORS],
-    options: [
-      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
-      { name: "user", description: "User to ping", type: 6, required: true }, // USER,
-      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
-    ],
-    deferred: true,
-    exec: (interaction, env) => {
-      return scheduleMessage(interaction, env, {
-        getSubject: (interaction)=>String(getOption(interaction, "user") ?? ""),
-        getError: (subject)=>(!/^\d{5,30}$/.test(subject)) ? "Invalid user." : null,
-        type: "ping-user"
-      });
-    }
-  },
+    subjectOption: { name: "user", description: "User to ping", type: 6, required: true }, // USER
+    getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "user") ?? "") }),
+    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid user." : null || evalStandardTimestamp(options),
+    doAtType: "ping-user"
+  }),
 
-  "sayat": {
+  "sayat": makeDoAt({
     description: "Schedule a message at a Unix timestamp (seconds).",
-    guild: true, 
-    allowed: [PERMS.OWNER, PERMS.MODERATORS],
-    options: [
-      { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
-      { name: "message", description: "Message", type: 3, required: true }, // MESSAGE,
-      { name: "repeat_daily", description: "If true, repeats every day", type: 5, required: false }
+    subjectOption: { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
+    getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "message") ?? "") }),
+    evaluator: (options) => evalMessage(options) || evalStandardTimestamp(options),
+    doAtType: "channel-message-standard"
+  }),
+
+  "sayat_random": makeDoAt({
+    description: "Schedule a message to be sent after a semi-random interval. Interval can be optionally bounded (in seconds; default min. 2h max. 6h).",
+    optionsOverride: [
+      { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
+      { name: "min_interval", description: "Min. interval", type: 4, required: false },
+      { name: "max_interval", description: "Max. interval", type: 4, required: false },
+      { name: "repeats", description: "If true, repeats every day", type: 5, required: false }
     ],
-    deferred: true,
-    exec: (interaction, env) => {
-      return scheduleMessage(interaction, env, {
-        getSubject: (interaction)=>String(getOption(interaction, "message") ?? ""),
-        getError: (subject)=>(
-          subject.length === 0 ? "Message cannot be empty."
-          : subject.length > 2000 ? "Message too long (max 2000 chars)."
-          : null
-        ),
-        type: "channel-message"
-      });
-    }
-  },
+    getOptions: (interaction)=>({
+      subject: String(getOption(interaction, "message") ?? ""),
+      repeats: Boolean(getOption(interaction, "repeats") ?? false),
+      minInterval: Number(getOption(interaction, "min_interval") ?? 7200),
+      maxInterval: Number(getOption(interaction, "max_interval") ?? 21600)
+    }),
+    evaluator: (options) => evalMessage(options) || (
+      ![options.minInterval, options.maxInterval].every(v=>Number.isFinite(v) && Number.isInteger(v)) ? "Intervals must be integers representing seconds."
+      : options.minInterval <= 0 || options.maxInterval <= 0 ? "Intervals cannot be null or negative."
+      : options.minInterval < 600 ? "Message cannot be sent more frequently than every 10 minutes."
+      : options.minInterval > 86400 || options.maxInterval > 86400 ? "Message cannot be scheduled to be sent after more than 24 hours. Check the `repeats` option."
+      : options.minInterval > options.maxInterval ? "Minimum interval cannot be smaller than the maximum interval."
+      : null
+    ),
+    doAtType: "channel-message-random"
+  }),
 
   "doat_list": {
     description: "List scheduled messages for this server.",
@@ -85,7 +104,7 @@ export const commands = {
   }, 
 
   "doat_cancel": {
-    description: "Cancel a scheduled ping by job ID.",
+    description: "Cancel a scheduled message by job ID.",
     guild: true,
     allowed: [PERMS.OWNER, PERMS.MODERATORS],
     deferred: true,

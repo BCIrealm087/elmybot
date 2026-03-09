@@ -49,6 +49,8 @@ Schedule a role ping at a specific Unix timestamp.
 
 ### `/sayat`
 
+### `/sayat_random`
+
 ### `/doat_list`
 List the next scheduled pings for the server.
 
@@ -75,9 +77,9 @@ array of items shaped like:
   guildId: string,
   channelId: string,
   roleId: string,
-  scheduledUnix: number,
+  ts: number,
   runAtMs: number,
-  repeatDaily: boolean,
+  repeats: boolean,
   createdBy: string | null
 }
 ```

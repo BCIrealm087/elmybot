@@ -2,7 +2,7 @@
 // One-off script to register global slash commands for the bot.
 import "dotenv/config";
 
-import { commands } from "./commands";
+import { commands } from "./commands.js";
 
 const args = process.argv.slice(2);
 const test = args.includes("--test");

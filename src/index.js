@@ -87,7 +87,7 @@ async function editOriginalInteractionResponse(interaction, messageData) {
 async function checkGuildPermissions(allowedGroups, interaction, env) {
   if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
   const perms = new Set(await getPerms(interaction, env));
-  const isAllowed = allowedCallers.some(perm => perms.has(perm));
+  const isAllowed = allowedGroups.some(perm => perms.has(perm));
   return {
     isAllowed, 
     rejection: (!isAllowed)
