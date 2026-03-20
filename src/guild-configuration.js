@@ -9,6 +9,9 @@ class GuildConfigUserFacingError extends Error {
 
 const isNotAnArrayMessage = "The provided key does not index a list (array).";
 
+// Lightweight per-guild configuration storage backed by a Durable Object.
+// Today it stores the `allowedRoles` list used by permission checks.
+
 async function getConfig(state, key) {
   return await state.storage.get(key);
 }
@@ -24,7 +27,7 @@ async function setConfig(state, key, payload) {
 async function addRowToConfig(state, key, payload) {
   if (payload === null || payload === undefined) throw new GuildConfigUserFacingError("Null or undefined values cannot be added to a configuration.", 422)
   return await state.storage.transaction(async (txn) => {
-    // create new list under provided key if it's free
+    // Create a new list when the key has not been used yet.
     const stored = (await txn.get(key)) ?? [];
     if (!Array.isArray(stored)) throw new GuildConfigUserFacingError(isNotAnArrayMessage, 422);
 
@@ -101,7 +104,8 @@ const requestHandlers = {
 
 export class GuildConfig {
   /**
-   * Durable Object per guild responsible for storing and retrieving per guild configuration.
+   * Durable Object per guild responsible for storing and retrieving guild
+   * configuration such as role-based command allowlists.
    */
   constructor(state, env) {
     this.state = state;

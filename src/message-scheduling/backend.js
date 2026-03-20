@@ -1,9 +1,10 @@
 import { jsonResponse } from "../common.js";
 import { SchedulingUserFacingError } from "./errors.js";
 
-// SECONDARY ENVIRONMENT (storage + alarms)
+// Durable Object environment: persistent job storage + alarms.
 
-// Scheduler behaviour derived from commands
+// Scheduler behavior is registered from command definitions so the DO can
+// format jobs and compute repeat times without duplicating command logic.
 const doAtTypeHandlers = { };
 
 export function registerDoAtHandlers(definitions) {
@@ -32,6 +33,8 @@ const requestHandlers = {
   "GET": {
     base: async (state, _, pathHandler) => pathHandler(state), 
     "/list": async (state) => {
+      // Return a user-facing subset of each job rather than the full stored
+      // payload.
       const jobs = (await state.storage.get("jobs")) ?? [];
       jobs.sort((a, b) => a.runAtMs - b.runAtMs);
 
@@ -62,7 +65,8 @@ const requestHandlers = {
 
       const id = crypto.randomUUID();
 
-      // Normalize types defensively (worker should already enforce, but DO shouldn't trust input blindly)
+      // The worker validates inputs first, but the DO still normalizes and
+      // validates the scheduled timestamp defensively.
       const [ts, runAtMs] = handler.calcScheduleTime(job);
       const j = {
         id,
@@ -77,7 +81,7 @@ const requestHandlers = {
         createdBy: job.createdBy ?? null,
       };
 
-      // Atomic: read -> modify -> write jobs
+      // Atomic: read -> modify -> write jobs.
       await state.storage.transaction(async (txn) => {
         const jobs = (await txn.get("jobs")) ?? [];
         jobs.push(j);
@@ -85,9 +89,10 @@ const requestHandlers = {
         await txn.put("jobs", jobs);
       });
 
-      // Compute alarm from CURRENT stored state to avoid "last writer sets later alarm" race
+      // Recompute from persisted state so concurrent requests cannot leave a
+      // later alarm behind.
       const jobsNow = (await state.storage.get("jobs")) ?? [];
-      // sort defensively in case older data exists
+      // Sort defensively in case older unsorted data already exists.
       jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
 
       const next = jobsNow[0];
@@ -108,7 +113,7 @@ const requestHandlers = {
 
       if (!jobId) throw new SchedulingUserFacingError("Provide a valid `job_id`.", 422);
 
-      // Atomic remove (read -> modify -> write)
+      // Atomic remove (read -> modify -> write).
       const result = await state.storage.transaction(async (txn) => {
         const jobs = (await txn.get("jobs")) ?? [];
         const idx = jobs.findIndex((j) => j.id === jobId);
@@ -125,7 +130,8 @@ const requestHandlers = {
 
       if (!result.found) throw new SchedulingUserFacingError(`No job found: \`${jobId}\``, 422);
 
-      // Set/clear alarm based on CURRENT persisted state (avoid alarm override races)
+      // Set/clear the next alarm from persisted state to avoid racey local
+      // copies.
       const jobsNow = (await state.storage.get("jobs")) ?? [];
       jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
 
@@ -174,7 +180,8 @@ export class GuildScheduler {
    * Alarm handler: delivers due pings and reschedules repeating jobs.
    */
   async alarm() {
-    // Load delivered once; keep it in-memory and persist updates as we go.
+    // Load delivered once, keep it in-memory during this alarm run, and write
+    // back after any change.
     let delivered = (await this.state.storage.get("delivered")) ?? {};
     if (typeof delivered !== "object" || delivered === null) delivered = {};
     pruneDelivered(delivered, Date.now());
@@ -182,7 +189,8 @@ export class GuildScheduler {
     while (true) {
       const nowMs = Date.now();
 
-      // Always read the latest jobs from storage (don't keep a stale local copy)
+      // Always read the latest jobs from storage instead of trusting a stale
+      // local array across deliveries/reschedules.
       const jobsNow = (await this.state.storage.get("jobs")) ?? [];
       jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
 
@@ -192,7 +200,8 @@ export class GuildScheduler {
       const key = deliveryKey(job);
       const alreadyDelivered = delivered[key] !== undefined;
 
-      // 1) Deliver outside transaction
+      // 1) Deliver outside the transaction so Discord API calls do not hold the
+      // storage transaction open.
       if (!alreadyDelivered) {
         const handler = doAtTypeHandlers[job.type];
         if (!handler) {
@@ -238,7 +247,7 @@ export class GuildScheduler {
         await this.state.storage.put("delivered", delivered);
       }
 
-      // 2) Atomically remove/reschedule this exact occurrence
+      // 2) Atomically remove or reschedule this exact occurrence.
       await this.state.storage.transaction(async (txn) => {
         const curJobs = (await txn.get("jobs")) ?? [];
         curJobs.sort((a, b) => a.runAtMs - b.runAtMs);
@@ -267,11 +276,11 @@ export class GuildScheduler {
       });
     }
 
-    // Final prune + persist (cheap housekeeping)
+    // Final prune + persist for dedupe housekeeping.
     pruneDelivered(delivered, Date.now());
     await this.state.storage.put("delivered", delivered);
 
-    // Point alarm at next job based on persisted truth
+    // Point the next alarm at persisted state, not any local copy.
     const finalJobs = (await this.state.storage.get("jobs")) ?? [];
     finalJobs.sort((a, b) => a.runAtMs - b.runAtMs);
 

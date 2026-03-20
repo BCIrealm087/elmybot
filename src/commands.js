@@ -6,6 +6,10 @@ import {
   registerDoAtHandlers
 } from "./message-scheduling/index.js";
 
+/**
+ * Build a guild-only deferred scheduling command and register the metadata
+ * needed by the scheduler Durable Object to render and reschedule jobs.
+ */
 function makeDoAt({
   description, subjectOption = undefined, optionsOverride = undefined,
   extraOptions = [], getOptions, evaluator, 
@@ -128,7 +132,8 @@ const doAtSchedulingCommands = {
 
 registerDoAtHandlers(doAtSchedulingCommands);
 
-// exec's return value should fit the 'data' field of the json response expected by discord following a command invocation
+// `exec` return values are Discord interaction `data` payloads, not full
+// `Response` instances.
 export const commands = {
   "alive": {
     description: "Replies if alive.",

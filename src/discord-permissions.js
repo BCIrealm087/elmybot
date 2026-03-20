@@ -1,6 +1,6 @@
 /**
- * Permission bit flags (BigInt) from Discord's permissions model.
- * Only the subset used by this bot is listed here.
+ * Internal permission groups used by the command router. These are not Discord
+ * permission bitfields; they are the higher-level access groups the bot checks.
  */
 
 export const PERMS = {
@@ -55,8 +55,8 @@ function hasAnyIntrinsicPerm(permsStr, flags) {
 }
 
 /**
- * Fetches the guild owner id so we can allow the server owner.
- * Falls back to null when the Discord API call fails.
+ * Fetch the guild owner id so owner-only/protected commands can be authorized.
+ * Falls back to `null` when the Discord API call fails.
  */
 async function fetchGuildOwnerId(env, guildId) {
   const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
@@ -106,6 +106,7 @@ export async function getPerms(interaction, env) {
   const id = env.CONFIG.idFromName(interaction.guild_id);
   const stub = env.CONFIG.get(id);
 
+  // Guild-specific allowlisted roles live in the GuildConfig Durable Object.
   const r = await stub.fetch("https://config/get", {
     method: "POST",
     headers: { "content-type": "application/json" },

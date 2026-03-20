@@ -1,18 +1,21 @@
 import { getOption, ephemeralData } from "../common.js";
 import { SchedulingUserFacingError } from "./errors.js";
 
-// STANDARD ENVIRONMENT
+// Worker-side scheduling helpers. These validate interaction input and forward
+// normalized jobs to the scheduler Durable Object.
 
 export async function scheduleMessage(interaction, env, doAtHandler) {
   let schedulingResult;
   try {
-    // Route all scheduling to the guild's Durable Object
+    // Route all scheduling through the guild-scoped scheduler DO so storage and
+    // alarm ownership stay in one place.
     const id = env.SCHEDULER.idFromName(interaction.guild_id);
     const stub = env.SCHEDULER.get(id);
 
     const options = doAtHandler.getOptions(interaction);
     if (!options.extraData) options.extraData = { };
-    // eval returns falsy if there were no errors, otherwise returns error description. Side effects may be applied to `options` here
+    // `eval` returns a user-facing error message or mutates normalized options
+    // in-place when needed.
     const error = doAtHandler.eval(options);
     if (error) {
       throw new SchedulingUserFacingError(error, null);
@@ -78,7 +81,8 @@ export function getDailyTimeFromTimestamp(j, rescheduling=false) {
   let nextUnix = j.timestamp + 86400;
   let nextMs = j.runAtMs + 86_400_000;
 
-  // catch up if we're behind
+  // Catch up if alarm delivery was delayed and the next daily occurrence would
+  // already be in the past.
   const DAY_MS = 86_400_000;
   const DAY_S = 86_400;
 
