@@ -98,8 +98,9 @@ const requestHandlers = {
       }
 
       return jsonResponse({
+        id: j.id,
         timestamp: j.timestamp,
-        id: j.id
+        extraData: j.extraData
       });
     },
     "/cancel": async (state, body) => {
@@ -161,7 +162,7 @@ export class GuildScheduler {
     const pathHandler = pathHandlers && pathHandlers[url.pathname];
     if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
-      return await pathHandlers.base(request, pathHandler);
+      return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
       return (e instanceof SchedulingUserFacingError)
         ? jsonResponse({ userFacingError: e.message }, e.status)

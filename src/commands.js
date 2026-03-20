@@ -15,6 +15,16 @@ function makeDoAt({
 }) {
   if (!subjectOption && !optionsOverride) throw new Error("Either `subjectOption` or `optionsOverride` must be defined.");
   if (subjectOption && optionsOverride) throw new Error("Please only define one of `subjectOption` or `optionsOverride`, not both.");
+
+  const composer = {
+    innerContent, allowedMentions, outerContent, repeatDescription,
+    composeMessage: (stored) => {
+      const IC = innerContent(stored);
+      const AM = allowedMentions(stored);
+      const OC = outerContent(stored, IC);
+      return { content: OC, allowed_mentions: AM };
+    }
+  }
   return {
     description,
     guild: true, 
@@ -30,19 +40,12 @@ function makeDoAt({
       return scheduleMessage(interaction, env, {
         getOptions,
         eval: evaluator,
-        type: doAtType || name
+        type: doAtType || name,
+        composer
       });
     },
     extra: {
-      composer: {
-        innerContent, allowedMentions, outerContent, repeatDescription,
-        composeMessage: (stored) => {
-          const IC = innerContent(stored);
-          const AM = allowedMentions(stored);
-          const OC = outerContent(stored, IC);
-          return { content: OC, allowed_mentions: AM };
-        }
-      },
+      composer,
       calcScheduleTime: scheduleCalculation
     }
   }

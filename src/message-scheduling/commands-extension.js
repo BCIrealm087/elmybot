@@ -38,7 +38,7 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
     const data = await r.json();
     schedulingResult = ephemeralData(
       `✅ Scheduled job for <t:${data.timestamp}:F> (<t:${data.timestamp}:R>)` +
-      (options.repeats ? `\n🔁 Repeats ${doAtHandler.extra.composer.repeatDescription(j)}.` : "") +
+      (options.repeats ? `\n🔁 Repeats ${doAtHandler.composer.repeatDescription(data)}.` : "") +
       `\nJob ID: \`${data.id}\``,
     );
   } catch(e) {

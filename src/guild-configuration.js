@@ -67,7 +67,7 @@ export async function hasEntries(state, key, entries) {
 const requestHandlers = {
   "POST": {
     base: async (state, request, pathHandler) => pathHandler(state, await request.json()),
-    "/get": async (_, body) => {
+    "/get": async (state, body) => {
       const key = body?.key;
       const config = await getConfig(state, key);
       return jsonResponse({ value: config ?? null });
