@@ -2,12 +2,13 @@ import nacl from "tweetnacl";
 
 import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
-import { PERMS, PERM_STRINGS, getPerms } from "./permissions.js";
+import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
 
 /**
  * Durable objects
  */
-export { GuildScheduler } from "./message-scheduling.js";
+export { GuildScheduler } from "./message-scheduling/index.js";
+export { GuildConfig } from "./guild-configuration.js";
 
 /**
  * Cloudflare Worker entrypoint for Discord interactions.
@@ -84,15 +85,12 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-async function checkGuildPermissions(allowedGroups, interaction, env) {
-  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
-  const perms = new Set(await getPerms(interaction, env));
-  const isAllowed = allowedGroups.some(perm => perms.has(perm));
-  return {
-    isAllowed, 
-    rejection: (!isAllowed)
-      ? `Only members that fall into one of [${allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
-      : undefined
+async function checkGuildPermissions(interaction, env, commandInfo) {
+  const result = checkPermissions(interaction, env, commandInfo);
+  if (result.ok) return { ok: true };
+  return { 
+    ok: false, 
+    reason: `Only members that fall into one of [${result.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
   };
 }
 
@@ -102,16 +100,17 @@ class CommandError extends Error {
   }
 }
 
-async function runCommand(interaction, env, command) {
+async function handleCommand(interaction, env, command) {
   let commandResult;
+  const def = command.definition;
   try {
-    if (command.guild) {
+    if (def.guild) {
       if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
-      if (!command.allowed) throw new CommandError("Error: permissions for this command have not been set.")
-      const checkResults = await checkGuildPermissions(command.allowed, interaction, env);
-      if (checkResults.rejection) throw new CommandError(checkResults.rejection);
+      if (!def.allowed) throw new CommandError("Error: permissions for this command have not been set.")
+      const permStatus = await checkGuildPermissions(interaction, env, { name: command.name, allowedGroups: def.allowed });
+      if (!permStatus.ok) throw new CommandError(permStatus.reason);
     }
-    commandResult = await command.exec(interaction, env);
+    commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
     commandResult = ephemeralData((e instanceof CommandError) ? e.message : "Unknown error.");
   }
@@ -156,18 +155,18 @@ export default {
 
     const name = interaction.data?.name;
 
-    const command = commands[name];
-    if (!command) return ephemeral(`Unknown command: /${name}`)
-
+    const command = { name, definition: commands[name] };
+    if (!command.definition) return ephemeral(`Unknown command: /${name}`)
+    
     let commandResult;
     if (!command.deferred) {
-      commandResult = await runCommand(interaction, env, command);
+      commandResult = await handleCommand(interaction, env, command);
       return jsonResponse({ type: 4, data: commandResult });
     }
     // ACK immediately (must be within 3 seconds or token invalidated)
     // waitUntil has 30 seconds to finish - (https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil ; 02 mar. 2026)
     ctx.waitUntil(
-      runCommand(interaction, env, command)
+      handleCommand(interaction, env, command)
         .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
     );
     return deferredEphemeral();

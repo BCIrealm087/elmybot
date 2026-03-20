@@ -105,11 +105,11 @@ Job shape currently includes:
   id,
   guildId,
   channelId,
-  doAtType,
+  type,
   subject,
-  ts,
+  timestamp,
   runAtMs,
-  data,
+  extraData,
   repeats,
   createdBy
 }
@@ -144,8 +144,9 @@ Mention policy:
 
 - `src/index.js` — Worker entrypoint, verification, routing, deferred flow.
 - `src/commands.js` — slash command registry and execution wiring.
-- `src/message-scheduling.js` — scheduler helpers + `GuildScheduler` Durable Object.
-- `src/permissions.js` — permission constants and moderator/owner checks.
+- `src/message-scheduling` — scheduler helpers + `GuildScheduler` Durable Object.
+- `src/guild-configuration.js` — `GuildConfig` Durable Object.
+- `src/discord-permissions.js` — permission constants and moderator/owner/custom-guild-allowed-roles checks.
 - `src/common.js` — shared response/option helpers.
 - `src/register-commands.js` — slash command registration script.
 - `wrangler.jsonc` — Worker config, DO binding, migrations, test env binding.
@@ -194,7 +195,7 @@ Mention policy:
 
 ## Cloudflare deployment notes
 
-- Durable Object binding name: `SCHEDULER`
-- Durable Object class: `GuildScheduler`
+- Durable Object binding names: `SCHEDULER` ; `CONFIG`
+- Durable Object classes: `GuildScheduler` ; `GuildConfig`
 - DO migration tags in `wrangler.jsonc` are append-only once deployed.
 - Non-inheritable environment bindings (for example test/prod env blocks) must be explicitly repeated.
