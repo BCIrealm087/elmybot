@@ -12,8 +12,13 @@ export { GuildConfig } from "./guild-configuration.js";
 
 /**
  * Cloudflare Worker entrypoint for Discord interactions.
- * Handles request verification, command routing, and delegates scheduling
- * to a Durable Object per guild.
+ *
+ * Responsibilities:
+ * - verify Discord signatures against the raw request body
+ * - answer PING validation requests
+ * - route slash commands defined in `src/commands.js`
+ * - use deferred responses for guild commands that may outlive Discord's
+ *   initial response window
  */
 
 const encoder = new TextEncoder();
@@ -53,8 +58,8 @@ function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText 
 }
 
 function deferredEphemeral() {
+  // Discord interaction response type 5:
   // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-  // Immediate ACK so we never miss the 3-second deadline.
   return jsonResponse({
     type: 5,
     data: ephemeralData(null),
@@ -64,7 +69,8 @@ function deferredEphemeral() {
 async function editOriginalInteractionResponse(interaction, messageData) {
   const url = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
 
-  // For PATCH @original, send a "message object" shape (content, embeds, components, allowed_mentions...)
+  // Discord expects a regular message object when editing the original
+  // deferred interaction response.
   const body = {
     content: messageData?.content ?? "",
     allowed_mentions: messageData?.allowed_mentions ?? { parse: [] },
@@ -105,6 +111,8 @@ async function handleCommand(interaction, env, command) {
   const def = command.definition;
   try {
     if (def.guild) {
+      // Guild-only commands rely on guild-scoped Durable Objects and
+      // guild-specific permission evaluation.
       if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
       if (!def.allowed) throw new CommandError("Error: permissions for this command have not been set.")
       const permStatus = await checkGuildPermissions(interaction, env, { name: command.name, allowedGroups: def.allowed });
@@ -163,8 +171,8 @@ export default {
       commandResult = await handleCommand(interaction, env, command);
       return jsonResponse({ type: 4, data: commandResult });
     }
-    // ACK immediately (must be within 3 seconds or token invalidated)
-    // waitUntil has 30 seconds to finish - (https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil ; 02 mar. 2026)
+    // ACK immediately so Discord keeps the interaction token alive, then
+    // finish the command in the background and patch @original.
     ctx.waitUntil(
       handleCommand(interaction, env, command)
         .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))

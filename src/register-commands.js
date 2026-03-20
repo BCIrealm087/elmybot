@@ -1,5 +1,5 @@
-// register-commands.js
-// One-off script to register global slash commands for the bot.
+// One-off script that registers the current slash command set defined in
+// `src/commands.js` with Discord.
 import "dotenv/config";
 
 import { commands } from "./commands.js";
