@@ -12,9 +12,10 @@ export const PERMS = {
 }
 
 export const PERM_STRINGS = {
-  2: "member", 
-  1: "moderator", 
-  0: "server owner"
+  [PERMS.MEMBERS]: "member", 
+  [PERMS.GUILD_ALLOWED_ROLES]: "allowed server role", 
+  [PERMS.MODERATORS]: "moderator", 
+  [PERMS.OWNER]: "server owner"
 }
 
 export const WATCHED_COMMAND_PREFIX = "config_";
