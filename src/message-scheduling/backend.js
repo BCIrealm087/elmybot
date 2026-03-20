@@ -1,12 +1,19 @@
-import { jsonResponse } from "../common";
-import { commands } from "../commands";
-import { SchedulingUserFacingError } from "./errors";
+import { jsonResponse } from "../common.js";
+import { SchedulingUserFacingError } from "./errors.js";
 
 // SECONDARY ENVIRONMENT (storage + alarms)
 
 // Scheduler behaviour derived from commands
-const doAtTypeHandlers = Object.fromEntries(Object.entries(commands).reduce((acc, [key, { extra }]) => 
-  acc.push([key, { composeMessage: extra.composer.composeMessage, calcScheduleTime: extra.calcScheduleTime }]), []));
+const doAtTypeHandlers = { };
+
+export function registerDoAtHandlers(definitions) {
+  for (const [key, { extra }] of Object.entries(definitions)) {
+    doAtTypeHandlers[key] = {
+      composeMessage: extra.composer.composeMessage,
+      calcScheduleTime: extra.calcScheduleTime,
+    };
+  }
+}
 
 const DELIVERED_TTL_MS = 14 * 24 * 60 * 60 * 1000; // keep 14 days of dedupe keys
 
@@ -23,9 +30,9 @@ function pruneDelivered(delivered, nowMs) {
 
 const requestHandlers = {
   "GET": {
-    base: async (_, pathHandler) => pathHandler(), 
-    "/list": async () => {
-      const jobs = (await this.state.storage.get("jobs")) ?? [];
+    base: async (state, _, pathHandler) => pathHandler(state), 
+    "/list": async (state) => {
+      const jobs = (await state.storage.get("jobs")) ?? [];
       jobs.sort((a, b) => a.runAtMs - b.runAtMs);
 
       if (jobs.length === 0) {
@@ -48,8 +55,8 @@ const requestHandlers = {
     }
   },
   "POST" : {
-    base: async (request, pathHandler) => pathHandler(await request.json()), 
-    "/schedule": async (job) => {
+    base: async (state, request, pathHandler) => pathHandler(state, await request.json()), 
+    "/schedule": async (state, job) => {
       const handler = doAtTypeHandlers[job.type];
       if (!handler) throw new SchedulingUserFacingError("Invalid scheduling job type.", 422);
 
@@ -71,7 +78,7 @@ const requestHandlers = {
       };
 
       // Atomic: read -> modify -> write jobs
-      await this.state.storage.transaction(async (txn) => {
+      await state.storage.transaction(async (txn) => {
         const jobs = (await txn.get("jobs")) ?? [];
         jobs.push(j);
         jobs.sort((a, b) => a.runAtMs - b.runAtMs);
@@ -79,15 +86,15 @@ const requestHandlers = {
       });
 
       // Compute alarm from CURRENT stored state to avoid "last writer sets later alarm" race
-      const jobsNow = (await this.state.storage.get("jobs")) ?? [];
+      const jobsNow = (await state.storage.get("jobs")) ?? [];
       // sort defensively in case older data exists
       jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
 
       const next = jobsNow[0];
       if (next) {
-        await this.state.storage.setAlarm(next.runAtMs);
+        await state.storage.setAlarm(next.runAtMs);
       } else {
-        await this.state.storage.deleteAlarm();
+        await state.storage.deleteAlarm();
       }
 
       return jsonResponse({
@@ -95,13 +102,13 @@ const requestHandlers = {
         id: j.id
       });
     },
-    "/cancel": async (body) => {
+    "/cancel": async (state, body) => {
       const jobId = String(body?.jobId ?? "").trim();
 
       if (!jobId) throw new SchedulingUserFacingError("Provide a valid `job_id`.", 422);
 
       // Atomic remove (read -> modify -> write)
-      const result = await this.state.storage.transaction(async (txn) => {
+      const result = await state.storage.transaction(async (txn) => {
         const jobs = (await txn.get("jobs")) ?? [];
         const idx = jobs.findIndex((j) => j.id === jobId);
 
@@ -118,14 +125,14 @@ const requestHandlers = {
       if (!result.found) throw new SchedulingUserFacingError(`No job found: \`${jobId}\``, 422);
 
       // Set/clear alarm based on CURRENT persisted state (avoid alarm override races)
-      const jobsNow = (await this.state.storage.get("jobs")) ?? [];
+      const jobsNow = (await state.storage.get("jobs")) ?? [];
       jobsNow.sort((a, b) => a.runAtMs - b.runAtMs);
 
       const next = jobsNow[0];
       if (next) {
-        await this.state.storage.setAlarm(next.runAtMs);
+        await state.storage.setAlarm(next.runAtMs);
       } else {
-        await this.state.storage.deleteAlarm();
+        await state.storage.deleteAlarm();
       }
 
       return jsonResponse({
@@ -154,10 +161,10 @@ export class GuildScheduler {
     const pathHandler = pathHandlers && pathHandlers[url.pathname];
     if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
-      return pathHandlers.base(request, pathHandler);
+      return await pathHandlers.base(request, pathHandler);
     } catch (e) {
       return (e instanceof SchedulingUserFacingError)
-        ? jsonResponse({ userError: e.message }, e.status)
+        ? jsonResponse({ userFacingError: e.message }, e.status)
         : jsonResponse({ error: "Unknown error." }, 500);
     }
   }
@@ -203,7 +210,7 @@ export class GuildScheduler {
           continue;
         }
 
-        messageData = handler.composeMessage(job);
+        const messageData = handler.composeMessage(job);
 
         const r = await fetch(
           `https://discord.com/api/v10/channels/${job.channelId}/messages`,

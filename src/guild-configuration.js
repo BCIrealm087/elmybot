@@ -1,4 +1,4 @@
-import { jsonResponse } from "./common";
+import { jsonResponse } from "./common.js";
 
 class GuildConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -10,9 +10,7 @@ class GuildConfigUserFacingError extends Error {
 const isNotAnArrayMessage = "The provided key does not index a list (array).";
 
 async function getConfig(state, key) {
-  const stored = await state.storage.get(key);
-  if (stored === null || stored === undefined) throw new GuildConfigUserFacingError("There's no configuration indexed under the provided key.", 422);
-  return stored;
+  return await state.storage.get(key);
 }
 
 async function setConfig(state, key, payload) {
@@ -33,7 +31,7 @@ async function addRowToConfig(state, key, payload) {
     if (!stored.includes(payload)) {
       stored.push(payload);
       stored.sort();
-      await txn.put("key", stored);
+      await txn.put(key, stored);
     }
 
     return stored;
@@ -61,43 +59,35 @@ export async function hasEntries(state, key, entries) {
   if (!Array.isArray(stored)) throw new GuildConfigUserFacingError(isNotAnArrayMessage, 422);
   if (entries.length === 0) return true;
   if (stored.length === 0) return false;
-  valueSet = new Set(stored);
+  const valueSet = new Set(stored);
 
-  return entries.all((e) => valueSet.has(e));
+  return entries.every((e) => valueSet.has(e));
 }
 
 const requestHandlers = {
   "POST": {
-    base: async (request, pathHandler) => pathHandler(await request.json()),
-    "/list": async (body) => {
+    base: async (state, request, pathHandler) => pathHandler(state, await request.json()),
+    "/get": async (_, body) => {
       const key = body?.key;
       const config = await getConfig(state, key);
-
-      if (!(Array.isArray(config))) throw new GuildConfigUserFacingError(isNotAnArrayMessage);
-      if (config.length === 0) return jsonResponse({ values: [] });
-
-      return jsonResponse({ values: config });
+      return jsonResponse({ value: config ?? null });
     },
-    "/set": async (body) => {
-      const key = body?.key;
-      const value = body?.value;
-      if (value === null) return remove();
-      const stored = await setConfig(state, key, body?.value);
+    "/set": async (state, body) => {
+      const stored = await setConfig(state, body?.key, body?.value);
       return jsonResponse({ operationPerformed: (stored) ? "set" : "remove" });
     },
-    "/append-to": async (body) => {
-      const value = body?.value;
-      await addRowToConfig(state, key, value);
-      return jsonResponse({ ok });
+    "/append-to": async (state, body) => {
+      await addRowToConfig(state, body?.key, body?.value);
+      return jsonResponse({ ok: true });
     },
-    "/remove-from": async (body) => {
+    "/remove-from": async (state, body) => {
       const key = body?.key;
       const value = body?.value;
       await removeRowFromConfig(state, key, value);
 
       return jsonResponse({ ok: true });
     },
-    "/check": async (body) => {
+    "/check": async (state, body) => {
       const key = body?.key;
       const entries = body?.entries;
       const ok = entries
@@ -125,7 +115,7 @@ export class GuildConfig {
     const pathHandler = pathHandlers && pathHandlers[url.pathname];
     if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
-      return pathHandlers.base(request, pathHandler);
+      return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
       return (e instanceof GuildConfigUserFacingError)
         ? jsonResponse({ userFacingError: e.message }, e.status)

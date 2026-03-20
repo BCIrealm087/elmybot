@@ -86,7 +86,7 @@ async function editOriginalInteractionResponse(interaction, messageData) {
 }
 
 async function checkGuildPermissions(interaction, env, commandInfo) {
-  const result = checkPermissions(interaction, env, commandInfo);
+  const result = await checkPermissions(interaction, env, commandInfo);
   if (result.ok) return { ok: true };
   return { 
     ok: false, 
@@ -159,7 +159,7 @@ export default {
     if (!command.definition) return ephemeral(`Unknown command: /${name}`)
     
     let commandResult;
-    if (!command.deferred) {
+    if (!command.definition.deferred) {
       commandResult = await handleCommand(interaction, env, command);
       return jsonResponse({ type: 4, data: commandResult });
     }

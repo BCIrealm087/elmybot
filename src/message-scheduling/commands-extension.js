@@ -1,4 +1,4 @@
-import { jsonResponse, getOption, ephemeralData } from "./common.js";
+import { getOption, ephemeralData } from "../common.js";
 import { SchedulingUserFacingError } from "./errors.js";
 
 // STANDARD ENVIRONMENT
@@ -31,19 +31,16 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
     });
     if (!r.ok) {
       const errData = await r.json();
-      throw new (errData.userFacingError !== undefined && errData.userFacingError !== null)
-        ? SchedulingUserFacingError(errData.userFacingError, null)
-        : Error(`Unknown Scheduling Service response error: status: ${r.status}\ncontent:${await r.text()}`);
+      throw errData?.userFacingError
+        ? new SchedulingUserFacingError(errData.userFacingError, null)
+        : new Error(`Unknown Scheduling Service response error: status: ${r.status}\ncontent:${await r.text()}`);
     }
     const data = await r.json();
-    schedulingResult = jsonResponse({
-      flags: 64,
-      allowed_mentions: { parse: [] },
-      content:
-        `✅ Scheduled job for <t:${data.timestamp}:F> (<t:${data.timestamp}:R>)` +
-        (options.repeats ? `\n🔁 Repeats ${handler.repeatDescription(j)}.` : "") +
-        `\nJob ID: \`${data.id}\``,
-    });
+    schedulingResult = ephemeralData(
+      `✅ Scheduled job for <t:${data.timestamp}:F> (<t:${data.timestamp}:R>)` +
+      (options.repeats ? `\n🔁 Repeats ${doAtHandler.extra.composer.repeatDescription(j)}.` : "") +
+      `\nJob ID: \`${data.id}\``,
+    );
   } catch(e) {
     schedulingResult = ephemeralData((e instanceof SchedulingUserFacingError) ? e.message : "Unknown error.");
   }

@@ -59,7 +59,7 @@ function hasAnyIntrinsicPerm(permsStr, flags) {
  */
 async function fetchGuildOwnerId(env, guildId) {
   const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-    headers: { Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
+    headers: { Authorization: `Bot ${env.DISCORD_TOKEN}` },
   });
   if (!res.ok) return null;
   const guild = await res.json();
@@ -105,7 +105,7 @@ export async function getPerms(interaction, env) {
   const id = env.CONFIG.idFromName(interaction.guild_id);
   const stub = env.CONFIG.get(id);
 
-  const r = await stub.fetch("https://config/list", {
+  const r = await stub.fetch("https://config/get", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -115,11 +115,12 @@ export async function getPerms(interaction, env) {
 
   if (!r.ok) throw new Error(`Unknown Guild Configuration Service response error: status: ${r.status}\ncontent:${await r.text()}`);
   const data = await r.json();
-
-  const allowedRoles = new Set(data.values);
-  const memberRoles = interaction.member?.roles ?? [];
-  if (memberRoles.some(role => allowedRoles.has(role)))
-    perms.push(PERMS.GUILD_ALLOWED_ROLES);
+  if (Array.isArray(data.value) && data.value.length > 0) {
+    const allowedRoles = new Set(data.value);
+    const memberRoles = interaction.member?.roles ?? [];
+    if (memberRoles.some(role => allowedRoles.has(role)))
+      perms.push(PERMS.GUILD_ALLOWED_ROLES);
+  }
 
   return perms;
 }
@@ -128,7 +129,7 @@ export async function checkPermissions(interaction, env, commandInfo) {
   const allowedGroups = commandInfo.name.toLowerCase().startsWith(WATCHED_COMMAND_PREFIX)
     ? WATCHED_COMMAND_PERMS_OVERLOAD
     : commandInfo.allowedGroups;
-  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { allowedGroups, isAllowed: true };
+  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { allowedGroups, ok: true };
   const perms = new Set(await getPerms(interaction, env));
   const ok = allowedGroups.some(perm => perms.has(perm));
   return { allowedGroups, ok };
