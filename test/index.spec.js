@@ -312,9 +312,9 @@ describe('Discord interaction worker', () => {
     let listResponse = await stub.fetch('https://do/list');
     let listData = await listResponse.json();
 
-    expect(listData.jobs).toHaveLength(2);
-    expect(listData.jobs.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
-    expect(listData.jobs.map((job) => job.subject)).toEqual(['sooner', 'later']);
+    expect(listData.jobsPreview).toHaveLength(2);
+    expect(listData.jobsPreview.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
+    expect(listData.jobsPreview.map((job) => job.subject)).toEqual(['sooner', 'later']);
 
     const cancelResponse = await stub.fetch('https://do/cancel', {
       method: 'POST',
@@ -325,8 +325,8 @@ describe('Discord interaction worker', () => {
 
     listResponse = await stub.fetch('https://do/list');
     listData = await listResponse.json();
-    expect(listData.jobs).toHaveLength(1);
-    expect(listData.jobs[0].id).toBe(laterJob.id);
+    expect(listData.totalJobs).toBe(1);
+    expect(listData.jobsPreview[0].id).toBe(laterJob.id);
   });
 
   it('defers /sayat, patches the original response, then supports listing and canceling the scheduled job', async () => {
@@ -366,8 +366,8 @@ describe('Discord interaction worker', () => {
     const scheduler = schedulerStubFor(guildId);
     const listAfterSchedule = await scheduler.fetch('https://do/list');
     const listAfterScheduleData = await listAfterSchedule.json();
-    expect(listAfterScheduleData.jobs).toHaveLength(1);
-    const scheduledJob = listAfterScheduleData.jobs[0];
+    expect(listAfterScheduleData.totalJobs).toBe(1);
+    const scheduledJob = listAfterScheduleData.jobsPreview[0];
     expect(scheduledJob.subject).toBe('hello future');
 
     const listInteraction = buildSlashInteraction({
@@ -387,7 +387,7 @@ describe('Discord interaction worker', () => {
     await waitOnExecutionContext(listCtx);
 
     expect(patches).toHaveLength(2);
-    expect(patches[1].content).toContain('📌 Scheduled jobs (1 total):');
+    expect(patches[1].content).toContain('📌 Scheduled jobs (1 total, showing 1):');
     expect(patches[1].content).toContain('hello future');
     expect(patches[1].content).toContain(scheduledJob.id);
 
@@ -413,7 +413,7 @@ describe('Discord interaction worker', () => {
     expect(patches[2].content).toContain(scheduledJob.id);
 
     const finalList = await scheduler.fetch('https://do/list');
-    expect((await finalList.json()).jobs).toEqual([]);
+    expect((await finalList.json()).jobsPreview).toEqual([]);
   });
 
   it('allows a configured guild role to use protected scheduling commands', async () => {
@@ -479,8 +479,8 @@ describe('Discord interaction worker', () => {
 
     const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
     const schedulerData = await schedulerState.json();
-    expect(schedulerData.jobs).toHaveLength(1);
-    expect(schedulerData.jobs[0]).toMatchObject({
+    expect(schedulerData.totalJobs).toBe(1);
+    expect(schedulerData.jobsPreview[0]).toMatchObject({
       type: 'sayat',
       subject: 'role-authorized message',
       channelId,
@@ -523,8 +523,8 @@ describe('Discord interaction worker', () => {
 
     const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
     const schedulerData = await schedulerState.json();
-    expect(schedulerData.jobs).toHaveLength(1);
-    expect(schedulerData.jobs[0]).toMatchObject({
+    expect(schedulerData.totalJobs).toBe(1);
+    expect(schedulerData.jobsPreview[0]).toMatchObject({
       type: 'sayat_random',
       repeats: true,
       extraData: {

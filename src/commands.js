@@ -226,7 +226,7 @@ export const commands = {
           ` — id: \`${j.id}\``;
       }).join("\n");
 
-      return ephemeralData(`📌 Scheduled jobs (${data.totalJobs} total, showing ${shown.length}):\n${shown}`);
+      return ephemeralData(`📌 Scheduled jobs (${data.totalJobs} total, showing ${data.jobsPreview.length}):\n${shown}`);
     }
   }, 
 
