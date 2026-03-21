@@ -40,12 +40,14 @@ const requestHandlers = {
 
       if (jobs.length === 0) {
         return jsonResponse({
-          jobs: []
+          totalJobs: 0,
+          jobsPreview: []
         });
       }
 
       return jsonResponse({
-        jobs: jobs.slice(0, 15).map(j=>({
+        totalJobs: jobs.length,
+        jobsPreview: jobs.slice(0, 15).map(j=>({
           id: j.id,
           timestamp: j.timestamp,
           subject: j.subject,

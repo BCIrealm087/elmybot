@@ -93,9 +93,13 @@ const requestHandlers = {
     "/check": async (state, body) => {
       const key = body?.key;
       const entries = body?.entries;
-      const ok = entries
-        ? await hasEntries(state, key, entries)
-        : await getConfig(state, key)
+      let ok;
+      if (entries) {
+        ok = await hasEntries(state, key, entries);
+      } else {
+        const config = await getConfig(state, key);
+        ok = (config !== null && config !== undefined);
+      }
 
       return jsonResponse({ ok });
     }

@@ -214,11 +214,11 @@ export const commands = {
       }
       const data = await r.json();
 
-      if (data.jobs.length === 0) {
+      if (data.totalJobs === 0) {
         return ephemeralData("No scheduled jobs.");
       }
 
-      const shown = data.jobs.map(j => {
+      const shown = data.jobsPreview.map(j => {
         const handler = commands[j.type];
         const innerContent = handler.extra.composer.innerContent(j);
         return `• <t:${j.timestamp}:F> (<t:${j.timestamp}:R>) — ${innerContent} in <#${j.channelId}>` +
@@ -226,7 +226,7 @@ export const commands = {
           ` — id: \`${j.id}\``;
       }).join("\n");
 
-      return ephemeralData(`📌 Scheduled jobs (${data.jobs.length} total):\n${shown}`);
+      return ephemeralData(`📌 Scheduled jobs (${data.totalJobs} total, showing ${shown.length}):\n${shown}`);
     }
   }, 
 
