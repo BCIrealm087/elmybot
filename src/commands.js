@@ -69,7 +69,7 @@ const doAtSchedulingCommands = {
   }),
 
   "pingmeat": makeDoAt({
-    description: "Schedule an user ping at a Unix timestamp (seconds).",
+    description: "Schedule an user ping at an Unix timestamp (seconds).",
     subjectOption: { name: "user", description: "User to ping", type: 6, required: true }, // USER
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "user") ?? "") }),
     evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid user." : null || evalStandardTimestamp(options),
@@ -81,7 +81,7 @@ const doAtSchedulingCommands = {
   }),
 
   "sayat": makeDoAt({
-    description: "Schedule a message at a Unix timestamp (seconds).",
+    description: "Schedule a message at an Unix timestamp (seconds).",
     subjectOption: { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "message") ?? "") }),
     evaluator: (options) => evalMessage(options) || evalStandardTimestamp(options),
