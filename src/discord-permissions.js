@@ -67,27 +67,6 @@ async function fetchGuildOwnerId(env, guildId) {
   return guild.owner_id ?? null;
 }
 
-/**
- * Checks whether the invoking user is a moderator (by permission) or the guild owner.
- */
-export async function isModeratorOrOwner(interaction, env) {
-  if (!interaction.guild_id || !interaction.member) return false;
-
-  // 1) If they have a “moderator-like” permission in THIS channel, allow.
-  const permsStr = interaction.member.permissions;
-  if (hasAnyIntrinsicPerm(permsStr, MODERATOR_ANY_OF)) return true;
-
-  // 2) Otherwise, fallback to explicit server-owner check.
-  // (This avoids extra API calls for mods/admins.)
-  const ownerId = await fetchGuildOwnerId(env, interaction.guild_id);
-  const userId =
-    interaction.member?.user?.id ??
-    interaction.user?.id ?? // sometimes present
-    null;
-
-  return !!ownerId && !!userId && ownerId === userId;
-}
-
 export async function getPerms(interaction, env) {
   if (!interaction.guild_id || !interaction.member) return [];
   const perms = [PERMS.MEMBERS];
