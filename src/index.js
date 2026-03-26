@@ -2,17 +2,23 @@ import nacl from "tweetnacl";
 
 import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
-import { PERMS, PERM_STRINGS, getPerms } from "./permissions.js";
+import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
 
 /**
  * Durable objects
  */
-export { GuildScheduler } from "./message-scheduling.js";
+export { GuildScheduler } from "./message-scheduling/index.js";
+export { GuildConfig } from "./guild-configuration.js";
 
 /**
  * Cloudflare Worker entrypoint for Discord interactions.
- * Handles request verification, command routing, and delegates scheduling
- * to a Durable Object per guild.
+ *
+ * Responsibilities:
+ * - verify Discord signatures against the raw request body
+ * - answer PING validation requests
+ * - route slash commands defined in `src/commands.js`
+ * - use deferred responses for guild commands that may outlive Discord's
+ *   initial response window
  */
 
 const encoder = new TextEncoder();
@@ -52,8 +58,8 @@ function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText 
 }
 
 function deferredEphemeral() {
+  // Discord interaction response type 5:
   // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
-  // Immediate ACK so we never miss the 3-second deadline.
   return jsonResponse({
     type: 5,
     data: ephemeralData(null),
@@ -63,7 +69,8 @@ function deferredEphemeral() {
 async function editOriginalInteractionResponse(interaction, messageData) {
   const url = `https://discord.com/api/v10/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`;
 
-  // For PATCH @original, send a "message object" shape (content, embeds, components, allowed_mentions...)
+  // Discord expects a regular message object when editing the original
+  // deferred interaction response.
   const body = {
     content: messageData?.content ?? "",
     allowed_mentions: messageData?.allowed_mentions ?? { parse: [] },
@@ -84,15 +91,12 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-async function checkGuildPermissions(allowedGroups, interaction, env) {
-  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { isAllowed: true };
-  const perms = new Set(await getPerms(interaction, env));
-  const isAllowed = allowedGroups.some(perm => perms.has(perm));
-  return {
-    isAllowed, 
-    rejection: (!isAllowed)
-      ? `Only members that fall into one of [${allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
-      : undefined
+async function checkGuildPermissions(interaction, env, commandInfo) {
+  const result = await checkPermissions(interaction, env, commandInfo);
+  if (result.ok) return { ok: true };
+  return { 
+    ok: false, 
+    reason: `Only members that fall into one of [${result.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
   };
 }
 
@@ -102,16 +106,19 @@ class CommandError extends Error {
   }
 }
 
-async function runCommand(interaction, env, command) {
+async function handleCommand(interaction, env, command) {
   let commandResult;
+  const def = command.definition;
   try {
-    if (command.guild) {
+    if (def.guild) {
+      // Guild-only commands rely on guild-scoped Durable Objects and
+      // guild-specific permission evaluation.
       if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
-      if (!command.allowed) throw new CommandError("Error: permissions for this command have not been set.")
-      const checkResults = await checkGuildPermissions(command.allowed, interaction, env);
-      if (checkResults.rejection) throw new CommandError(checkResults.rejection);
+      if (!def.allowed) throw new CommandError("Error: permissions for this command have not been set.")
+      const permStatus = await checkGuildPermissions(interaction, env, { name: command.name, allowedGroups: def.allowed });
+      if (!permStatus.ok) throw new CommandError(permStatus.reason);
     }
-    commandResult = await command.exec(interaction, env);
+    commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
     commandResult = ephemeralData((e instanceof CommandError) ? e.message : "Unknown error.");
   }
@@ -156,18 +163,18 @@ export default {
 
     const name = interaction.data?.name;
 
-    const command = commands[name];
-    if (!command) return ephemeral(`Unknown command: /${name}`)
-
+    const command = { name, definition: commands[name] };
+    if (!command.definition) return ephemeral(`Unknown command: /${name}`)
+    
     let commandResult;
-    if (!command.deferred) {
-      commandResult = await runCommand(interaction, env, command);
+    if (!command.definition.deferred) {
+      commandResult = await handleCommand(interaction, env, command);
       return jsonResponse({ type: 4, data: commandResult });
     }
-    // ACK immediately (must be within 3 seconds or token invalidated)
-    // waitUntil has 30 seconds to finish - (https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil ; 02 mar. 2026)
+    // ACK immediately so Discord keeps the interaction token alive, then
+    // finish the command in the background and patch @original.
     ctx.waitUntil(
-      runCommand(interaction, env, command)
+      handleCommand(interaction, env, command)
         .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
     );
     return deferredEphemeral();
