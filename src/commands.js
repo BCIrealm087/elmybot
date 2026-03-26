@@ -60,7 +60,7 @@ const doAtSchedulingCommands = {
     description: "Schedule a role ping at an Unix timestamp (seconds).",
     subjectOption: { name: "role", description: "Role to ping", type: 8, required: true },
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "role") ?? "") }),
-    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid role." : null || evalStandardTimestamp(options),
+    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid role." : evalStandardTimestamp(options),
     composer: {
       innerContent: (j)=>`<@&${j.subject}>`, 
       allowedMentions: (j)=>({ roles: [j.subject] }), 
@@ -72,7 +72,7 @@ const doAtSchedulingCommands = {
     description: "Schedule an user ping at an Unix timestamp (seconds).",
     subjectOption: { name: "user", description: "User to ping", type: 6, required: true }, // USER
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "user") ?? "") }),
-    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid user." : null || evalStandardTimestamp(options),
+    evaluator: (options)=>(!/^\d{5,30}$/.test(options.subject)) ? "Invalid user." : evalStandardTimestamp(options),
     composer: {
       innerContent: (j)=>`<@${j.subject}>`, 
       allowedMentions: (j)=>({ users: [j.subject] }), 
