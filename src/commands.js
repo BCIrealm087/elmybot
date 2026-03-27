@@ -92,15 +92,15 @@ const doAtSchedulingCommands = {
   "sayat": makeDoAt({
     description: "Schedule a message at an Unix timestamp (seconds).",
     subjectOption: { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
-    extraOptions: [{ name: "gif", description: "If true, `message` is used as query for a gif (random result)", type: 5, required: false }],
+    extraOptions: [{ name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }],
     getOptions: (interaction)=>({
       ...getStandardOptions(interaction),
       subject: String(getOption(interaction, "message") ?? ""),
-      extraData: { gif: Boolean(getOption(interaction, "gif") ?? false) }
+      extraData: { gif: String(getOption(interaction, "gif")) }
     }),
-    evaluator: (options) => (options.extraData.gif ? evalGifOptions(options) : evalMessage(options)) || evalStandardTimestamp(options),
+    evaluator: (options) => evalMessage(options) || evalGifOptions(options) || evalStandardTimestamp(options),
     composer: {
-      innerContent: (j) => j.extraData.gif ? gifMessageInnerContent(j.subject) : j.subject,
+      innerContent: (j) => j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
       allowedMentions: (_) => ({ parse: [] }),
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
       composeMessage: (env, composer, stored) => stored.extraData.gif
@@ -116,7 +116,7 @@ const doAtSchedulingCommands = {
       { name: "min_interval", description: "Min. interval", type: 4, required: false },
       { name: "max_interval", description: "Max. interval", type: 4, required: false },
       { name: "repeats", description: "If true, repeats at bounded random intervals", type: 5, required: false },
-      { name: "gif", description: "If true, `message` is used as query for a gif (random result)", type: 5, required: false }
+      { name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }
     ],
     getOptions: (interaction)=>({
       subject: String(getOption(interaction, "message") ?? ""),
@@ -124,13 +124,13 @@ const doAtSchedulingCommands = {
       extraData: {
         minInterval: Number(getOption(interaction, "min_interval") ?? 7200), 
         maxInterval: Number(getOption(interaction, "max_interval") ?? 21600),
-        gif: Boolean(getOption(interaction, "gif") ?? false)
+        gif: String(getOption(interaction, "gif"))
       }
     }),
     evaluator: (options) => {
       const minInterval = options.extraData.minInterval;
       const maxInterval = options.extraData.maxInterval;
-      return (options.extraData.gif ? evalGifOptions(options) : evalMessage(options)) || (
+      return evalMessage(options) || evalGifOptions(options) || (
         ![minInterval, maxInterval].every(v=>Number.isFinite(v) && Number.isInteger(v)) ? "Intervals must be integers representing seconds."
         : minInterval <= 0 || maxInterval <= 0 ? "Intervals cannot be null or negative."
         : minInterval < 600 ? "Mininum interval cannot be less than 10 minutes (600 seconds)."
@@ -140,7 +140,7 @@ const doAtSchedulingCommands = {
       );
     },
     composer: {
-      innerContent: (j)=>j.extraData.gif ? gifMessageInnerContent(j.subject) : j.subject,
+      innerContent: (j)=>j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
       allowedMentions: (_)=>({ parse: [] }), 
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
       composeMessage: (env, composer, stored) => stored.extraData.gif

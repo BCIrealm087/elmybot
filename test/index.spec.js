@@ -545,8 +545,8 @@ describe('Discord interaction worker', () => {
       userId: ownerId,
       options: [
         { name: 'timestamp', value: timestamp },
-        { name: 'message', value: 'cat dance' },
-        { name: 'gif', value: true },
+        { name: 'message', value: 'gif message title' },
+        { name: 'gif', value: 'cat dance' },
       ],
     });
 
@@ -568,8 +568,8 @@ describe('Discord interaction worker', () => {
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
       type: 'sayat',
-      subject: 'cat dance',
-      extraData: { gif: true },
+      subject: 'gif message title',
+      extraData: { gif: 'cat dance' },
     });
 
     const listInteraction = buildSlashInteraction({
@@ -589,7 +589,7 @@ describe('Discord interaction worker', () => {
     await waitOnExecutionContext(listCtx);
 
     expect(patches).toHaveLength(2);
-    expect(patches[1].content).toContain('cat dance (gif)');
+    expect(patches[1].content).toContain('`gif message title` (with `cat dance` gif)');
   });
 
   it('rejects /sayat gif search strings longer than 20 chars with a user-facing error', async () => {
@@ -607,8 +607,8 @@ describe('Discord interaction worker', () => {
       userId: ownerId,
       options: [
         { name: 'timestamp', value: timestamp },
-        { name: 'message', value: tooLongQuery },
-        { name: 'gif', value: true },
+        { name: 'message', value: 'gif message title' },
+        { name: 'gif', value: tooLongQuery },
       ],
     });
 
@@ -659,7 +659,7 @@ describe('Discord interaction worker', () => {
         allowedMentions: () => ({ parse: [] }),
         outerContent: () => '',
       },
-      { subject: 'dance cat' },
+      { subject: 'dance!', extraData: { gif: 'dance cat' } },
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -677,7 +677,7 @@ describe('Discord interaction worker', () => {
       content: '',
       embeds: [
         {
-          title: 'GIF result for: dance cat',
+          title: 'dance!',
           image: { url: 'https://cdn.example.com/dance.gif' },
         },
       ],

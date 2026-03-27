@@ -1,14 +1,16 @@
-export const evalGifOptions = (options) => (
-  options.subject.length === 0 ? "Search string cannot be empty."
-  : options.subject.length > 20 ? "Search string too long (max 20 chars)."
-  : null
-);
+export const evalGifOptions = (options) => {
+  const searchString = options.extraData.gif;
+  if (searchString === null || searchString === undefined) return null;
+  return searchString.length === 0 ? "Search string cannot be empty."
+  : searchString.length > 20 ? "Search string too long (max 20 chars)."
+  : null;
+}
 
-export const gifMessageInnerContent = (subject) => `${subject} (gif)`;
+export const gifMessageInnerContent = (j) => `\`${j.subject}\` (with \`${j.extraData.gif}\` gif)`;
 export const gifMessageOuterContent = (_, __) => "";
 
 export const gifMessageCompose = async (env, composer, stored) => {
-  const q = String(stored.subject ?? "").trim();
+  const q = String(stored.extraData.gif ?? "").trim();
   if (!q) throw new Error("Empty search string was provided.");
 
   const url = new URL("https://api.klipy.com/v2/search");
@@ -48,7 +50,7 @@ export const gifMessageCompose = async (env, composer, stored) => {
     content: OC,
     embeds: [
       {
-        title: `GIF result for: ${q}`,
+        title: stored.subject,
         image: { url: gifUrl },
       }
     ]
