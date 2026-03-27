@@ -1,5 +1,5 @@
 import nacl from 'tweetnacl';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../src';
 
@@ -109,10 +109,6 @@ function configStubFor(guildId) {
   const id = env.CONFIG.idFromName(guildId);
   return env.CONFIG.get(id);
 }
-
-beforeEach(() => {
-  idCounter = 0;
-});
 
 afterEach(() => {
   vi.restoreAllMocks();
