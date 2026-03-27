@@ -14,7 +14,7 @@ import {
  * Build a guild-only deferred scheduling command and register the metadata
  * needed by the scheduler Durable Object to render and reschedule jobs.
  */
-function defaultDoAtCompose(composer, stored) {
+function defaultDoAtCompose(_, composer, stored) {
   const IC = composer.innerContent(stored);
   const AM = composer.allowedMentions(stored);
   const OC = composer.outerContent(stored, IC);
@@ -103,9 +103,9 @@ const doAtSchedulingCommands = {
       innerContent: (j) => j.extraData.gif ? gifMessageInnerContent(j.subject) : j.subject,
       allowedMentions: (_) => ({ parse: [] }),
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
-      composeMessage: (stored, composer) => stored.extraData.gif
-        ? gifMessageCompose(stored, composer)
-        : defaultDoAtCompose(stored, composer)
+      composeMessage: (env, composer, stored) => stored.extraData.gif
+        ? gifMessageCompose(env, composer, stored)
+        : defaultDoAtCompose(env, composer, stored)
     }
   }),
 
@@ -143,9 +143,9 @@ const doAtSchedulingCommands = {
       innerContent: (j)=>j.extraData.gif ? gifMessageInnerContent(j.subject) : j.subject,
       allowedMentions: (_)=>({ parse: [] }), 
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
-      composeMessage: (stored, composer) => stored.extraData.gif
-        ? gifMessageCompose(stored, composer)
-        : defaultDoAtCompose(stored, composer),
+      composeMessage: (env, composer, stored) => stored.extraData.gif
+        ? gifMessageCompose(env, composer, stored)
+        : defaultDoAtCompose(env, composer, stored),
       repeatDescription: (j) => `randomly (min.: ${formatInterval(j.extraData.minInterval)} - max.: ${formatInterval(j.extraData.maxInterval)})`
     }, 
     scheduleCalculation: getRandomTimeFromInterval

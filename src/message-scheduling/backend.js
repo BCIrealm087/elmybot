@@ -222,7 +222,7 @@ export class GuildScheduler {
           continue;
         }
         
-        const messageData = await handler.composer.composeMessage(composer, job);
+        const messageData = await handler.composer.composeMessage(this.env, handler.composer, job);
 
         const r = await fetch(
           `https://discord.com/api/v10/channels/${job.channelId}/messages`,

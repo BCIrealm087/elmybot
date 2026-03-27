@@ -1,13 +1,13 @@
 export const evalGifOptions = (options) => (
   options.subject.length === 0 ? "Search string cannot be empty."
-  : options.subject.length > 2000 ? "Search string too long (max 20 chars)."
+  : options.subject.length > 20 ? "Search string too long (max 20 chars)."
   : null
 );
 
-export const gifMessageInnerContent = (subject) => `${subject}" (gif)`;
+export const gifMessageInnerContent = (subject) => `${subject} (gif)`;
 export const gifMessageOuterContent = (_, __) => "";
 
-export const gifMessageCompose = async (stored, composer) => {
+export const gifMessageCompose = async (env, composer, stored) => {
   const q = String(stored.subject ?? "").trim();
   if (!q) throw new Error("Empty search string was provided.");
 
