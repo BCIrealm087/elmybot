@@ -11,8 +11,8 @@ Discord does not run this bot continuously. Instead, Discord sends HTTPS interac
 - Scheduling commands:
   - `/pingroleat` — schedule a role ping at a Unix timestamp
   - `/pingmeat` — schedule a user ping at a Unix timestamp
-  - `/sayat` — schedule a plain channel message at a Unix timestamp
-  - `/sayat_random` — schedule a plain channel message after a bounded random interval
+  - `/sayat` — schedule a plain channel message (or random GIF result) at a Unix timestamp
+  - `/sayat_random` — schedule a plain channel message (or random GIF result) after a bounded random interval
 - Scheduler management commands:
   - `/doat_list`
   - `/doat_cancel`
@@ -74,13 +74,15 @@ All scheduling commands are guild-only, deferred, and protected by the bot's per
 
 - `/sayat`
   - required: `timestamp`, `message`
-  - optional: `repeat_daily`
+  - optional: `repeat_daily`, `gif`
   - schedules a job with `type: "sayat"`
+  - when `gif` is true, `message` is treated as a GIF search string and delivery sends an embed with a random result
 
 - `/sayat_random`
   - required: `message`
-  - optional: `min_interval` (default `7200`), `max_interval` (default `21600`), `repeats`
+  - optional: `min_interval` (default `7200`), `max_interval` (default `21600`), `repeats`, `gif`
   - schedules a job with `type: "sayat_random"`
+  - when `gif` is true, `message` is treated as a GIF search string and each delivery fetches a random result
 
 ### Scheduler management commands
 
@@ -91,6 +93,13 @@ All scheduling commands are guild-only, deferred, and protected by the bot's per
 
 - `/config_allow_role role:<role>` — allow a guild role to use protected commands.
 - `/config_disallow_role role:<role>` — remove that allowance.
+
+### GIF mode (for `/sayat` and `/sayat_random`)
+
+- GIF mode is enabled by setting the optional `gif` boolean option to `true`.
+- The `message` field becomes a search query (validated as non-empty and max 20 characters).
+- At delivery time, the scheduler fetches a random GIF match and posts it as a Discord embed image.
+- Plain-text mode remains the default when `gif` is omitted or false.
 
 ## Permissions model
 
@@ -174,6 +183,8 @@ Each guild gets one `GuildConfig` Durable Object instance. It stores per-guild c
 
 - `PUBLIC_KEY` — Discord application public key used for request signature verification.
 - `DISCORD_TOKEN` — bot token used for guild owner lookup, editing deferred interaction responses, and channel message delivery.
+- `KLIPY_API_KEY` — API key used for GIF search requests.
+- `KLIPY_API_KEY_NAME` — client key/name sent with GIF search requests.
 
 ### Slash-command registration env vars
 

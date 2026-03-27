@@ -2,6 +2,7 @@ import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../src';
+import { gifMessageCompose } from '../src/gifs-extension';
 
 function toHex(bytes) {
   return Array.from(bytes)
@@ -527,6 +528,159 @@ describe('Discord interaction worker', () => {
         minInterval: 600,
         maxInterval: 900,
       },
+    });
+  });
+
+  it('accepts /sayat with gif=true, stores gif metadata, and renders list entries with GIF marker', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const ownerId = uniqueId('owner');
+    const { patches } = mockDiscordApi({ ownerId });
+
+    const timestamp = Math.floor(Date.now() / 1000) + 1800;
+    const scheduleInteraction = buildSlashInteraction({
+      name: 'sayat',
+      guildId,
+      channelId,
+      userId: ownerId,
+      options: [
+        { name: 'timestamp', value: timestamp },
+        { name: 'message', value: 'cat dance' },
+        { name: 'gif', value: true },
+      ],
+    });
+
+    const { response: scheduleResponse, ctx: scheduleCtx } = await dispatchInteraction(scheduleInteraction);
+    expect(await scheduleResponse.json()).toEqual({
+      type: 5,
+      data: {
+        flags: 64,
+        allowed_mentions: { parse: [] },
+      },
+    });
+    await waitOnExecutionContext(scheduleCtx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].content).toContain('✅ Scheduled job');
+
+    const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
+    const schedulerData = await schedulerState.json();
+    expect(schedulerData.totalJobs).toBe(1);
+    expect(schedulerData.jobsPreview[0]).toMatchObject({
+      type: 'sayat',
+      subject: 'cat dance',
+      extraData: { gif: true },
+    });
+
+    const listInteraction = buildSlashInteraction({
+      name: 'doat_list',
+      guildId,
+      channelId,
+      userId: ownerId,
+    });
+    const { response: listResponse, ctx: listCtx } = await dispatchInteraction(listInteraction);
+    expect(await listResponse.json()).toEqual({
+      type: 5,
+      data: {
+        flags: 64,
+        allowed_mentions: { parse: [] },
+      },
+    });
+    await waitOnExecutionContext(listCtx);
+
+    expect(patches).toHaveLength(2);
+    expect(patches[1].content).toContain('cat dance (gif)');
+  });
+
+  it('rejects /sayat gif search strings longer than 20 chars with a user-facing error', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const ownerId = uniqueId('owner');
+    const { patches } = mockDiscordApi({ ownerId });
+
+    const tooLongQuery = 'this query is definitely too long';
+    const timestamp = Math.floor(Date.now() / 1000) + 1800;
+    const interaction = buildSlashInteraction({
+      name: 'sayat',
+      guildId,
+      channelId,
+      userId: ownerId,
+      options: [
+        { name: 'timestamp', value: timestamp },
+        { name: 'message', value: tooLongQuery },
+        { name: 'gif', value: true },
+      ],
+    });
+
+    const { response, ctx } = await dispatchInteraction(interaction);
+    expect(await response.json()).toEqual({
+      type: 5,
+      data: {
+        flags: 64,
+        allowed_mentions: { parse: [] },
+      },
+    });
+    await waitOnExecutionContext(ctx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toEqual({
+      content: 'Search string too long (max 20 chars).',
+      flags: 64,
+      allowed_mentions: { parse: [] },
+    });
+
+    const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
+    const schedulerData = await schedulerState.json();
+    expect(schedulerData.totalJobs).toBe(0);
+  });
+
+  it('composes GIF deliveries using the KLIPY result URL and safe mentions', async () => {
+    const fetchMock = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : String(input);
+      if (!url.startsWith('https://api.klipy.com/v2/search')) {
+        throw new Error(`Unexpected external fetch: ${url}`);
+      }
+      return jsonResponse({
+        results: [
+          {
+            media_formats: {
+              gif: { url: 'https://cdn.example.com/dance.gif' },
+            },
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const composed = await gifMessageCompose(
+      { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
+      {
+        innerContent: (job) => `${job.subject} (gif)`,
+        allowedMentions: () => ({ parse: [] }),
+        outerContent: () => '',
+      },
+      { subject: 'dance cat' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const klipyUrl = fetchMock.mock.calls[0][0].toString();
+    expect(klipyUrl).toContain('https://api.klipy.com/v2/search?');
+    expect(klipyUrl).toContain('q=dance+cat');
+    expect(klipyUrl).toContain('key=k-api');
+    expect(klipyUrl).toContain('client_key=k-client');
+    expect(klipyUrl).toContain('limit=1');
+    expect(klipyUrl).toContain('random=true');
+    expect(klipyUrl).toContain('media_filter=gif');
+
+    expect(composed).toEqual({
+      allowed_mentions: { parse: [] },
+      content: '',
+      embeds: [
+        {
+          title: 'GIF result for: dance cat',
+          image: { url: 'https://cdn.example.com/dance.gif' },
+        },
+      ],
     });
   });
 });
