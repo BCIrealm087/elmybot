@@ -192,9 +192,7 @@ export const commands = {
 
       return ephemeralData(
         (data.value !== null && data.value !== undefined)
-          ? `${key}'s (${typeof data.value}) value is: \`
-                ${JSON.stringify(data.value)}
-            \`.`
+          ? `${key}'s (${typeof data.value}) value is: \n\`    ${JSON.stringify(data.value)}    \`\n.`
           : `No entry named \`${key}\` was found.`
       );
     }
