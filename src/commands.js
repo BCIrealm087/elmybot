@@ -5,15 +5,29 @@ import {
   evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval, 
   registerDoAtHandlers
 } from "./message-scheduling/index.js";
+import {
+  evalGifOptions, gifMessageInnerContent, gifMessageOuterContent,
+  gifMessageCompose
+} from "./gifs-extension.js";
 
 /**
  * Build a guild-only deferred scheduling command and register the metadata
  * needed by the scheduler Durable Object to render and reschedule jobs.
  */
+function defaultDoAtCompose(_, composer, stored) {
+  const IC = composer.innerContent(stored);
+  const AM = composer.allowedMentions(stored);
+  const OC = composer.outerContent(stored, IC);
+  return { content: OC, allowed_mentions: AM };
+}
+
 function makeDoAt({
   description, subjectOption = undefined, optionsOverride = undefined,
   extraOptions = [], getOptions, evaluator, 
-  composer: { innerContent, allowedMentions, outerContent, repeatDescription = (_)=>"daily" }, 
+  composer: {
+    innerContent, allowedMentions, outerContent, 
+    repeatDescription = (_)=>"daily", composeMessage = defaultDoAtCompose
+  }, 
   scheduleCalculation = getDailyTimeFromTimestamp, 
   doAtType = undefined
 }) {
@@ -21,13 +35,8 @@ function makeDoAt({
   if (subjectOption && optionsOverride) throw new Error("Please only define one of `subjectOption` or `optionsOverride`, not both.");
 
   const composer = {
-    innerContent, allowedMentions, outerContent, repeatDescription,
-    composeMessage: (stored) => {
-      const IC = innerContent(stored);
-      const AM = allowedMentions(stored);
-      const OC = outerContent(stored, IC);
-      return { content: OC, allowed_mentions: AM };
-    }
+    innerContent, allowedMentions, outerContent, 
+    repeatDescription, composeMessage
   }
   return {
     description,
@@ -83,12 +92,20 @@ const doAtSchedulingCommands = {
   "sayat": makeDoAt({
     description: "Schedule a message at an Unix timestamp (seconds).",
     subjectOption: { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
-    getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "message") ?? "") }),
-    evaluator: (options) => evalMessage(options) || evalStandardTimestamp(options),
+    extraOptions: [{ name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }],
+    getOptions: (interaction)=>({
+      ...getStandardOptions(interaction),
+      subject: String(getOption(interaction, "message") ?? ""),
+      extraData: { gif: String(getOption(interaction, "gif")) }
+    }),
+    evaluator: (options) => evalMessage(options) || evalGifOptions(options) || evalStandardTimestamp(options),
     composer: {
-      innerContent: (j)=>j.subject, 
-      allowedMentions: (_)=>({ parse: [] }),
-      outerContent: (_, innerContent)=>innerContent
+      innerContent: (j) => j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
+      allowedMentions: (_) => ({ parse: [] }),
+      outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
+      composeMessage: (env, composer, stored) => stored.extraData.gif
+        ? gifMessageCompose(env, composer, stored)
+        : defaultDoAtCompose(env, composer, stored)
     }
   }),
 
@@ -98,20 +115,22 @@ const doAtSchedulingCommands = {
       { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
       { name: "min_interval", description: "Min. interval", type: 4, required: false },
       { name: "max_interval", description: "Max. interval", type: 4, required: false },
-      { name: "repeats", description: "If true, repeats at bounded random intervals", type: 5, required: false }
+      { name: "repeats", description: "If true, repeats at bounded random intervals", type: 5, required: false },
+      { name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }
     ],
     getOptions: (interaction)=>({
       subject: String(getOption(interaction, "message") ?? ""),
       repeats: Boolean(getOption(interaction, "repeats") ?? false),
       extraData: {
         minInterval: Number(getOption(interaction, "min_interval") ?? 7200), 
-        maxInterval: Number(getOption(interaction, "max_interval") ?? 21600)
+        maxInterval: Number(getOption(interaction, "max_interval") ?? 21600),
+        gif: String(getOption(interaction, "gif"))
       }
     }),
     evaluator: (options) => {
       const minInterval = options.extraData.minInterval;
       const maxInterval = options.extraData.maxInterval;
-      return evalMessage(options) || (
+      return evalMessage(options) || evalGifOptions(options) || (
         ![minInterval, maxInterval].every(v=>Number.isFinite(v) && Number.isInteger(v)) ? "Intervals must be integers representing seconds."
         : minInterval <= 0 || maxInterval <= 0 ? "Intervals cannot be null or negative."
         : minInterval < 600 ? "Mininum interval cannot be less than 10 minutes (600 seconds)."
@@ -121,9 +140,12 @@ const doAtSchedulingCommands = {
       );
     },
     composer: {
-      innerContent: (j)=>j.subject, 
+      innerContent: (j)=>j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
       allowedMentions: (_)=>({ parse: [] }), 
-      outerContent: (_, innerContent)=>innerContent,
+      outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
+      composeMessage: (env, composer, stored) => stored.extraData.gif
+        ? gifMessageCompose(env, composer, stored)
+        : defaultDoAtCompose(env, composer, stored),
       repeatDescription: (j) => `randomly (min.: ${formatInterval(j.extraData.minInterval)} - max.: ${formatInterval(j.extraData.maxInterval)})`
     }, 
     scheduleCalculation: getRandomTimeFromInterval
@@ -142,6 +164,41 @@ export const commands = {
   },
 
   ...doAtSchedulingCommands,
+
+    "config_show_value": {
+    description: `Displays the value of a given configuration entry`,
+    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    deferred: true,
+    options: [
+      { name: "entry", description: "Configuration entry name", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      const id = env.CONFIG.idFromName(interaction.guild_id);
+      const stub = env.CONFIG.get(id);
+      const key = String(getOption(interaction, "entry") ?? "");
+
+      const r = await stub.fetch("https://config/get", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key
+        })
+      });
+      if (!r.ok) {
+        const errData = await r.json().catch(() => null);
+        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+      }
+      const data = await r.json();
+
+      return ephemeralData(
+        (data.value !== null && data.value !== undefined)
+          ? `${key}'s (${typeof data.value}) value is: \`
+                ${JSON.stringify(data.value)}
+            \`.`
+          : `No entry named \`${key}\` was found.`
+      );
+    }
+  },
 
   "config_allow_role": {
     description: `Enables a role to use some protected commands (commands prefixed with \`${WATCHED_COMMAND_PREFIX}\` are excluded)`,
@@ -171,7 +228,7 @@ export const commands = {
     }
   },
 
-    "config_disallow_role": {
+  "config_disallow_role": {
     description: `Removes protected command access from role`,
     allowed: [PERMS.OWNER, PERMS.MODERATORS], 
     deferred: true,

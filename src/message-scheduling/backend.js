@@ -10,7 +10,7 @@ const doAtTypeHandlers = { };
 export function registerDoAtHandlers(definitions) {
   for (const [key, { extra }] of Object.entries(definitions)) {
     doAtTypeHandlers[key] = {
-      composeMessage: extra.composer.composeMessage,
+      composer: extra.composer,
       calcScheduleTime: extra.calcScheduleTime,
     };
   }
@@ -221,8 +221,8 @@ export class GuildScheduler {
           });
           continue;
         }
-
-        const messageData = handler.composeMessage(job);
+        
+        const messageData = await handler.composer.composeMessage(this.env, handler.composer, job);
 
         const r = await fetch(
           `https://discord.com/api/v10/channels/${job.channelId}/messages`,
