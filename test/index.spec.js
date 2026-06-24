@@ -672,8 +672,6 @@ describe('Discord interaction worker', () => {
     expect(klipyUrl).toContain('random=true');
     expect(klipyUrl).toContain('media_filter=gif');
 
-    console.log(composed)
-
     expect(composed).toEqual({
       allowed_mentions: { parse: [] },
       content: 'dance!',
@@ -681,5 +679,56 @@ describe('Discord interaction worker', () => {
         { image: { url: 'https://cdn.example.com/dance.gif' } },
       ],
     });
+  });
+
+  it('composes repeated GIF deliveries with varied GIF attachments for the same search query', async () => {
+    const gifUrls = Array.from(
+      { length: 10 },
+      (_, index) => `https://cdn.example.com/dance-${index % 3}.gif`,
+    );
+    let requestIndex = 0;
+    const fetchMock = vi.fn(async (input) => {
+      const url = new URL(typeof input === 'string' ? input : String(input));
+      if (!url.toString().startsWith('https://api.klipy.com/v2/search')) {
+        throw new Error(`Unexpected external fetch: ${url}`);
+      }
+
+      const gifUrl = gifUrls[requestIndex];
+      requestIndex += 1;
+      return jsonResponse({
+        results: [
+          {
+            media_formats: {
+              gif: { url: gifUrl },
+            },
+          },
+        ],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const composer = {
+      innerContent: gifMessageInnerContent,
+      allowedMentions: () => ({ parse: [] }),
+      outerContent: gifMessageOuterContent,
+    };
+    const composedMessages = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => (
+        gifMessageCompose(
+          { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
+          composer,
+          { subject: `dance ${index}`, extraData: { gif: 'dance cat' } },
+        )
+      )),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(10);
+    const klipyUrls = fetchMock.mock.calls.map(([input]) => new URL(String(input)));
+    expect(klipyUrls.every((url) => url.searchParams.get('q') === 'dance cat')).toBe(true);
+    expect(klipyUrls.every((url) => url.searchParams.get('limit') === '50')).toBe(true);
+    expect(klipyUrls.every((url) => url.searchParams.get('random') === 'true')).toBe(true);
+
+    const attachedGifUrls = composedMessages.map((message) => message.embeds[0].image.url);
+    expect(new Set(attachedGifUrls).size).toBeGreaterThan(1);
   });
 });
