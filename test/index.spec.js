@@ -2,7 +2,7 @@ import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import worker from '../src';
-import { gifMessageCompose } from '../src/gifs-extension';
+import { gifMessageCompose, gifMessageInnerContent, gifMessageOuterContent } from '../src/gifs-extension';
 
 function toHex(bytes) {
   return Array.from(bytes)
@@ -655,9 +655,9 @@ describe('Discord interaction worker', () => {
     const composed = await gifMessageCompose(
       { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
       {
-        innerContent: (job) => `${job.subject} (gif)`,
+        innerContent: gifMessageInnerContent,
         allowedMentions: () => ({ parse: [] }),
-        outerContent: () => '',
+        outerContent: gifMessageOuterContent,
       },
       { subject: 'dance!', extraData: { gif: 'dance cat' } },
     );
@@ -668,18 +668,17 @@ describe('Discord interaction worker', () => {
     expect(klipyUrl).toContain('q=dance+cat');
     expect(klipyUrl).toContain('key=k-api');
     expect(klipyUrl).toContain('client_key=k-client');
-    expect(klipyUrl).toContain('limit=1');
+    expect(klipyUrl).toContain('limit=50');
     expect(klipyUrl).toContain('random=true');
     expect(klipyUrl).toContain('media_filter=gif');
 
+    console.log(composed)
+
     expect(composed).toEqual({
       allowed_mentions: { parse: [] },
-      content: '',
+      content: 'dance!',
       embeds: [
-        {
-          title: 'dance!',
-          image: { url: 'https://cdn.example.com/dance.gif' },
-        },
+        { image: { url: 'https://cdn.example.com/dance.gif' } },
       ],
     });
   });

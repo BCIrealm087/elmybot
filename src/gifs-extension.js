@@ -7,7 +7,7 @@ export const evalGifOptions = (options) => {
 }
 
 export const gifMessageInnerContent = (j) => `\`${j.subject}\` (with \`${j.extraData.gif}\` gif)`;
-export const gifMessageOuterContent = (_, __) => "";
+export const gifMessageOuterContent = (j, __) => j.subject;
 
 export const gifMessageCompose = async (env, composer, stored) => {
   const q = String(stored.extraData.gif ?? "").trim();
@@ -17,7 +17,7 @@ export const gifMessageCompose = async (env, composer, stored) => {
   url.searchParams.set("q", q);
   url.searchParams.set("key", env.KLIPY_API_KEY);
   url.searchParams.set("client_key", env.KLIPY_API_KEY_NAME);
-  url.searchParams.set("limit", "1");
+  url.searchParams.set("limit", "50"); // KLIPY MAX, setting to 1 makes random function not work
   url.searchParams.set("random", "true");
   url.searchParams.set("media_filter", "gif");
 
@@ -48,12 +48,7 @@ export const gifMessageCompose = async (env, composer, stored) => {
   return {
     allowed_mentions: AM,
     content: OC,
-    embeds: [
-      {
-        title: stored.subject,
-        image: { url: gifUrl },
-      }
-    ]
+    embeds: [{ image: { url: gifUrl } }]
   };
 
 }

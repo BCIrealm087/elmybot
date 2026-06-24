@@ -165,6 +165,41 @@ export const commands = {
 
   ...doAtSchedulingCommands,
 
+    "config_show_value": {
+    description: `Displays the value of a given configuration entry`,
+    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    deferred: true,
+    options: [
+      { name: "entry", description: "Configuration entry name", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      const id = env.CONFIG.idFromName(interaction.guild_id);
+      const stub = env.CONFIG.get(id);
+      const key = String(getOption(interaction, "entry") ?? "");
+
+      const r = await stub.fetch("https://config/get", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key
+        })
+      });
+      if (!r.ok) {
+        const errData = await r.json().catch(() => null);
+        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+      }
+      const data = await r.json();
+
+      return ephemeralData(
+        (data.value !== null && data.value !== undefined)
+          ? `${key}'s (${typeof data.value}) value is: \`
+                ${JSON.stringify(data.value)}
+            \`.`
+          : `No entry named \`${key}\` was found.`
+      );
+    }
+  },
+
   "config_allow_role": {
     description: `Enables a role to use some protected commands (commands prefixed with \`${WATCHED_COMMAND_PREFIX}\` are excluded)`,
     allowed: [PERMS.OWNER, PERMS.MODERATORS], 
@@ -193,7 +228,7 @@ export const commands = {
     }
   },
 
-    "config_disallow_role": {
+  "config_disallow_role": {
     description: `Removes protected command access from role`,
     allowed: [PERMS.OWNER, PERMS.MODERATORS], 
     deferred: true,
