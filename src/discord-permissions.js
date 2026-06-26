@@ -82,6 +82,10 @@ export async function getPerms(interaction, env) {
   if (!!ownerId && !!userId && ownerId === userId)
     perms.push(PERMS.OWNER);
 
+  const memberRoles = interaction.member?.roles;
+
+  if (!memberRoles) return perms;
+
   const id = env.CONFIG.idFromName(interaction.guild_id);
   const stub = env.CONFIG.get(id);
 
