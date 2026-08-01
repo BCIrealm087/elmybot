@@ -157,6 +157,7 @@ registerDoAtHandlers(doAtSchedulingCommands);
 
 // `exec` return values are Discord interaction `data` payloads, not full
 // `Response` instances.
+// Comands without a guild descriptor will not receive a guild_id on execution.
 export const commands = {
   "alive": {
     description: "Replies if alive.",

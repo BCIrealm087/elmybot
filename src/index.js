@@ -113,6 +113,8 @@ async function handleCommand(interaction, env, command) {
       if (!permStatus.ok) throw new CommandUserFacingError(
         `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
       );
+    } else {
+      interaction.guild_id = undefined;
     }
     commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
