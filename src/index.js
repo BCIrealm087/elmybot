@@ -91,16 +91,7 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   }
 }
 
-async function checkGuildPermissions(interaction, env, commandInfo) {
-  const result = await checkPermissions(interaction, env, commandInfo);
-  if (result.ok) return { ok: true };
-  return { 
-    ok: false, 
-    reason: `Only members that fall into one of [${result.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}] can use this command.`
-  };
-}
-
-class CommandError extends Error {
+class CommandUserFacingError extends Error {
   constructor(message) {
     super (message);
   }
@@ -113,14 +104,19 @@ async function handleCommand(interaction, env, command) {
     if (def.guild) {
       // Guild-only commands rely on guild-scoped Durable Objects and
       // guild-specific permission evaluation.
-      if (!interaction.guild_id) throw new CommandError("Use this command inside a server.");
-      if (!def.allowed) throw new CommandError("Error: permissions for this command have not been set.")
-      const permStatus = await checkGuildPermissions(interaction, env, { name: command.name, allowedGroups: def.allowed });
-      if (!permStatus.ok) throw new CommandError(permStatus.reason);
+      if (!interaction.guild_id) throw new CommandUserFacingError("Use this command inside a server.");
+      const allowedGroups = def.guild.allowed;
+      if (!Array.isArray(allowedGroups) || allowedGroups === 0) {
+        throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+      }
+      const permStatus = await checkPermissions(interaction, env, { name: command.name, allowedGroups });
+      if (!permStatus.ok) throw new CommandUserFacingError(
+        `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
+      );
     }
     commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
-    commandResult = ephemeralData((e instanceof CommandError) ? e.message : "Unknown error.");
+    commandResult = ephemeralData((e instanceof CommandUserFacingError) ? e.message : "Unknown error.");
   }
   return commandResult; // expected to satisfy the 'data' field of the json response to be sent back to the discord API
 }

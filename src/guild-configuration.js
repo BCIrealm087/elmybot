@@ -7,6 +7,8 @@ class GuildConfigUserFacingError extends Error {
   }
 }
 
+const CONFIG_KEYS_KEY = "__configKeys";
+
 const isNotAnArrayMessage = "The provided key does not index a list (array).";
 
 // Lightweight per-guild configuration storage backed by a Durable Object.
@@ -16,26 +18,68 @@ async function getConfig(state, key) {
   return await state.storage.get(key);
 }
 
+async function updateConfigKeyIndex(txn, key, shouldExist) {
+  if (!key || key === CONFIG_KEYS_KEY) {
+    throw new GuildConfigUserFacingError(
+      "A valid configuration key is required.",
+      422
+    );
+  }
+
+  const storedKeys = (await txn.get(CONFIG_KEYS_KEY)) ?? [];
+
+  if (!Array.isArray(storedKeys)) {
+    throw new Error("The configuration key index is corrupted.");
+  }
+
+  const keySet = new Set(storedKeys);
+
+  if (shouldExist) {
+    keySet.add(key);
+  } else {
+    keySet.delete(key);
+  }
+
+  await txn.put(CONFIG_KEYS_KEY, [...keySet].sort());
+}
+
 async function setConfig(state, key, payload) {
-  if (payload === null || payload === undefined)
-    await state.storage.delete(key);
-  else
-    await state.storage.put(key, payload);
-  return payload;
+  return await state.storage.transaction(async (txn) => {
+    if (payload === null || payload === undefined) {
+      await txn.delete(key);
+      await updateConfigKeyIndex(txn, key, false);
+    } else {
+      await txn.put(key, payload);
+      await updateConfigKeyIndex(txn, key, true);
+    }
+
+    return payload;
+  });
 }
 
 async function addRowToConfig(state, key, payload) {
-  if (payload === null || payload === undefined) throw new GuildConfigUserFacingError("Null or undefined values cannot be added to a configuration.", 422)
+  if (payload === null || payload === undefined) {
+    throw new GuildConfigUserFacingError(
+      "Null or undefined values cannot be added to a configuration.",
+      422
+    );
+  }
+
   return await state.storage.transaction(async (txn) => {
-    // Create a new list when the key has not been used yet.
     const stored = (await txn.get(key)) ?? [];
-    if (!Array.isArray(stored)) throw new GuildConfigUserFacingError(isNotAnArrayMessage, 422);
+
+    if (!Array.isArray(stored)) {
+      throw new GuildConfigUserFacingError(isNotAnArrayMessage, 422);
+    }
 
     if (!stored.includes(payload)) {
       stored.push(payload);
       stored.sort();
       await txn.put(key, stored);
     }
+
+    // Bonus side efect: Also repairs the index if this key existed before indexing was added.
+    await updateConfigKeyIndex(txn, key, true);
 
     return stored;
   });
@@ -68,6 +112,13 @@ export async function hasEntries(state, key, entries) {
 }
 
 const requestHandlers = {
+  "GET": {
+    base: async (state, _, pathHandler) => pathHandler(state),
+    "/list": async (state) => {
+      const keys = (await getConfig(state, CONFIG_KEYS_KEY)) ?? [];
+      return jsonResponse({ totalEntries: keys.length, keys });
+    }
+  },
   "POST": {
     base: async (state, request, pathHandler) => pathHandler(state, await request.json()),
     "/get": async (state, body) => {
@@ -77,7 +128,9 @@ const requestHandlers = {
     },
     "/set": async (state, body) => {
       const stored = await setConfig(state, body?.key, body?.value);
-      return jsonResponse({ operationPerformed: (stored) ? "set" : "remove" });
+      return jsonResponse({
+        operationPerformed: (stored === null || stored === undefined) ? "remove" : "set"
+      });
     },
     "/append-to": async (state, body) => {
       await addRowToConfig(state, body?.key, body?.value);

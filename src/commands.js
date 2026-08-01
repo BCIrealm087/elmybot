@@ -40,8 +40,9 @@ function makeDoAt({
   }
   return {
     description,
-    guild: true, 
-    allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES], 
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+    },
     options: (subjectOption) ? [
       { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
       subjectOption,
@@ -159,15 +160,16 @@ registerDoAtHandlers(doAtSchedulingCommands);
 export const commands = {
   "alive": {
     description: "Replies if alive.",
-    allowed: [PERMS.ANY], 
     exec: () => ({ content: "I'm here!!1" })
   },
 
   ...doAtSchedulingCommands,
 
-    "config_show_value": {
+  "config_show_value": {
     description: `Displays the value of a given configuration entry`,
-    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+    },
     deferred: true,
     options: [
       { name: "entry", description: "Configuration entry name", type: 3, required: true }
@@ -198,9 +200,38 @@ export const commands = {
     }
   },
 
+  "config_list_entries": {
+    description: `Lists the configured entry keys`,
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+    }, 
+    deferred: true,
+    exec: async (interaction, env) => {
+      const id = env.CONFIG.idFromName(interaction.guild_id);
+      const stub = env.CONFIG.get(id);
+
+      const r = await stub.fetch("https://config/list");
+      if (!r.ok) {
+        const errData = await r.json().catch(() => null);
+        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+      }
+      const data = await r.json();
+
+      if (data.totalEntries === 0) {
+        return ephemeralData("No configured entries.");
+      }
+
+      const shown = data.keys.map(key => `"${key}"`).join(", ");
+
+      return ephemeralData(`Entries (${data.totalEntries} total, showing ${data.keys.length}):\n\`{${shown}}\``);
+    }
+  },
+
   "config_allow_role": {
     description: `Enables a role to use some protected commands (commands prefixed with \`${WATCHED_COMMAND_PREFIX}\` are excluded)`,
-    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+    }, 
     deferred: true,
     options: [
       { name: "role", description: "Role to allow", type: 8, required: true }
@@ -228,7 +259,9 @@ export const commands = {
 
   "config_disallow_role": {
     description: `Removes protected command access from role`,
-    allowed: [PERMS.OWNER, PERMS.MODERATORS], 
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+    }, 
     deferred: true,
     options: [
       { name: "role", description: "Role to diallow", type: 8, required: true }
@@ -256,8 +289,9 @@ export const commands = {
 
   "doat_list": {
     description: "List scheduled messages for this server.",
-    guild: true,
-    allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES],
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+    },
     deferred: true,
     exec: async (interaction, env) => {
       const id = env.SCHEDULER.idFromName(interaction.guild_id);
@@ -287,8 +321,9 @@ export const commands = {
 
   "doat_cancel": {
     description: "Cancel a scheduled message by job ID.",
-    guild: true,
-    allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES],
+    guild: {
+      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+    },
     deferred: true,
     options: [
       { name: "job_id", description: "Job ID", type: 3, required: true }

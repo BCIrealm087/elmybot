@@ -5,9 +5,18 @@ import "dotenv/config";
 import { commands } from "./commands.js";
 
 const args = process.argv.slice(2);
-const test = args.includes("--test");
+const cliArgs = {
+  "--test": { name: "test" }
+};
+const config = { };
+args.forEach(arg=>{
+  let argInfo;
+  if (!(argInfo = cliArgs[arg])) throw `Unknown CLI argument: \`${arg}\`\nAvailable arguments: \`${Object.keys(cliArgs)}\``;
+  
+  config[argInfo.name] = true;
+});
 
-const [appIdKey, tokenKey, envMsg] = (test)
+const [appIdKey, tokenKey, envMsg] = (config.test)
   ? ["TEST_APP_ID", "TEST_DISCORD_TOKEN", "Running in test environment"]
   : ["APP_ID", "DISCORD_TOKEN", "Running in production environment"];
 
