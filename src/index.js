@@ -114,7 +114,7 @@ async function handleCommand(interaction, env, command) {
         `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
       );
     } else {
-      interaction.guild_id = undefined;
+      interaction.guild_id = undefined; // commands without explicit guild descriptor should lose access to guild functionality
     }
     commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
