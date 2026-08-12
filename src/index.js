@@ -128,53 +128,58 @@ export default {
    * Cloudflare Worker fetch handler (Discord interactions entrypoint).
    */
   async fetch(request, env, ctx) {
-    // Optional health
-    if (request.method === "GET") return new Response("OK");
-    if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+    const url = new URL(request.url);
+    if (url.pathname === "/discord") {
+      // Optional health
+      if (request.method === "GET") return new Response("OK");
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 
-    const signature = request.headers.get("X-Signature-Ed25519");
-    const timestamp = request.headers.get("X-Signature-Timestamp");
-    if (!signature || !timestamp) return new Response("Bad Request", { status: 400 });
+      const signature = request.headers.get("X-Signature-Ed25519");
+      const timestamp = request.headers.get("X-Signature-Timestamp");
+      if (!signature || !timestamp) return new Response("Bad Request", { status: 400 });
 
-    const bodyText = await request.text();
+      const bodyText = await request.text();
 
-    const ok = verifyDiscordRequest({
-      publicKeyHex: env.PUBLIC_KEY,
-      signatureHex: signature,
-      timestamp,
-      bodyText,
-    });
-    if (!ok) return new Response("Invalid signature", { status: 401 });
+      const ok = verifyDiscordRequest({
+        publicKeyHex: env.PUBLIC_KEY,
+        signatureHex: signature,
+        timestamp,
+        bodyText,
+      });
+      if (!ok) return new Response("Invalid signature", { status: 401 });
 
-    let interaction;
-    try {
-      interaction = JSON.parse(bodyText);
-    } catch {
-      return new Response("Bad Request", { status: 400 });
+      let interaction;
+      try {
+        interaction = JSON.parse(bodyText);
+      } catch {
+        return new Response("Bad Request", { status: 400 });
+      }
+
+      // PING -> PONG
+      // (Discord validates the endpoint this way)
+      if (interaction.type === 1) return jsonResponse({ type: 1 });
+
+      if (interaction.type !== 2) return new Response("Unhandled interaction type", { status: 400 });
+
+      const name = interaction.data?.name;
+
+      const command = { name, definition: commands[name] };
+      if (!command.definition) return ephemeral(`Unknown command: /${name}`)
+      
+      let commandResult;
+      if (!command.definition.deferred) {
+        commandResult = await handleCommand(interaction, env, command);
+        return jsonResponse({ type: 4, data: commandResult });
+      }
+      // ACK immediately so Discord keeps the interaction token alive, then
+      // finish the command in the background and patch @original.
+      ctx.waitUntil(
+        handleCommand(interaction, env, command)
+          .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
+      );
+      return deferredEphemeral();
     }
 
-    // PING -> PONG
-    // (Discord validates the endpoint this way)
-    if (interaction.type === 1) return jsonResponse({ type: 1 });
-
-    if (interaction.type !== 2) return new Response("Unhandled interaction type", { status: 400 });
-
-    const name = interaction.data?.name;
-
-    const command = { name, definition: commands[name] };
-    if (!command.definition) return ephemeral(`Unknown command: /${name}`)
-    
-    let commandResult;
-    if (!command.definition.deferred) {
-      commandResult = await handleCommand(interaction, env, command);
-      return jsonResponse({ type: 4, data: commandResult });
-    }
-    // ACK immediately so Discord keeps the interaction token alive, then
-    // finish the command in the background and patch @original.
-    ctx.waitUntil(
-      handleCommand(interaction, env, command)
-        .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
-    );
-    return deferredEphemeral();
+    return new Response("Not found", { status: 404 });
   },
 };
