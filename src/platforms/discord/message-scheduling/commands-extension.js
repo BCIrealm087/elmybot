@@ -1,5 +1,10 @@
 import { getOption, ephemeralData } from "../common.js";
-import { SchedulingUserFacingError } from "./errors.js";
+
+class SchedulingUserFacingError extends Error {
+  constructor(message) {
+    super (message);
+  }
+}
 
 // Worker-side scheduling helpers. These validate interaction input and forward
 // normalized jobs to the scheduler Durable Object.
@@ -14,11 +19,16 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
 
     const options = doAtHandler.getOptions(interaction);
     if (!options.extraData) options.extraData = { };
-    // `eval` returns a user-facing error message or mutates normalized options
+    options.extraData = {
+      ...options.extraData,
+      guildId: interaction.guild_id,
+      channelId: interaction.channel_id
+    };
+    // `eval` returns a user-facing error message or may mutate options for normalization
     // in-place when needed.
     const error = doAtHandler.eval(options);
     if (error) {
-      throw new SchedulingUserFacingError(error, null);
+      throw new SchedulingUserFacingError(error);
     }
 
     const r = await stub.fetch("https://do/schedule", {
@@ -26,16 +36,14 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ...options,
-        guildId: interaction.guild_id,
-        channelId: interaction.channel_id,
         type: doAtHandler.type,
-        createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null,
+        createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null
       })
     });
     if (!r.ok) {
       const errData = await r.json();
       throw errData?.userFacingError
-        ? new SchedulingUserFacingError(errData.userFacingError, null)
+        ? new SchedulingUserFacingError(errData.userFacingError)
         : new Error(`Unknown Scheduling Service response error: status: ${r.status}\ncontent:${await r.text()}`);
     }
     const data = await r.json();

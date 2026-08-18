@@ -14,7 +14,7 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "SCHEDULER", "class_name": "GuildScheduler" },
-      { "name": "CONFIG", "class_name": "GuildConfig" }
+      { "name": "CONFIG", "class_name": "GroupConfig" }
 		]
   },
 
@@ -25,7 +25,7 @@
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": ["GuildConfig"]
+      "new_sqlite_classes": ["GroupConfig"]
     }
 	],
 
@@ -34,7 +34,7 @@
       "durable_objects": {
         "bindings": [
           { "name": "SCHEDULER", "class_name": "GuildScheduler" },
-          { "name": "CONFIG", "class_name": "GuildConfig" }
+          { "name": "CONFIG", "class_name": "GroupConfig" }
         ]
       }
     }

@@ -14,11 +14,25 @@ import {
  * Build a guild-only deferred scheduling command and register the metadata
  * needed by the scheduler Durable Object to render and reschedule jobs.
  */
-function defaultDoAtCompose(_, composer, stored) {
-  const IC = composer.innerContent(stored);
-  const AM = composer.allowedMentions(stored);
-  const OC = composer.outerContent(stored, IC);
+function defaultDoAtCompose(c, _, stored) {
+  const IC = c.innerContent(stored);
+  const AM = c.allowedMentions(stored);
+  const OC = c.outerContent(stored, IC);
   return { content: OC, allowed_mentions: AM };
+}
+
+function defaultDoAtSend(env, job, messageData) {
+  return fetch(
+    `https://discord.com/api/v10/channels/${job.extraData.channelId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${env.DISCORD_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(messageData),
+    }
+  );
 }
 
 function makeDoAt({
@@ -26,7 +40,8 @@ function makeDoAt({
   extraOptions = [], getOptions, evaluator, 
   composer: {
     innerContent, allowedMentions, outerContent, 
-    repeatDescription = (_)=>"daily", composeMessage = defaultDoAtCompose
+    repeatDescription = (_)=>"daily", composeMessage = defaultDoAtCompose, 
+    sendMessage = defaultDoAtSend
   }, 
   scheduleCalculation = getDailyTimeFromTimestamp, 
   doAtType = undefined
@@ -35,8 +50,9 @@ function makeDoAt({
   if (subjectOption && optionsOverride) throw new Error("Please only define one of `subjectOption` or `optionsOverride`, not both.");
 
   const composer = {
-    innerContent, allowedMentions, outerContent, 
-    repeatDescription, composeMessage
+    innerContent, allowedMentions, outerContent,
+    repeatDescription, composeMessage, sendMessage,
+    composeAndSend: async (env, stored) => sendMessage(env, stored, await composeMessage(composer, env, stored))
   }
   return {
     description,
@@ -104,9 +120,9 @@ const doAtSchedulingCommands = {
       innerContent: (j) => j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
       allowedMentions: (_) => ({ parse: [] }),
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
-      composeMessage: (env, composer, stored) => stored.extraData.gif
-        ? gifMessageCompose(env, composer, stored)
-        : defaultDoAtCompose(env, composer, stored)
+      composeMessage: (c, env, stored) => stored.extraData.gif
+        ? gifMessageCompose(c, env, stored)
+        : defaultDoAtCompose(c, env, stored)
     }
   }),
 
@@ -144,9 +160,9 @@ const doAtSchedulingCommands = {
       innerContent: (j)=>j.extraData.gif ? gifMessageInnerContent(j) : j.subject,
       allowedMentions: (_)=>({ parse: [] }), 
       outerContent: (j, innerContent) => j.extraData.gif ? gifMessageOuterContent(j, innerContent) : innerContent,
-      composeMessage: (env, composer, stored) => stored.extraData.gif
-        ? gifMessageCompose(env, composer, stored)
-        : defaultDoAtCompose(env, composer, stored),
+      composeMessage: (c, env, stored) => stored.extraData.gif
+        ? gifMessageCompose(c, env, stored)
+        : defaultDoAtCompose(c, env, stored),
       repeatDescription: (j) => `randomly (min.: ${formatInterval(j.extraData.minInterval)} - max.: ${formatInterval(j.extraData.maxInterval)})`
     }, 
     scheduleCalculation: getRandomTimeFromInterval
@@ -311,7 +327,7 @@ export const commands = {
       const shown = data.jobsPreview.map(j => {
         const handler = commands[j.type];
         const innerContent = handler.extra.composer.innerContent(j);
-        return `• <t:${j.timestamp}:F> (<t:${j.timestamp}:R>) — ${innerContent} in <#${j.channelId}>` +
+        return `• <t:${j.timestamp}:F> (<t:${j.timestamp}:R>) — ${innerContent} in <#${j.extraData.channelId}>` +
           (j.repeats ? ` 🔁 ${handler.extra.composer.repeatDescription(j)}` : "") +
           ` — id: \`${j.id}\``;
       }).join("\n");

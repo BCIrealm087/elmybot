@@ -9,7 +9,7 @@ export const evalGifOptions = (options) => {
 export const gifMessageInnerContent = (j) => `\`${j.subject}\` (with \`${j.extraData.gif}\` gif)`;
 export const gifMessageOuterContent = (j, __) => j.subject;
 
-export const gifMessageCompose = async (env, composer, stored) => {
+export const gifMessageCompose = async (c, env, stored) => {
   const q = String(stored.extraData.gif ?? "").trim();
   if (!q) throw new Error("Empty search string was provided.");
 
@@ -41,9 +41,9 @@ export const gifMessageCompose = async (env, composer, stored) => {
     throw new Error(`Found a GIF for \`${q}\`, but no usable media URL was returned.`);
   }
 
-  const IC = composer.innerContent(stored);
-  const AM = composer.allowedMentions(stored);
-  const OC = composer.outerContent(stored, IC);
+  const IC = c.innerContent(stored);
+  const AM = c.allowedMentions(stored);
+  const OC = c.outerContent(stored, IC);
 
   return {
     allowed_mentions: AM,

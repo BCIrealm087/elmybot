@@ -1,5 +1,5 @@
 import { jsonResponse } from "../common.js";
-import { SchedulingUserFacingError } from "./errors.js";
+import { SchedulingBackendUserFacingError } from "./errors.js";
 
 // Durable Object environment: persistent job storage + alarms.
 
@@ -11,8 +11,16 @@ export function registerDoAtHandlers(definitions) {
   for (const [key, { extra }] of Object.entries(definitions)) {
     doAtTypeHandlers[key] = {
       composer: extra.composer,
-      calcScheduleTime: extra.calcScheduleTime,
+      calcScheduleTime: extra.calcScheduleTime
     };
+  }
+}
+
+class SchedulingBackedUserFacingError extends Error {
+  constructor(message, status=500) {
+    super (message);
+    if (status !== null && status !== undefined)
+      this.status = status;
   }
 }
 
@@ -53,8 +61,7 @@ const requestHandlers = {
           subject: j.subject,
           repeats: j.repeats,
           extraData: j.extraData,
-          type: j.type,
-          channelId: j.channelId
+          type: j.type
         }))
       });
     }
@@ -63,7 +70,7 @@ const requestHandlers = {
     base: async (state, request, pathHandler) => pathHandler(state, await request.json()), 
     "/schedule": async (state, job) => {
       const handler = doAtTypeHandlers[job.type];
-      if (!handler) throw new SchedulingUserFacingError("Invalid scheduling job type.", 422);
+      if (!handler) throw new SchedulingBackendUserFacingError("Invalid scheduling job type.", 422);
 
       const id = crypto.randomUUID();
 
@@ -72,8 +79,6 @@ const requestHandlers = {
       const [ts, runAtMs] = handler.calcScheduleTime(job);
       const j = {
         id,
-        guildId: job.guildId,
-        channelId: job.channelId,
         type: job.type,
         subject: job.subject,
         timestamp: ts,
@@ -113,7 +118,7 @@ const requestHandlers = {
     "/cancel": async (state, body) => {
       const jobId = String(body?.jobId ?? "").trim();
 
-      if (!jobId) throw new SchedulingUserFacingError("Provide a valid `job_id`.", 422);
+      if (!jobId) throw new SchedulingBackendUserFacingError("Provide a valid `job_id`.", 422);
 
       // Atomic remove (read -> modify -> write).
       const result = await state.storage.transaction(async (txn) => {
@@ -130,7 +135,7 @@ const requestHandlers = {
         return { found: true, removed };
       });
 
-      if (!result.found) throw new SchedulingUserFacingError(`No job found: \`${jobId}\``, 422);
+      if (!result.found) throw new SchedulingBackendUserFacingError(`No job found: \`${jobId}\``, 422);
 
       // Set/clear the next alarm from persisted state to avoid racey local
       // copies.
@@ -172,7 +177,7 @@ export class GuildScheduler {
     try {
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
-      return (e instanceof SchedulingUserFacingError)
+      return (e instanceof SchedulingBackendUserFacingError)
         ? jsonResponse({ userFacingError: e.message }, e.status)
         : jsonResponse({ error: "Unknown error." }, 500);
     }
@@ -221,20 +226,8 @@ export class GuildScheduler {
           });
           continue;
         }
-        
-        const messageData = await handler.composer.composeMessage(this.env, handler.composer, job);
 
-        const r = await fetch(
-          `https://discord.com/api/v10/channels/${job.channelId}/messages`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bot ${this.env.DISCORD_TOKEN}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify(messageData),
-          }
-        );
+        const r = await handler.composer.composeAndSend(this.env, job);
 
         if (!r.ok) {
           // Job remains in jobs; CF retries the alarm later.
