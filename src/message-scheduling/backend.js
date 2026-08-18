@@ -1,5 +1,4 @@
 import { jsonResponse } from "../common.js";
-import { SchedulingBackendUserFacingError } from "./errors.js";
 
 // Durable Object environment: persistent job storage + alarms.
 

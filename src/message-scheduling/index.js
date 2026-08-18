@@ -1,3 +1,1 @@
-export { GuildScheduler } from "./backend.js";
-
-export { registerDoAtHandlers } from "./backend.js";
+export { GuildScheduler, registerDoAtHandlers } from "./backend.js";

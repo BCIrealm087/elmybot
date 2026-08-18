@@ -118,7 +118,7 @@ async function handleCommand(interaction, env, command) {
 }
 
 
-export function handleDiscordRequest(request, env, ctx) {
+export async function handleDiscordRequest(request, env, ctx) {
   // Optional health
   if (request.method === "GET") return new Response("OK");
   if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });

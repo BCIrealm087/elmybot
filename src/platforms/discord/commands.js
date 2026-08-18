@@ -113,7 +113,7 @@ const doAtSchedulingCommands = {
     getOptions: (interaction)=>({
       ...getStandardOptions(interaction),
       subject: String(getOption(interaction, "message") ?? ""),
-      extraData: { gif: String(getOption(interaction, "gif")) }
+      extraData: { gif: String(getOption(interaction, "gif") ?? "") }
     }),
     evaluator: (options) => evalMessage(options) || evalGifOptions(options) || evalStandardTimestamp(options),
     composer: {
@@ -141,7 +141,7 @@ const doAtSchedulingCommands = {
       extraData: {
         minInterval: Number(getOption(interaction, "min_interval") ?? 7200), 
         maxInterval: Number(getOption(interaction, "max_interval") ?? 21600),
-        gif: String(getOption(interaction, "gif"))
+        gif: String(getOption(interaction, "gif") ?? "")
       }
     }),
     evaluator: (options) => {

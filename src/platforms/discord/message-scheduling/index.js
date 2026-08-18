@@ -1,4 +1,4 @@
-export { registerDoAtHandlers } from "../message-scheduling/commands-extension.js";
+export { registerDoAtHandlers } from "../../../message-scheduling/index.js"
 
 export { 
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
