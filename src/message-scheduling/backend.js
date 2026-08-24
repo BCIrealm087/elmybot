@@ -226,9 +226,8 @@ export class GuildScheduler {
           continue;
         }
 
-        const r = await handler.composer.composeAndSend(this.env, job);
-
-        if (!r.ok) {
+        // send / composeAndSend don't necessarily need to work through http request, just return whether it succeeds/fails
+        if (!await handler.composer.composeAndSend(this.env, job)) {
           // Job remains in jobs; CF retries the alarm later.
           pruneDelivered(delivered, Date.now());
           await this.state.storage.put("delivered", delivered);

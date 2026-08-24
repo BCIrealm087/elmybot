@@ -32,7 +32,7 @@ function defaultDoAtSend(env, job, messageData) {
       },
       body: JSON.stringify(messageData),
     }
-  );
+  ).then(r=>r.ok);
 }
 
 function makeDoAt({
