@@ -1,5 +1,6 @@
 import { PERMS, WATCHED_COMMAND_PREFIX } from "./discord-permissions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
+import { DeliveryError } from "../../message-scheduling/index.js";
 import {
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
   evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval, 
@@ -21,18 +22,38 @@ function defaultDoAtCompose(c, _, stored) {
   return { content: OC, allowed_mentions: AM };
 }
 
-function defaultDoAtSend(env, job, messageData) {
-  return fetch(
-    `https://discord.com/api/v10/channels/${job.extraData.channelId}/messages`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${env.DISCORD_TOKEN}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(messageData),
-    }
-  ).then(r=>r.ok);
+async function defaultDoAtSend(env, job, messageData) {
+  let response;
+  try {
+    response = await fetch(
+      `https://discord.com/api/v10/channels/${job.extraData.channelId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${env.DISCORD_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(messageData),
+      }
+    );
+  } catch (cause) {
+    throw new DeliveryError("Discord API request failed.", {
+      retryable: true,
+      code: "discord_network_error",
+      cause
+    });
+  }
+
+  if (!response.ok) {
+    throw new DeliveryError(
+      `Discord API request failed with status ${response.status}.`,
+      {
+        retryable: response.status === 429 || response.status >= 500,
+        code: "discord_http_error",
+        metadata: { status: response.status }
+      }
+    );
+  }
 }
 
 function makeDoAt({
@@ -52,7 +73,19 @@ function makeDoAt({
   const composer = {
     innerContent, allowedMentions, outerContent,
     repeatDescription, composeMessage, sendMessage,
-    composeAndSend: async (env, stored) => sendMessage(env, stored, await composeMessage(composer, env, stored))
+    composeAndSend: async (env, stored) => {
+      try {
+        const messageData = await composeMessage(composer, env, stored);
+        await sendMessage(env, stored, messageData);
+      } catch (error) {
+        if (error instanceof DeliveryError) throw error;
+        throw new DeliveryError("Discord message delivery failed.", {
+          retryable: true,
+          code: "discord_delivery_error",
+          cause: error
+        });
+      }
+    }
   }
   return {
     description,

@@ -9,7 +9,7 @@ const doAtTypeHandlers = { };
 export function registerDoAtHandlers(definitions) {
   for (const [key, { extra }] of Object.entries(definitions)) {
     doAtTypeHandlers[key] = {
-      composer: extra.composer,
+      deliver: extra.composer.composeAndSend,
       calcScheduleTime: extra.calcScheduleTime
     };
   }
@@ -20,6 +20,22 @@ class SchedulingBackendUserFacingError extends Error {
     super (message);
     if (status !== null && status !== undefined)
       this.status = status;
+  }
+}
+
+export class DeliveryError extends Error {
+  constructor(message, {
+    retryable = false,
+    code = "delivery_failed",
+    metadata = {},
+    cause = undefined
+  } = {}) {
+    super(message);
+    this.name = "DeliveryError";
+    this.retryable = retryable;
+    this.code = code;
+    this.metadata = metadata;
+    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -226,13 +242,9 @@ export class GuildScheduler {
           continue;
         }
 
-        // send / composeAndSend don't necessarily need to work through http request, just return whether it succeeds/fails
-        if (!await handler.composer.composeAndSend(this.env, job)) {
-          // Job remains in jobs; CF retries the alarm later.
-          pruneDelivered(delivered, Date.now());
-          await this.state.storage.put("delivered", delivered);
-          throw new Error(`Discord API error ${r.status}: ${await r.text()}`);
-        }
+        // A successful delivery resolves; platform adapters report failures by
+        // throwing DeliveryError (or another exception for unexpected faults).
+        await handler.deliver(this.env, job);
 
         // Mark delivered ASAP to prevent duplicates if something fails after sending
         delivered[key] = Date.now();
