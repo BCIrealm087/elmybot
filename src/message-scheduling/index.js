@@ -1,5 +1,6 @@
 export {
   createJobHandlerRegistry,
   DeliveryError,
-  GuildSchedulerBackend
+  GuildSchedulerBackend,
+  SCHEDULER_JOB_SCHEMA_VERSION
 } from "./backend.js";

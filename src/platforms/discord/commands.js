@@ -32,7 +32,7 @@ async function defaultDoAtSend(env, job, messageData) {
   let response;
   try {
     response = await fetch(
-      `https://discord.com/api/v10/channels/${job.extraData.channelId}/messages`,
+      `https://discord.com/api/v10/channels/${job.destination.channelId}/messages`,
       {
         method: "POST",
         headers: {
@@ -221,6 +221,59 @@ const schedulingCommandsByKind = Object.freeze(Object.fromEntries(
   ])
 ));
 
+function isBoundedDiscordId(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 100;
+}
+
+function validateDiscordJob(job) {
+  const guildId = job.extraData.guildId;
+  const channelId = job.extraData.channelId;
+  if (!isBoundedDiscordId(guildId) || !isBoundedDiscordId(channelId)) {
+    return "Discord scheduling requires valid guild and channel IDs.";
+  }
+  if (
+    job.groupKey !== `discord:guild:${guildId}` ||
+    job.destination.channelId !== channelId
+  ) {
+    return "Discord scheduling destination metadata is inconsistent.";
+  }
+
+  if (
+    (job.kind === DISCORD_JOB_KINDS.PING_ROLE ||
+      job.kind === DISCORD_JOB_KINDS.PING_USER) &&
+    !/^\d{5,30}$/.test(job.subject)
+  ) {
+    return "Discord ping jobs require a valid target ID.";
+  }
+  if (
+    (job.kind === DISCORD_JOB_KINDS.SEND_AT ||
+      job.kind === DISCORD_JOB_KINDS.SEND_RANDOM) &&
+    (job.subject.length === 0 || job.subject.length > 2_000)
+  ) {
+    return "Discord message jobs require a message of at most 2000 characters.";
+  }
+
+  const isMessageJob = job.kind === DISCORD_JOB_KINDS.SEND_AT ||
+    job.kind === DISCORD_JOB_KINDS.SEND_RANDOM;
+  if (isMessageJob) {
+    const gif = job.extraData.gif;
+    if (gif !== null && (typeof gif !== "string" || gif.length > 20)) {
+      return "Discord GIF search metadata is invalid.";
+    }
+  }
+  if (job.kind === DISCORD_JOB_KINDS.SEND_RANDOM) {
+    const { minInterval, maxInterval } = job.extraData;
+    if (
+      !Number.isSafeInteger(minInterval) || !Number.isSafeInteger(maxInterval) ||
+      minInterval < 600 || maxInterval > 86_400 || minInterval > maxInterval
+    ) {
+      return "Discord random interval metadata is invalid.";
+    }
+  }
+
+  return null;
+}
+
 function internalRequestHeaders(interaction) {
   return {
     "content-type": "application/json",
@@ -249,7 +302,8 @@ export const discordSchedulingHandlers = Object.freeze(Object.fromEntries(
     definition.extra.jobKind,
     Object.freeze({
       deliver: definition.extra.composer.composeAndSend,
-      calcScheduleTime: definition.extra.calcScheduleTime
+      calcScheduleTime: definition.extra.calcScheduleTime,
+      validateJob: validateDiscordJob
     })
   ])
 ));

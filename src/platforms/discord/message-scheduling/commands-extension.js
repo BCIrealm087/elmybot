@@ -1,5 +1,6 @@
 import { getOption, ephemeralData } from "../common.js";
 import { logError, unknownErrorMessage } from "../../../common.js";
+import { SCHEDULER_JOB_SCHEMA_VERSION } from "../../../message-scheduling/index.js";
 
 class SchedulingUserFacingError extends Error {
   constructor(message) {
@@ -48,7 +49,11 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       },
       body: JSON.stringify({
         ...options,
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: "discord",
         kind: doAtHandler.kind,
+        groupKey: `discord:guild:${interaction.guild_id}`,
+        destination: { channelId: interaction.channel_id },
         sourceEventId: `discord:${interactionId}`,
         createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null
       })

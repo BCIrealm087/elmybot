@@ -7,7 +7,10 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import worker from '../src/index.js';
-import { createJobHandlerRegistry } from '../src/message-scheduling/index.js';
+import {
+  createJobHandlerRegistry,
+  SCHEDULER_JOB_SCHEMA_VERSION,
+} from '../src/message-scheduling/index.js';
 import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
   CAPABILITIES,
@@ -142,8 +145,12 @@ function storedMessageJob({
   attempts = 0,
 } = {}) {
   return {
+    schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
     id,
+    platform: 'discord',
     kind: DISCORD_JOB_KINDS.SEND_AT,
+    groupKey: `discord:guild:${guildId}`,
+    destination: { channelId },
     subject,
     timestamp: Math.floor(runAtMs / 1000),
     runAtMs,
@@ -154,6 +161,7 @@ function storedMessageJob({
     },
     repeats: false,
     createdBy: null,
+    sourceEventId: `discord:${id}`,
     delivery: {
       state: 'pending',
       attempts,
@@ -162,6 +170,39 @@ function storedMessageJob({
       lastError: null,
     },
   };
+}
+
+function replaceStoredJobs(state, jobs) {
+  state.storage.transactionSync(() => {
+    state.storage.sql.exec('DELETE FROM scheduler_jobs');
+    for (const job of jobs) {
+      state.storage.sql.exec(
+        `INSERT INTO scheduler_jobs
+          (id, next_attempt_at_ms, run_at_ms, job_json)
+         VALUES (?, ?, ?, ?)`,
+        job.id,
+        job.delivery.nextAttemptAtMs,
+        job.runAtMs,
+        JSON.stringify(job),
+      );
+    }
+  });
+}
+
+function readStoredJobs(state) {
+  return state.storage.sql.exec(`
+    SELECT job_json
+    FROM scheduler_jobs
+    ORDER BY next_attempt_at_ms, run_at_ms, id
+  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
+}
+
+function readDeadLetters(state) {
+  return state.storage.sql.exec(`
+    SELECT job_json
+    FROM scheduler_dead_letters
+    ORDER BY failed_at_ms, dead_letter_id
+  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
 }
 
 afterEach(() => {
@@ -336,6 +377,7 @@ describe('Discord interaction worker', () => {
     const handler = {
       deliver: async () => {},
       calcScheduleTime: () => [1, 1000],
+      validateJob: () => null,
     };
     const kind = 'test.message.send.v1';
     const registry = createJobHandlerRegistry({ [kind]: handler });
@@ -543,7 +585,11 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: 'discord',
         kind: DISCORD_JOB_KINDS.SEND_AT,
+        groupKey: `discord:guild:${guildId}`,
+        destination: { channelId: 'channel-1' },
         sourceEventId: 'discord:direct-later',
         subject: 'later',
         timestamp: laterTs,
@@ -561,7 +607,11 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: 'discord',
         kind: DISCORD_JOB_KINDS.SEND_AT,
+        groupKey: `discord:guild:${guildId}`,
+        destination: { channelId: 'channel-1' },
         sourceEventId: 'discord:direct-sooner',
         subject: 'sooner',
         timestamp: soonerTs,
@@ -581,6 +631,12 @@ describe('Discord interaction worker', () => {
     expect(listData.jobsPreview).toHaveLength(2);
     expect(listData.jobsPreview.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
     expect(listData.jobsPreview.map((job) => job.subject)).toEqual(['sooner', 'later']);
+    await runInDurableObject(stub, async (_, state) => {
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS count FROM scheduler_jobs',
+      ).one().count).toBe(2);
+      expect(await state.storage.get('jobs')).toBeUndefined();
+    });
 
     const cancelResponse = await stub.fetch('https://do/cancel', {
       method: 'POST',
@@ -597,18 +653,23 @@ describe('Discord interaction worker', () => {
 
   it('deduplicates scheduling transactionally by source event ID', async () => {
     const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
     const stub = schedulerStubFor(guildId);
     const sourceEventId = `discord:${uniqueId('interaction')}`;
     const timestamp = Math.floor(Date.now() / 1000) + 3600;
     const requestBody = {
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
       kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
       sourceEventId,
       subject: 'only once',
       timestamp,
       repeats: false,
       extraData: {
         guildId,
-        channelId: uniqueId('channel'),
+        channelId,
         gif: null,
       },
     };
@@ -630,6 +691,56 @@ describe('Discord interaction worker', () => {
       kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'only once',
     });
+  });
+
+  it('rejects malformed shared envelopes and adapter payloads before persistence', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const timestamp = Math.floor(Date.now() / 1000) + 3600;
+    const valid = {
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
+      sourceEventId: `discord:${uniqueId('interaction')}`,
+      subject: 'validated message',
+      timestamp,
+      repeats: false,
+      createdBy: null,
+      extraData: { guildId, channelId, gif: null },
+    };
+    const invalidCases = [
+      [{ ...valid, schemaVersion: 99 }, 'Unsupported scheduling schema version.'],
+      [{ ...valid, destination: {} }, 'Scheduling destination is required.'],
+      [
+        { ...valid, destination: { channelId: 'different-channel' } },
+        'Discord scheduling destination metadata is inconsistent.',
+      ],
+      [{ ...valid, timestamp: null }, 'Scheduling handler produced invalid time metadata.'],
+    ];
+
+    for (const [body, message] of invalidCases) {
+      const response = await stub.fetch('https://do/schedule', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ userFacingError: message });
+    }
+
+    const malformedJson = await stub.fetch('https://do/schedule', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    });
+    expect(malformedJson.status).toBe(400);
+    expect((await malformedJson.json()).userFacingError).toBe(
+      'Request body must be valid JSON.',
+    );
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(0);
   });
 
   it('defers /sayat, patches the original response, then supports listing and canceling the scheduled job', async () => {
@@ -997,7 +1108,7 @@ describe('Discord interaction worker', () => {
 
     await runInDurableObject(stub, async (instance, state) => {
       const nowMs = Date.now();
-      await state.storage.put('jobs', [
+      replaceStoredJobs(state, [
         storedMessageJob({
           id: 'terminal-job',
           guildId,
@@ -1014,10 +1125,10 @@ describe('Discord interaction worker', () => {
 
       await instance.alarm();
 
-      expect(await state.storage.get('jobs')).toEqual([]);
+      expect(readStoredJobs(state)).toEqual([]);
       expect(sentChannels).toEqual([liveChannelId]);
 
-      const deadLetters = await state.storage.get('deadLetters');
+      const deadLetters = readDeadLetters(state);
       expect(deadLetters).toHaveLength(1);
       expect(deadLetters[0]).toMatchObject({
         id: 'terminal-job',
@@ -1035,7 +1146,7 @@ describe('Discord interaction worker', () => {
       expect(log).toMatchObject({
         event: 'scheduler.delivery_failed',
         platform: 'discord',
-        correlationId: 'terminal-job',
+        correlationId: 'discord:terminal-job',
         groupId: guildId,
         jobKind: DISCORD_JOB_KINDS.SEND_AT,
         jobId: 'terminal-job',
@@ -1059,14 +1170,14 @@ describe('Discord interaction worker', () => {
     )));
 
     await runInDurableObject(stub, async (instance, state) => {
-      await state.storage.put('jobs', [
+      replaceStoredJobs(state, [
         storedMessageJob({ id: 'retry-job', guildId }),
       ]);
 
       const beforeAlarm = Date.now();
       await instance.alarm();
 
-      const jobs = await state.storage.get('jobs');
+      const jobs = readStoredJobs(state);
       expect(jobs).toHaveLength(1);
       expect(jobs[0]).toMatchObject({
         id: 'retry-job',
@@ -1098,7 +1209,7 @@ describe('Discord interaction worker', () => {
     )));
 
     await runInDurableObject(stub, async (instance, state) => {
-      await state.storage.put('jobs', [
+      replaceStoredJobs(state, [
         storedMessageJob({
           id: 'exhausted-job',
           guildId,
@@ -1108,8 +1219,8 @@ describe('Discord interaction worker', () => {
 
       await instance.alarm();
 
-      expect(await state.storage.get('jobs')).toEqual([]);
-      const deadLetters = await state.storage.get('deadLetters');
+      expect(readStoredJobs(state)).toEqual([]);
+      const deadLetters = readDeadLetters(state);
       expect(deadLetters).toHaveLength(1);
       expect(deadLetters[0]).toMatchObject({
         id: 'exhausted-job',

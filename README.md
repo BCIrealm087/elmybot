@@ -125,24 +125,28 @@ Implemented in `src/platforms/discord/discord-permissions.js`.
 
 Implemented in `src/message-scheduling/backend.js`.
 
-Each guild gets one `GuildScheduler` Durable Object instance. It stores scheduled jobs, keeps them sorted by `runAtMs`, and maintains one alarm for the next due job.
+Each guild gets one `GuildScheduler` Durable Object instance. It stores scheduled jobs in indexed SQLite rows and maintains one alarm for the next due job.
 
 Discord scheduler objects are named `discord:guild:<guildId>` so future
 platform adapters cannot collide with Discord guild storage.
 
 #### Storage
 
-- `jobs` — sorted array of scheduled jobs
+- `scheduler_jobs` — one row per job, indexed by next delivery attempt and run time
+- `scheduler_sources` — source-event idempotency records
+- `scheduler_dead_letters` — bounded history of terminal or exhausted deliveries
 - `delivered` — dedupe map keyed by `${job.id}:${job.timestamp}`
-- `scheduleSources` — source-event idempotency records
-- `deadLetters` — bounded history of terminal or exhausted deliveries
 
 Current job shape:
 
 ```js
 {
+  schemaVersion: 1,
   id,
+  platform,
   kind, // stable namespaced/versioned handler key
+  groupKey,
+  destination,
   subject,
   timestamp,
   runAtMs,
@@ -157,6 +161,10 @@ Current job shape:
 #### Behavior
 
 - The composition root builds one immutable handler registry and rejects duplicate job kinds.
+- The shared scheduler validates schema version, platform, job kind, group,
+  destination, repeat policy, idempotency key, calculated integer timestamps,
+  and serialized payload bounds before persistence. The selected platform
+  adapter validates its destination and payload metadata as a second layer.
 - Discord interaction IDs become `discord:<interactionId>` source IDs; scheduling and source deduplication happen in one storage transaction.
 - Replaying the same interaction returns the original scheduling result without creating another job.
 - After each mutation, the next alarm is recomputed from persisted storage.
