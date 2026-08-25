@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - codex-platform-separation
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test -- --run
+
+      - name: Check JavaScript syntax
+        run: git ls-files -z '*.js' '*.mjs' | xargs -0 -n1 node --check
+
+      - name: Build Worker dry run
+        run: npx wrangler deploy --dry-run --outdir .wrangler-dry-run
