@@ -15,7 +15,7 @@ export function registerDoAtHandlers(definitions) {
   }
 }
 
-class SchedulingBackedUserFacingError extends Error {
+class SchedulingBackendUserFacingError extends Error {
   constructor(message, status=500) {
     super (message);
     if (status !== null && status !== undefined)
