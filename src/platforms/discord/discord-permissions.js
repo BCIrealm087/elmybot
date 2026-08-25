@@ -89,7 +89,7 @@ export async function getPerms(interaction, env) {
   const id = env.CONFIG.idFromName(interaction.guild_id);
   const stub = env.CONFIG.get(id);
 
-  // Guild-specific allowlisted roles live in the GuildConfig Durable Object.
+  // Guild-specific allowlisted roles live in the GroupConfig Durable Object.
   const r = await stub.fetch("https://config/get", {
     method: "POST",
     headers: { "content-type": "application/json" },

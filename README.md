@@ -237,6 +237,8 @@ Each guild gets one `GroupConfig` Durable Object instance. It stores per-guild c
 
 - Durable Object bindings:
   - `SCHEDULER` -> `GuildScheduler`
-  - `CONFIG` -> `GuildConfig`
+  - `CONFIG` -> `GroupConfig`
+- Migration `v2` retains the originally deployed `GuildConfig` creation, and
+  `v3` performs the append-only rename to `GroupConfig`.
 - Durable Object migration tags in `wrangler.jsonc` are append-only after deployment.
 - Non-inheritable environment bindings must be repeated inside environment blocks when needed.

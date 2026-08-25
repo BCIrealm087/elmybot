@@ -25,7 +25,13 @@
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": ["GroupConfig"]
+      "new_sqlite_classes": ["GuildConfig"]
+    },
+    {
+      "tag": "v3",
+      "renamed_classes": [
+        { "from": "GuildConfig", "to": "GroupConfig" }
+      ]
     }
 	],
 
