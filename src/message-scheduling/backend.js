@@ -222,7 +222,7 @@ export class GuildScheduler {
       const key = deliveryKey(job);
       const alreadyDelivered = delivered[key] !== undefined;
 
-      // 1) Deliver outside the transaction so Discord API calls do not hold the
+      // 1) Deliver outside the transaction so platform API calls do not hold the
       // storage transaction open.
       if (!alreadyDelivered) {
         const handler = doAtTypeHandlers[job.type];
