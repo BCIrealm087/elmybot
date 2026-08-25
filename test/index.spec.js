@@ -1,8 +1,18 @@
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import worker from '../src';
-import { gifMessageCompose, gifMessageInnerContent, gifMessageOuterContent } from '../src/gifs-extension';
+import {
+  env,
+  createExecutionContext,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from 'cloudflare:test';
+import worker from '../src/index.js';
+import {
+  evalGifOptions,
+  gifMessageCompose,
+  gifMessageInnerContent,
+  gifMessageOuterContent,
+} from '../src/platforms/discord/gifs-extension.js';
 
 function toHex(bytes) {
   return Array.from(bytes)
@@ -14,7 +24,7 @@ function makeSignedDiscordRequest({ body, secretKey, timestamp = `${Math.floor(D
   const message = new TextEncoder().encode(timestamp + body);
   const signature = nacl.sign.detached(message, secretKey);
 
-  return new Request('https://example.com', {
+  return new Request('https://example.com/discord', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -111,6 +121,37 @@ function configStubFor(guildId) {
   return env.CONFIG.get(id);
 }
 
+function storedMessageJob({
+  id = uniqueId('job'),
+  guildId = uniqueId('guild'),
+  channelId = uniqueId('channel'),
+  subject = 'scheduled message',
+  runAtMs = Date.now() - 1000,
+  attempts = 0,
+} = {}) {
+  return {
+    id,
+    type: 'sayat',
+    subject,
+    timestamp: Math.floor(runAtMs / 1000),
+    runAtMs,
+    extraData: {
+      guildId,
+      channelId,
+      gif: null,
+    },
+    repeats: false,
+    createdBy: null,
+    delivery: {
+      state: 'pending',
+      attempts,
+      nextAttemptAtMs: runAtMs,
+      lastAttemptAtMs: null,
+      lastError: null,
+    },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -118,20 +159,30 @@ afterEach(() => {
 
 describe('Discord interaction worker', () => {
   it('returns OK for health check GET', async () => {
-    const response = await worker.fetch(new Request('https://example.com', { method: 'GET' }), env, createExecutionContext());
+    const response = await worker.fetch(new Request('https://example.com/discord', { method: 'GET' }), env, createExecutionContext());
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('OK');
   });
 
+  it('returns 404 outside registered platform routes', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/', { method: 'GET' }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+  });
+
   it('rejects non-POST/GET methods', async () => {
-    const response = await worker.fetch(new Request('https://example.com', { method: 'PUT' }), env, createExecutionContext());
+    const response = await worker.fetch(new Request('https://example.com/discord', { method: 'PUT' }), env, createExecutionContext());
     expect(response.status).toBe(405);
     expect(await response.text()).toBe('Method Not Allowed');
   });
 
   it('returns 400 when signature headers are missing', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com', {
+      new Request('https://example.com/discord', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 1 }),
@@ -146,7 +197,7 @@ describe('Discord interaction worker', () => {
 
   it('returns 401 when signature is invalid', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com', {
+      new Request('https://example.com/discord', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -222,7 +273,7 @@ describe('Discord interaction worker', () => {
     });
   });
 
-  it('stores config values through the GuildConfig durable object', async () => {
+  it('stores config values through the GroupConfig durable object', async () => {
     const guildId = uniqueId('guild');
     const stub = configStubFor(guildId);
 
@@ -280,13 +331,15 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        guildId,
-        channelId: 'channel-1',
         type: 'sayat',
         subject: 'later',
         timestamp: laterTs,
         repeats: false,
-        extraData: {},
+        extraData: {
+          guildId,
+          channelId: 'channel-1',
+          gif: null,
+        },
       }),
     });
     const laterJob = await laterResponse.json();
@@ -295,13 +348,15 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        guildId,
-        channelId: 'channel-1',
         type: 'sayat',
         subject: 'sooner',
         timestamp: soonerTs,
         repeats: false,
-        extraData: {},
+        extraData: {
+          guildId,
+          channelId: 'channel-1',
+          gif: null,
+        },
       }),
     });
     const soonerJob = await soonerResponse.json();
@@ -365,7 +420,14 @@ describe('Discord interaction worker', () => {
     const listAfterScheduleData = await listAfterSchedule.json();
     expect(listAfterScheduleData.totalJobs).toBe(1);
     const scheduledJob = listAfterScheduleData.jobsPreview[0];
-    expect(scheduledJob.subject).toBe('hello future');
+    expect(scheduledJob).toMatchObject({
+      subject: 'hello future',
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
+    });
 
     const listInteraction = buildSlashInteraction({
       name: 'doat_list',
@@ -480,7 +542,11 @@ describe('Discord interaction worker', () => {
     expect(schedulerData.jobsPreview[0]).toMatchObject({
       type: 'sayat',
       subject: 'role-authorized message',
-      channelId,
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
     });
   });
 
@@ -531,7 +597,7 @@ describe('Discord interaction worker', () => {
     });
   });
 
-  it('accepts /sayat with gif=true, stores gif metadata, and renders list entries with GIF marker', async () => {
+  it('accepts /sayat with a GIF query, stores GIF metadata, and renders list entries with GIF marker', async () => {
     const guildId = uniqueId('guild');
     const channelId = uniqueId('channel');
     const ownerId = uniqueId('owner');
@@ -634,6 +700,155 @@ describe('Discord interaction worker', () => {
     expect(schedulerData.totalJobs).toBe(0);
   });
 
+  it('normalizes omitted, empty, whitespace, and valid optional GIF queries', () => {
+    const cases = [
+      { input: undefined, normalized: null, error: null },
+      { input: '', normalized: null, error: null },
+      { input: '   ', normalized: null, error: null },
+      { input: '  cat dance  ', normalized: 'cat dance', error: null },
+      {
+        input: 'this query is definitely too long',
+        normalized: 'this query is definitely too long',
+        error: 'Search string too long (max 20 chars).',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const options = { extraData: { gif: testCase.input } };
+      expect(evalGifOptions(options)).toBe(testCase.error);
+      expect(options.extraData.gif).toBe(testCase.normalized);
+    }
+  });
+
+  it('dead-letters a terminal delivery failure and continues with later due jobs', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    const failedChannelId = uniqueId('deleted-channel');
+    const liveChannelId = uniqueId('live-channel');
+    const sentChannels = [];
+
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = String(input);
+      if (url.includes(`/channels/${failedChannelId}/messages`)) {
+        return jsonResponse({ message: 'Unknown Channel' }, 404);
+      }
+      if (url.includes(`/channels/${liveChannelId}/messages`)) {
+        sentChannels.push(liveChannelId);
+        return jsonResponse({ id: uniqueId('message') });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    }));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const nowMs = Date.now();
+      await state.storage.put('jobs', [
+        storedMessageJob({
+          id: 'terminal-job',
+          guildId,
+          channelId: failedChannelId,
+          runAtMs: nowMs - 2000,
+        }),
+        storedMessageJob({
+          id: 'later-job',
+          guildId,
+          channelId: liveChannelId,
+          runAtMs: nowMs - 1000,
+        }),
+      ]);
+
+      await instance.alarm();
+
+      expect(await state.storage.get('jobs')).toEqual([]);
+      expect(sentChannels).toEqual([liveChannelId]);
+
+      const deadLetters = await state.storage.get('deadLetters');
+      expect(deadLetters).toHaveLength(1);
+      expect(deadLetters[0]).toMatchObject({
+        id: 'terminal-job',
+        delivery: {
+          state: 'dead_letter',
+          attempts: 1,
+          lastError: {
+            code: 'discord_http_error',
+            metadata: { status: 404 },
+          },
+        },
+      });
+    });
+  });
+
+  it('explicitly re-arms retryable delivery failures with backoff', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+
+    vi.stubGlobal('fetch', vi.fn(async () => (
+      jsonResponse({ message: 'Temporary failure' }, 503)
+    )));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put('jobs', [
+        storedMessageJob({ id: 'retry-job', guildId }),
+      ]);
+
+      const beforeAlarm = Date.now();
+      await instance.alarm();
+
+      const jobs = await state.storage.get('jobs');
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({
+        id: 'retry-job',
+        delivery: {
+          state: 'retry_wait',
+          attempts: 1,
+          lastError: {
+            code: 'discord_http_error',
+            metadata: { status: 503 },
+          },
+        },
+      });
+      expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
+        beforeAlarm + 30_000,
+      );
+
+      const nextAlarm = await state.storage.getAlarm();
+      expect(nextAlarm).toBe(jobs[0].delivery.nextAttemptAtMs);
+      await state.storage.deleteAlarm();
+    });
+  });
+
+  it('dead-letters retryable failures after the fifth attempt', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+
+    vi.stubGlobal('fetch', vi.fn(async () => (
+      jsonResponse({ message: 'Temporary failure' }, 503)
+    )));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put('jobs', [
+        storedMessageJob({
+          id: 'exhausted-job',
+          guildId,
+          attempts: 4,
+        }),
+      ]);
+
+      await instance.alarm();
+
+      expect(await state.storage.get('jobs')).toEqual([]);
+      const deadLetters = await state.storage.get('deadLetters');
+      expect(deadLetters).toHaveLength(1);
+      expect(deadLetters[0]).toMatchObject({
+        id: 'exhausted-job',
+        delivery: {
+          state: 'dead_letter',
+          attempts: 5,
+          lastError: { code: 'discord_http_error' },
+        },
+      });
+    });
+  });
+
   it('composes GIF deliveries using the KLIPY result URL and safe mentions', async () => {
     const fetchMock = vi.fn(async (input) => {
       const url = typeof input === 'string' ? input : String(input);
@@ -653,12 +868,12 @@ describe('Discord interaction worker', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const composed = await gifMessageCompose(
-      { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
       {
         innerContent: gifMessageInnerContent,
         allowedMentions: () => ({ parse: [] }),
         outerContent: gifMessageOuterContent,
       },
+      { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
       { subject: 'dance!', extraData: { gif: 'dance cat' } },
     );
 
@@ -715,8 +930,8 @@ describe('Discord interaction worker', () => {
     const composedMessages = await Promise.all(
       Array.from({ length: 10 }, (_, index) => (
         gifMessageCompose(
-          { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
           composer,
+          { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
           { subject: `dance ${index}`, extraData: { gif: 'dance cat' } },
         )
       )),
