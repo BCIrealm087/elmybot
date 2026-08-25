@@ -1,4 +1,4 @@
-import { jsonResponse } from "./common.js";
+import { jsonResponse, logError } from "./common.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -178,9 +178,18 @@ export class GroupConfig {
     try {
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
-      return (e instanceof GroupConfigUserFacingError)
-        ? jsonResponse({ userFacingError: e.message }, e.status)
-        : jsonResponse({ error: "Unknown error." }, 500);
+      if (e instanceof GroupConfigUserFacingError) {
+        return jsonResponse({ userFacingError: e.message }, e.status);
+      }
+
+      const correlationId = request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+      logError("group_config.request_failed", {
+        platform: "shared",
+        correlationId,
+        method: request.method,
+        route: url.pathname
+      }, e);
+      return jsonResponse({ error: "Unknown error.", correlationId }, 500);
     }
   }
 }

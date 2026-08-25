@@ -221,6 +221,29 @@ const schedulingCommandsByKind = Object.freeze(Object.fromEntries(
   ])
 ));
 
+function internalRequestHeaders(interaction) {
+  return {
+    "content-type": "application/json",
+    "x-correlation-id": `discord:${interaction.id ?? "unknown"}`
+  };
+}
+
+async function serviceFailure(response, serviceName) {
+  const responseText = await response.text();
+  let data = null;
+  try {
+    data = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    // Unexpected bodies are not reflected to Discord or copied into logs.
+  }
+
+  if (data?.userFacingError) return ephemeralData(data.userFacingError);
+
+  const error = new Error(`${serviceName} returned an unexpected response.`);
+  error.status = response.status;
+  throw error;
+}
+
 export const discordSchedulingHandlers = Object.freeze(Object.fromEntries(
   Object.values(doAtSchedulingCommands).map((definition) => [
     definition.extra.jobKind,
@@ -258,14 +281,13 @@ export const commands = {
 
       const r = await stub.fetch("https://config/get", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: internalRequestHeaders(interaction),
         body: JSON.stringify({
           key
         })
       });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Group configuration service");
       }
       const data = await r.json();
 
@@ -287,10 +309,11 @@ export const commands = {
       const id = env.CONFIG.idFromName(interaction.guild_id);
       const stub = env.CONFIG.get(id);
 
-      const r = await stub.fetch("https://config/list");
+      const r = await stub.fetch("https://config/list", {
+        headers: internalRequestHeaders(interaction)
+      });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Group configuration service");
       }
       const data = await r.json();
 
@@ -320,15 +343,14 @@ export const commands = {
 
       const r = await stub.fetch("https://config/append-to", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: internalRequestHeaders(interaction),
         body: JSON.stringify({
           key: "allowedRoles",
           value: role
         })
       });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Group configuration service");
       }
       return ephemeralData(`Successfully added <@&${role}> to allowed roles.`);
     }
@@ -350,15 +372,14 @@ export const commands = {
 
       const r = await stub.fetch("https://config/remove-from", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: internalRequestHeaders(interaction),
         body: JSON.stringify({
           key: "allowedRoles",
           value: role
         })
       });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Group configuration service");
       }
       return ephemeralData(`Successfully removed <@&${role}> from allowed roles.`);
     }
@@ -375,10 +396,11 @@ export const commands = {
         `discord:guild:${interaction.guild_id}`
       );
       const stub = env.SCHEDULER.get(id);
-      const r = await stub.fetch("https://do/list");
+      const r = await stub.fetch("https://do/list", {
+        headers: internalRequestHeaders(interaction)
+      });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Scheduling service");
       }
       const data = await r.json();
 
@@ -416,12 +438,11 @@ export const commands = {
       
       const r = await stub.fetch("https://do/cancel", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: internalRequestHeaders(interaction),
         body: JSON.stringify({ jobId })
       });
       if (!r.ok) {
-        const errData = await r.json().catch(() => null);
-        return ephemeralData(errData?.userFacingError ?? "Unknown error.");
+        return await serviceFailure(r, "Scheduling service");
       }
       const data = await r.json();
       return ephemeralData(`🗑️ Cancelled job \`${jobId}\` scheduled for <t:${data.timestamp}:F>.`);

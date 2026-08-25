@@ -92,13 +92,21 @@ export async function getPerms(interaction, env) {
   // Guild-specific allowlisted roles live in the GroupConfig Durable Object.
   const r = await stub.fetch("https://config/get", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "x-correlation-id": `discord:${interaction.id ?? "unknown"}`
+    },
     body: JSON.stringify({
       key: "allowedRoles"
     })
   });
 
-  if (!r.ok) throw new Error(`Unknown Guild Configuration Service response error: status: ${r.status}\ncontent:${await r.text()}`);
+  if (!r.ok) {
+    await r.text();
+    const error = new Error("Group configuration service returned an unexpected response.");
+    error.status = r.status;
+    throw error;
+  }
   const data = await r.json();
   if (Array.isArray(data.value) && data.value.length > 0) {
     const allowedRoles = new Set(data.value);

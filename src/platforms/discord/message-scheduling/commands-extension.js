@@ -1,4 +1,5 @@
 import { getOption, ephemeralData } from "../common.js";
+import { logError, unknownErrorMessage } from "../../../common.js";
 
 class SchedulingUserFacingError extends Error {
   constructor(message) {
@@ -11,6 +12,7 @@ class SchedulingUserFacingError extends Error {
 
 export async function scheduleMessage(interaction, env, doAtHandler) {
   let schedulingResult;
+  const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
   try {
     const interactionId = String(interaction.id ?? "").trim();
     if (!interactionId) {
@@ -40,7 +42,10 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
 
     const r = await stub.fetch("https://do/schedule", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-correlation-id": correlationId
+      },
       body: JSON.stringify({
         ...options,
         kind: doAtHandler.kind,
@@ -49,10 +54,19 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       })
     });
     if (!r.ok) {
-      const errData = await r.json();
+      const responseText = await r.text();
+      let errData = null;
+      try {
+        errData = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        // The status and content type are sufficient for safe diagnostics.
+      }
       throw errData?.userFacingError
         ? new SchedulingUserFacingError(errData.userFacingError)
-        : new Error(`Unknown Scheduling Service response error: status: ${r.status}\ncontent:${await r.text()}`);
+        : Object.assign(
+          new Error("Scheduling service returned an unexpected response."),
+          { status: r.status }
+        );
     }
     const data = await r.json();
     schedulingResult = ephemeralData(
@@ -61,7 +75,18 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       `\nJob ID: \`${data.id}\``,
     );
   } catch(e) {
-    schedulingResult = ephemeralData((e instanceof SchedulingUserFacingError) ? e.message : "Unknown error.");
+    if (e instanceof SchedulingUserFacingError) {
+      schedulingResult = ephemeralData(e.message);
+    } else {
+      logError("discord.scheduling_failed", {
+        platform: "discord",
+        correlationId,
+        groupId: interaction.guild_id ?? null,
+        command: interaction.data?.name ?? null,
+        jobKind: doAtHandler.kind
+      }, e);
+      schedulingResult = ephemeralData(unknownErrorMessage(correlationId));
+    }
   }
   return schedulingResult;
 }

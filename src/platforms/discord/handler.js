@@ -3,6 +3,7 @@ import nacl from "tweetnacl";
 import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
 import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
+import { logError, unknownErrorMessage } from "../../common.js";
 
 /**
  * Entrypoint for Discord interactions.
@@ -80,8 +81,10 @@ async function editOriginalInteractionResponse(interaction, messageData) {
   });
 
   if (!r.ok) {
-    // Last resort logging; the user won't see this if patch fails.
-    console.error("Failed to edit @original:", r.status, await r.text());
+    await r.text();
+    const error = new Error("Discord rejected the deferred response edit.");
+    error.status = r.status;
+    throw error;
   }
 }
 
@@ -94,6 +97,7 @@ class CommandUserFacingError extends Error {
 async function handleCommand(interaction, env, command) {
   let commandResult;
   const def = command.definition;
+  const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
   try {
     if (def.guild) {
       // Guild-only commands rely on guild-scoped Durable Objects and
@@ -112,7 +116,17 @@ async function handleCommand(interaction, env, command) {
     }
     commandResult = await def.exec(interaction, env, command.name);
   } catch (e) {
-    commandResult = ephemeralData((e instanceof CommandUserFacingError) ? e.message : "Unknown error.");
+    if (e instanceof CommandUserFacingError) {
+      commandResult = ephemeralData(e.message);
+    } else {
+      logError("discord.command_failed", {
+        platform: "discord",
+        correlationId,
+        groupId: interaction.guild_id ?? null,
+        command: command.name
+      }, e);
+      commandResult = ephemeralData(unknownErrorMessage(correlationId));
+    }
   }
   return commandResult; // expected to satisfy the 'data' field of the json response to be sent back to the discord API
 }
@@ -165,6 +179,12 @@ export async function handleDiscordRequest(request, env, ctx) {
   ctx.waitUntil(
     handleCommand(interaction, env, command)
       .then(commandResult => editOriginalInteractionResponse(interaction, commandResult))
+      .catch(error => logError("discord.deferred_response_failed", {
+        platform: "discord",
+        correlationId: `discord:${interaction.id ?? "unknown"}`,
+        groupId: interaction.guild_id ?? null,
+        command: command.name
+      }, error))
   );
   return deferredEphemeral();
 }

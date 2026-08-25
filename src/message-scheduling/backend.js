@@ -1,4 +1,4 @@
-import { jsonResponse } from "../common.js";
+import { jsonResponse, logError } from "../common.js";
 
 // Durable Object environment: persistent job storage + alarms.
 
@@ -285,9 +285,18 @@ export class GuildSchedulerBackend {
     try {
       return await pathHandlers.base(this, request, pathHandler);
     } catch (e) {
-      return (e instanceof SchedulingBackendUserFacingError)
-        ? jsonResponse({ userFacingError: e.message }, e.status)
-        : jsonResponse({ error: "Unknown error." }, 500);
+      if (e instanceof SchedulingBackendUserFacingError) {
+        return jsonResponse({ userFacingError: e.message }, e.status);
+      }
+
+      const correlationId = request.headers.get("x-correlation-id") ?? crypto.randomUUID();
+      logError("scheduler.request_failed", {
+        platform: "shared",
+        correlationId,
+        method: request.method,
+        route: url.pathname
+      }, e);
+      return jsonResponse({ error: "Unknown error.", correlationId }, 500);
     }
   }
 
@@ -391,6 +400,16 @@ export class GuildSchedulerBackend {
   async failOccurrence(job, error) {
     const failedAtMs = Date.now();
     const failure = deliveryFailure(error);
+
+    logError("scheduler.delivery_failed", {
+      platform: String(job.kind ?? "unknown").split(".")[0],
+      correlationId: job.sourceEventId ?? job.id,
+      groupId: job.extraData?.guildId ?? null,
+      jobKind: job.kind ?? null,
+      jobId: job.id ?? null,
+      attempt: job.delivery?.attempts ?? 1,
+      retryable: failure.retryable
+    }, error);
 
     await this.state.storage.transaction(async (txn) => {
       const jobs = (await txn.get("jobs")) ?? [];

@@ -9,6 +9,7 @@ import {
 import worker from '../src/index.js';
 import { createJobHandlerRegistry } from '../src/message-scheduling/index.js';
 import { DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
+import { scheduleMessage } from '../src/platforms/discord/message-scheduling/index.js';
 import {
   evalGifOptions,
   gifMessageCompose,
@@ -88,7 +89,7 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
+function mockDiscordApi({ ownerId = 'owner-id', patchStatus = 200 } = {}) {
   const patches = [];
   const sentMessages = [];
   const fetchMock = vi.fn(async (input, init = {}) => {
@@ -100,7 +101,7 @@ function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
 
     if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
       patches.push(JSON.parse(init.body));
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: patchStatus < 400 }, patchStatus);
     }
 
     if (url.includes('/channels/') && url.endsWith('/messages')) {
@@ -339,6 +340,119 @@ describe('Discord interaction worker', () => {
       { [kind]: handler },
       { [kind]: handler },
     )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
+  });
+
+  it('reads an unexpected scheduling response once and logs correlated context', async () => {
+    const interaction = buildSlashInteraction({
+      id: 'interaction-schedule-error',
+      name: 'sayat',
+    });
+    const responseText = vi.fn(async () => 'upstream failure');
+    const scheduleFetch = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      text: responseText,
+    }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const scheduler = {
+      idFromName: vi.fn(() => 'scheduler-id'),
+      get: vi.fn(() => ({ fetch: scheduleFetch })),
+    };
+
+    const result = await scheduleMessage(interaction, { SCHEDULER: scheduler }, {
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      getOptions: () => ({
+        subject: 'message',
+        timestamp: Math.floor(Date.now() / 1000) + 3600,
+        repeats: false,
+      }),
+      eval: () => null,
+      composer: { repeatDescription: () => 'daily' },
+    });
+
+    expect(responseText).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(
+      'Unknown error. Reference: `discord:interaction-schedule-error`.',
+    );
+    expect(scheduleFetch.mock.calls[0][1].headers['x-correlation-id'])
+      .toBe('discord:interaction-schedule-error');
+
+    const log = JSON.parse(consoleError.mock.calls[0][0]);
+    expect(log).toMatchObject({
+      event: 'discord.scheduling_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-schedule-error',
+      groupId: interaction.guild_id,
+      command: 'sayat',
+      jobKind: DISCORD_JOB_KINDS.SEND_AT,
+      error: { status: 503 },
+    });
+  });
+
+  it('logs unexpected command failures and returns a safe reference', async () => {
+    const guildId = uniqueId('guild');
+    const ownerId = uniqueId('owner');
+    const interaction = buildSlashInteraction({
+      id: 'interaction-command-error',
+      name: 'config_list_entries',
+      guildId,
+      userId: ownerId,
+    });
+    const patches = [];
+    vi.stubGlobal('fetch', vi.fn(async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://discord.com/api/v10/guilds/')) {
+        throw new Error('owner lookup failed');
+      }
+      if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
+        patches.push(JSON.parse(init.body));
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    expect(patches[0].content).toBe(
+      'Unknown error. Reference: `discord:interaction-command-error`.',
+    );
+    const log = JSON.parse(consoleError.mock.calls[0][0]);
+    expect(log).toMatchObject({
+      event: 'discord.command_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-command-error',
+      groupId: guildId,
+      command: 'config_list_entries',
+      error: { name: 'Error', message: 'owner lookup failed' },
+    });
+  });
+
+  it('observes deferred response edit failures through the waitUntil chain', async () => {
+    const guildId = uniqueId('guild');
+    const ownerId = uniqueId('owner');
+    mockDiscordApi({ ownerId, patchStatus: 500 });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const interaction = buildSlashInteraction({
+      id: 'interaction-patch-error',
+      name: 'config_list_entries',
+      guildId,
+      userId: ownerId,
+    });
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    const logs = consoleError.mock.calls.map(([entry]) => JSON.parse(entry));
+    expect(logs).toContainEqual(expect.objectContaining({
+      event: 'discord.deferred_response_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-patch-error',
+      groupId: guildId,
+      command: 'config_list_entries',
+      error: expect.objectContaining({ status: 500 }),
+    }));
   });
 
   it('stores scheduled jobs sorted by run time and supports cancellation through the scheduler DO', async () => {
@@ -786,6 +900,7 @@ describe('Discord interaction worker', () => {
     const failedChannelId = uniqueId('deleted-channel');
     const liveChannelId = uniqueId('live-channel');
     const sentChannels = [];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     vi.stubGlobal('fetch', vi.fn(async (input) => {
       const url = String(input);
@@ -832,6 +947,23 @@ describe('Discord interaction worker', () => {
             code: 'discord_http_error',
             metadata: { status: 404 },
           },
+        },
+      });
+
+      const log = JSON.parse(consoleError.mock.calls[0][0]);
+      expect(log).toMatchObject({
+        event: 'scheduler.delivery_failed',
+        platform: 'discord',
+        correlationId: 'terminal-job',
+        groupId: guildId,
+        jobKind: DISCORD_JOB_KINDS.SEND_AT,
+        jobId: 'terminal-job',
+        attempt: 1,
+        retryable: false,
+        error: {
+          name: 'DeliveryError',
+          code: 'discord_http_error',
+          metadata: { status: 404 },
         },
       });
     });

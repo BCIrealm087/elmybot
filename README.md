@@ -164,6 +164,18 @@ marker immediately after a successful send, but Discord does not offer an
 idempotency key for channel-message creation. A crash after Discord accepts a
 message but before the marker is stored can therefore produce a duplicate.
 
+#### Diagnostics
+
+- Unexpected failures are logged as structured JSON with an event name,
+  platform, correlation ID, and the relevant command or job context.
+- Delivery failure logs include the group, job kind, job ID, attempt count, and
+  retry classification; Discord interaction tokens and response bodies are not
+  logged.
+- Safe user-facing errors include the Discord interaction correlation ID so an
+  invocation can be matched to Worker logs.
+- Deferred interaction response failures are observed and logged through the
+  `waitUntil` promise chain.
+
 #### Mention policy
 
 - Role ping jobs mention only the configured role via `allowed_mentions.roles`.
