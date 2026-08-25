@@ -1,4 +1,6 @@
-export { jsonResponse } from "../../common.js";
+import { jsonResponse } from "../../common.js";
+
+export { jsonResponse };
 
 /**
  * Helper to pull a single option value by name from an interaction.
