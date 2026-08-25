@@ -1,9 +1,10 @@
 export const evalGifOptions = (options) => {
-  const searchString = options.extraData.gif;
-  if (searchString === null || searchString === undefined) return null;
-  return searchString.length === 0 ? "Search string cannot be empty."
-  : searchString.length > 20 ? "Search string too long (max 20 chars)."
-  : null;
+  const searchString = String(options.extraData.gif ?? "").trim();
+  options.extraData.gif = searchString || null;
+
+  return searchString.length > 20
+    ? "Search string too long (max 20 chars)."
+    : null;
 }
 
 export const gifMessageInnerContent = (j) => `\`${j.subject}\` (with \`${j.extraData.gif}\` gif)`;
