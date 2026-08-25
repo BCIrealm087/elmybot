@@ -184,6 +184,10 @@ message but before the marker is stored can therefore produce a duplicate.
 - Delivery failure logs include the group, job kind, job ID, attempt count, and
   retry classification; Discord interaction tokens and response bodies are not
   logged.
+- `/doat_dead_letters` shows an authorized user the five most recent failed
+  deliveries, including failure time, job kind and ID, channel, attempts, and
+  the stored error summary. The response is ephemeral and does not expose the
+  scheduled message body.
 - Safe user-facing errors include the Discord interaction correlation ID so an
   invocation can be matched to Worker logs.
 - Deferred interaction response failures are observed and logged through the

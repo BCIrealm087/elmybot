@@ -26,6 +26,7 @@ import {
   gifMessageInnerContent,
   gifMessageOuterContent,
 } from '../src/platforms/discord/gifs-extension.js';
+import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
 
 function toHex(bytes) {
   return Array.from(bytes)
@@ -398,6 +399,7 @@ describe('Discord interaction worker', () => {
     expect(commands.config_disallow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
     expect(commands.sayat.guild.capability).toBe(CAPABILITIES.SCHEDULE_CREATE);
     expect(commands.doat_list.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
+    expect(commands.doat_dead_letters.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
     expect(commands.doat_cancel.guild.capability).toBe(CAPABILITIES.SCHEDULE_CANCEL);
 
     const missingPolicy = await checkPermissions({}, {}, {
@@ -1159,6 +1161,42 @@ describe('Discord interaction worker', () => {
         },
       });
     });
+
+    const deadLettersResponse = await stub.fetch('https://do/dead-letters');
+    expect(deadLettersResponse.status).toBe(200);
+    const deadLettersData = await deadLettersResponse.json();
+    expect(deadLettersData.totalDeadLetters).toBe(1);
+    expect(deadLettersData.deadLettersPreview).toHaveLength(1);
+    expect(deadLettersData.deadLettersPreview[0]).toMatchObject({
+      job: {
+        id: 'terminal-job',
+        delivery: {
+          state: 'dead_letter',
+          lastError: { code: 'discord_http_error' },
+        },
+      },
+    });
+
+    const commandResult = await commands.doat_dead_letters.exec({
+      id: uniqueId('interaction'),
+      guild_id: guildId,
+    }, env);
+    expect(commandResult.flags).toBe(64);
+    expect(commandResult.content).toContain('Failed scheduled deliveries (1 total, showing 1)');
+    expect(commandResult.content).toContain('terminal-job');
+    expect(commandResult.content).toContain('discord_http_error');
+  });
+
+  it('fails command registration when Discord returns a non-2xx response', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ message: 'Unauthorized' }, 401));
+
+    await expect(putDiscordCommands({
+      appId: 'app-id',
+      token: 'token',
+      commandDescriptors: [],
+      fetchImpl,
+      log: () => {},
+    })).rejects.toThrow('Discord command registration failed with status 401.');
   });
 
   it('explicitly re-arms retryable delivery failures with backoff', async () => {

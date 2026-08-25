@@ -73,6 +73,7 @@ const RETRY_BASE_DELAY_MS = 30_000;
 const RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
 const MAX_JOBS_PER_ALARM = 25;
 const MAX_DEAD_LETTERS = 100;
+const MAX_DEAD_LETTERS_PREVIEW = 5;
 const MAX_SCHEDULE_SOURCES = 10_000;
 
 function isPlainObject(value) {
@@ -330,6 +331,22 @@ const requestHandlers = {
       }));
 
       return jsonResponse({ totalJobs, jobsPreview });
+    },
+    "/dead-letters": async ({ state }) => {
+      const totalDeadLetters = state.storage.sql.exec(
+        "SELECT COUNT(*) AS count FROM scheduler_dead_letters"
+      ).one().count;
+      const deadLettersPreview = state.storage.sql.exec(`
+        SELECT failed_at_ms, job_json
+        FROM scheduler_dead_letters
+        ORDER BY failed_at_ms DESC, dead_letter_id DESC
+        LIMIT ?
+      `, MAX_DEAD_LETTERS_PREVIEW).toArray().map(row => ({
+        failedAtMs: row.failed_at_ms,
+        job: decodeJobRow(row)
+      }));
+
+      return jsonResponse({ totalDeadLetters, deadLettersPreview });
     }
   },
   "POST": {

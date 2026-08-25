@@ -297,6 +297,13 @@ async function serviceFailure(response, serviceName) {
   throw error;
 }
 
+function compactDiagnosticText(value, maxLength = 120) {
+  return String(value ?? "unknown")
+    .replaceAll("`", "'")
+    .replace(/\s+/g, " ")
+    .slice(0, maxLength);
+}
+
 export const discordSchedulingHandlers = Object.freeze(Object.fromEntries(
   Object.values(doAtSchedulingCommands).map((definition) => [
     definition.extra.jobKind,
@@ -472,7 +479,47 @@ export const commands = {
 
       return ephemeralData(`📌 Scheduled jobs (${data.totalJobs} total, showing ${data.jobsPreview.length}):\n${shown}`);
     }
-  }, 
+  },
+
+  "doat_dead_letters": {
+    description: "Show recent scheduled-message delivery failures.",
+    guild: {
+      capability: CAPABILITIES.SCHEDULE_VIEW
+    },
+    deferred: true,
+    exec: async (interaction, env) => {
+      const id = env.SCHEDULER.idFromName(
+        `discord:guild:${interaction.guild_id}`
+      );
+      const stub = env.SCHEDULER.get(id);
+      const r = await stub.fetch("https://do/dead-letters", {
+        headers: internalRequestHeaders(interaction)
+      });
+      if (!r.ok) {
+        return await serviceFailure(r, "Scheduling service");
+      }
+      const data = await r.json();
+
+      if (data.totalDeadLetters === 0) {
+        return ephemeralData("No recent failed scheduled-message deliveries.");
+      }
+
+      const shown = data.deadLettersPreview.map(({ failedAtMs, job }) => {
+        const failedAt = Math.floor(failedAtMs / 1000);
+        const error = job.delivery?.lastError;
+        const channelId = job.extraData?.channelId;
+        return `• <t:${failedAt}:F> — \`${compactDiagnosticText(job.kind, 80)}\`` +
+          (channelId ? ` in <#${channelId}>` : "") +
+          ` — ${job.delivery?.attempts ?? 0} attempt(s)` +
+          ` — \`${compactDiagnosticText(error?.code)}\`: ${compactDiagnosticText(error?.message)}` +
+          ` — id: \`${compactDiagnosticText(job.id, 80)}\``;
+      }).join("\n");
+
+      return ephemeralData(
+        `💀 Failed scheduled deliveries (${data.totalDeadLetters} total, showing ${data.deadLettersPreview.length}):\n${shown}`
+      );
+    }
+  },
 
   "doat_cancel": {
     description: "Cancel a scheduled message by job ID.",

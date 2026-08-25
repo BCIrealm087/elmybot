@@ -3,6 +3,7 @@
 import "dotenv/config";
 
 import { commands } from "./commands.js";
+import { putDiscordCommands } from "./register-commands-request.js";
 
 const args = process.argv.slice(2);
 const cliArgs = {
@@ -11,8 +12,10 @@ const cliArgs = {
 const config = { };
 args.forEach(arg=>{
   let argInfo;
-  if (!(argInfo = cliArgs[arg])) throw `Unknown CLI argument: \`${arg}\`\nAvailable arguments: \`${Object.keys(cliArgs)}\``;
-  
+  if (!(argInfo = cliArgs[arg])) {
+    throw new Error(`Unknown CLI argument: \`${arg}\`\nAvailable arguments: \`${Object.keys(cliArgs)}\``);
+  }
+
   config[argInfo.name] = true;
 });
 
@@ -28,7 +31,9 @@ const token = process.env[tokenKey];
 const envMissing = [];
 if (!appId) envMissing.push(appIdKey);
 if (!token) envMissing.push(tokenKey);
-if (envMissing.length > 0) throw new Error(`Some required environment variables are missing: ${envMissing.join(", ")}`);
+if (envMissing.length > 0) {
+  throw new Error(`Some required environment variables are missing: ${envMissing.join(", ")}`);
+}
 
 /**
  * Global slash commands visible in every server the bot is installed in.
@@ -40,12 +45,4 @@ const commandDescriptors = Object.entries(commands).map(([name, { description="N
   options
 }));
 
-const url = `https://discord.com/api/v10/applications/${appId}/commands`;
-
-const r = await fetch(url, {
-  method: "PUT",
-  headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
-  body: JSON.stringify(commandDescriptors),
-});
-
-console.log(r.status, await r.text());
+await putDiscordCommands({ appId, token, commandDescriptors });
