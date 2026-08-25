@@ -258,6 +258,14 @@ Each guild gets one `GroupConfig` Durable Object instance. It stores per-guild c
    npm test
    ```
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs automatically for pushes to
+`codex-platform-separation` and for pull requests. It installs locked
+dependencies, runs the complete test suite, checks JavaScript syntax, and runs
+a non-deploying Wrangler dry run. It can also be started manually after the
+workflow is present on the repository's default branch.
+
 ## Cloudflare deployment notes
 
 - Durable Object bindings:
