@@ -12,9 +12,16 @@ class SchedulingUserFacingError extends Error {
 export async function scheduleMessage(interaction, env, doAtHandler) {
   let schedulingResult;
   try {
+    const interactionId = String(interaction.id ?? "").trim();
+    if (!interactionId) {
+      throw new Error("Discord interaction lacks an ID for scheduling idempotency.");
+    }
+
     // Route all scheduling through the guild-scoped scheduler DO so storage and
     // alarm ownership stay in one place.
-    const id = env.SCHEDULER.idFromName(interaction.guild_id);
+    const id = env.SCHEDULER.idFromName(
+      `discord:guild:${interaction.guild_id}`
+    );
     const stub = env.SCHEDULER.get(id);
 
     const options = doAtHandler.getOptions(interaction);
@@ -36,7 +43,8 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ...options,
-        type: doAtHandler.type,
+        kind: doAtHandler.kind,
+        sourceEventId: `discord:${interactionId}`,
         createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null
       })
     });

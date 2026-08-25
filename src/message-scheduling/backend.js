@@ -2,17 +2,32 @@ import { jsonResponse } from "../common.js";
 
 // Durable Object environment: persistent job storage + alarms.
 
-// Scheduler behavior is registered from command definitions so the DO can
-// format jobs and compute repeat times without duplicating command logic.
-const doAtTypeHandlers = { };
+export function createJobHandlerRegistry(...handlerSets) {
+  const registry = Object.create(null);
 
-export function registerDoAtHandlers(definitions) {
-  for (const [key, { extra }] of Object.entries(definitions)) {
-    doAtTypeHandlers[key] = {
-      deliver: extra.composer.composeAndSend,
-      calcScheduleTime: extra.calcScheduleTime
-    };
+  for (const handlerSet of handlerSets) {
+    for (const [kind, handler] of Object.entries(handlerSet)) {
+      if (registry[kind]) {
+        throw new Error(`Duplicate scheduling job kind: \`${kind}\`.`);
+      }
+      if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*\.v\d+$/.test(kind)) {
+        throw new Error(`Scheduling job kind must be namespaced and versioned: \`${kind}\`.`);
+      }
+      if (
+        typeof handler?.deliver !== "function" ||
+        typeof handler?.calcScheduleTime !== "function"
+      ) {
+        throw new Error(`Invalid scheduling handler for job kind: \`${kind}\`.`);
+      }
+
+      registry[kind] = Object.freeze({
+        deliver: handler.deliver,
+        calcScheduleTime: handler.calcScheduleTime
+      });
+    }
   }
+
+  return Object.freeze(registry);
 }
 
 class SchedulingBackendUserFacingError extends Error {
@@ -45,6 +60,7 @@ const RETRY_BASE_DELAY_MS = 30_000;
 const RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
 const MAX_JOBS_PER_ALARM = 25;
 const MAX_DEAD_LETTERS = 100;
+const MAX_SCHEDULE_SOURCES = 10_000;
 
 function deliveryAttemptAt(job) {
   const nextAttemptAtMs = job.delivery?.nextAttemptAtMs;
@@ -115,10 +131,20 @@ function pruneDelivered(delivered, nowMs) {
   }
 }
 
+function pruneScheduleSources(sources) {
+  const entries = Object.entries(sources);
+  if (entries.length <= MAX_SCHEDULE_SOURCES) return;
+
+  entries.sort(([, a], [, b]) => a.createdAtMs - b.createdAtMs);
+  for (const [sourceEventId] of entries.slice(0, entries.length - MAX_SCHEDULE_SOURCES)) {
+    delete sources[sourceEventId];
+  }
+}
+
 const requestHandlers = {
   "GET": {
-    base: async (state, _, pathHandler) => pathHandler(state), 
-    "/list": async (state) => {
+    base: async (scheduler, _, pathHandler) => pathHandler(scheduler),
+    "/list": async ({ state }) => {
       // Return a user-facing subset of each job rather than the full stored
       // payload.
       const jobs = (await state.storage.get("jobs")) ?? [];
@@ -139,53 +165,72 @@ const requestHandlers = {
           subject: j.subject,
           repeats: j.repeats,
           extraData: j.extraData,
-          type: j.type
+          kind: j.kind
         }))
       });
     }
   },
   "POST" : {
-    base: async (state, request, pathHandler) => pathHandler(state, await request.json()), 
-    "/schedule": async (state, job) => {
-      const handler = doAtTypeHandlers[job.type];
-      if (!handler) throw new SchedulingBackendUserFacingError("Invalid scheduling job type.", 422);
+    base: async (scheduler, request, pathHandler) => pathHandler(scheduler, await request.json()),
+    "/schedule": async ({ state, jobHandlers }, job) => {
+      const handler = jobHandlers[job.kind];
+      if (!handler) throw new SchedulingBackendUserFacingError("Invalid scheduling job kind.", 422);
+      const sourceEventId = String(job.sourceEventId ?? "").trim();
+      if (!sourceEventId) {
+        throw new SchedulingBackendUserFacingError("A source event ID is required.", 422);
+      }
 
-      const id = crypto.randomUUID();
+      const result = await state.storage.transaction(async (txn) => {
+        let scheduleSources = (await txn.get("scheduleSources")) ?? {};
+        if (typeof scheduleSources !== "object" || scheduleSources === null) {
+          scheduleSources = {};
+        }
 
-      // The worker validates inputs first, but the DO still normalizes and
-      // validates the scheduled timestamp defensively.
-      const [ts, runAtMs] = handler.calcScheduleTime(job);
-      const j = {
-        id,
-        type: job.type,
-        subject: job.subject,
-        timestamp: ts,
-        runAtMs: runAtMs,
-        extraData: job.extraData,
-        repeats: job.repeats === true, // avoid Boolean("false") pitfalls
-        createdBy: job.createdBy ?? null,
-        delivery: pendingDelivery(runAtMs)
-      };
+        const existing = scheduleSources[sourceEventId];
+        if (existing) return existing;
 
-      // Atomic: read -> modify -> write jobs.
-      await state.storage.transaction(async (txn) => {
+        // The adapter validates inputs first, but the DO still owns the final
+        // schedule calculation and persistence boundary.
+        const [timestamp, runAtMs] = handler.calcScheduleTime(job);
+        const scheduledJob = {
+          id: crypto.randomUUID(),
+          kind: job.kind,
+          subject: job.subject,
+          timestamp,
+          runAtMs,
+          extraData: job.extraData,
+          repeats: job.repeats === true,
+          createdBy: job.createdBy ?? null,
+          sourceEventId,
+          delivery: pendingDelivery(runAtMs)
+        };
+
         const jobs = (await txn.get("jobs")) ?? [];
-        jobs.push(j);
+        jobs.push(scheduledJob);
         sortJobs(jobs);
         await txn.put("jobs", jobs);
+
+        const response = {
+          id: scheduledJob.id,
+          timestamp: scheduledJob.timestamp,
+          extraData: scheduledJob.extraData,
+          sourceEventId,
+          createdAtMs: Date.now()
+        };
+        scheduleSources[sourceEventId] = response;
+        pruneScheduleSources(scheduleSources);
+        await txn.put("scheduleSources", scheduleSources);
+
+        return response;
       });
 
       // Recompute from persisted state so concurrent requests cannot leave a
       // later alarm behind.
       await setNextAlarm(state);
 
-      return jsonResponse({
-        id: j.id,
-        timestamp: j.timestamp,
-        extraData: j.extraData
-      });
+      return jsonResponse(result);
     },
-    "/cancel": async (state, body) => {
+    "/cancel": async ({ state }, body) => {
       const jobId = String(body?.jobId ?? "").trim();
 
       if (!jobId) throw new SchedulingBackendUserFacingError("Provide a valid `job_id`.", 422);
@@ -218,13 +263,14 @@ const requestHandlers = {
   }
 }
 
-export class GuildScheduler {
+export class GuildSchedulerBackend {
   /**
    * Durable Object per guild responsible for storing and firing schedules.
    */
-  constructor(state, env) {
+  constructor(state, env, jobHandlers) {
     this.state = state;
     this.env = env;
+    this.jobHandlers = jobHandlers;
   }
 
   /**
@@ -237,7 +283,7 @@ export class GuildScheduler {
     const pathHandler = pathHandlers && pathHandlers[url.pathname];
     if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
-      return await pathHandlers.base(this.state, request, pathHandler);
+      return await pathHandlers.base(this, request, pathHandler);
     } catch (e) {
       return (e instanceof SchedulingBackendUserFacingError)
         ? jsonResponse({ userFacingError: e.message }, e.status)
@@ -262,7 +308,7 @@ export class GuildScheduler {
         const nowMs = Date.now();
         if (!job || deliveryAttemptAt(job) > nowMs) break;
 
-        const handler = doAtTypeHandlers[job.type];
+        const handler = this.jobHandlers[job.kind];
         const key = deliveryKey(job);
 
         if (delivered[key] !== undefined) {

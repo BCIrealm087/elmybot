@@ -1,9 +1,22 @@
 import { handleDiscordRequest } from "./platforms/discord/index.js";
+import { discordSchedulingHandlers } from "./platforms/discord/commands.js";
+import {
+  createJobHandlerRegistry,
+  GuildSchedulerBackend
+} from "./message-scheduling/index.js";
+
+const schedulerJobHandlers = createJobHandlerRegistry(
+  discordSchedulingHandlers
+);
 
 /**
  * Durable objects
  */
-export { GuildScheduler } from "./message-scheduling/index.js";
+export class GuildScheduler extends GuildSchedulerBackend {
+  constructor(state, env) {
+    super(state, env, schedulerJobHandlers);
+  }
+}
 export { GroupConfig } from "./group-configuration.js";
 
 /**

@@ -7,6 +7,8 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import worker from '../src/index.js';
+import { createJobHandlerRegistry } from '../src/message-scheduling/index.js';
+import { DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
   evalGifOptions,
   gifMessageCompose,
@@ -43,6 +45,7 @@ function uniqueId(prefix) {
 }
 
 function buildSlashInteraction({
+  id = uniqueId('interaction'),
   name,
   options = [],
   guildId = uniqueId('guild'),
@@ -54,6 +57,7 @@ function buildSlashInteraction({
   applicationId = 'app-id',
 } = {}) {
   return {
+    id,
     type: 2,
     application_id: applicationId,
     token,
@@ -112,7 +116,7 @@ function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
 }
 
 function schedulerStubFor(guildId) {
-  const id = env.SCHEDULER.idFromName(guildId);
+  const id = env.SCHEDULER.idFromName(`discord:guild:${guildId}`);
   return env.SCHEDULER.get(id);
 }
 
@@ -131,7 +135,7 @@ function storedMessageJob({
 } = {}) {
   return {
     id,
-    type: 'sayat',
+    kind: DISCORD_JOB_KINDS.SEND_AT,
     subject,
     timestamp: Math.floor(runAtMs / 1000),
     runAtMs,
@@ -320,6 +324,23 @@ describe('Discord interaction worker', () => {
     expect(await response.json()).toEqual({ value: [] });
   });
 
+  it('constructs an immutable job registry and rejects duplicate kinds', () => {
+    const handler = {
+      deliver: async () => {},
+      calcScheduleTime: () => [1, 1000],
+    };
+    const kind = 'test.message.send.v1';
+    const registry = createJobHandlerRegistry({ [kind]: handler });
+
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(Object.isFrozen(registry[kind])).toBe(true);
+    expect(registry[kind]).toMatchObject(handler);
+    expect(() => createJobHandlerRegistry(
+      { [kind]: handler },
+      { [kind]: handler },
+    )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
+  });
+
   it('stores scheduled jobs sorted by run time and supports cancellation through the scheduler DO', async () => {
     const guildId = uniqueId('guild');
     const stub = schedulerStubFor(guildId);
@@ -331,7 +352,8 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        type: 'sayat',
+        kind: DISCORD_JOB_KINDS.SEND_AT,
+        sourceEventId: 'discord:direct-later',
         subject: 'later',
         timestamp: laterTs,
         repeats: false,
@@ -348,7 +370,8 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        type: 'sayat',
+        kind: DISCORD_JOB_KINDS.SEND_AT,
+        sourceEventId: 'discord:direct-sooner',
         subject: 'sooner',
         timestamp: soonerTs,
         repeats: false,
@@ -379,6 +402,43 @@ describe('Discord interaction worker', () => {
     listData = await listResponse.json();
     expect(listData.totalJobs).toBe(1);
     expect(listData.jobsPreview[0].id).toBe(laterJob.id);
+  });
+
+  it('deduplicates scheduling transactionally by source event ID', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    const sourceEventId = `discord:${uniqueId('interaction')}`;
+    const timestamp = Math.floor(Date.now() / 1000) + 3600;
+    const requestBody = {
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      sourceEventId,
+      subject: 'only once',
+      timestamp,
+      repeats: false,
+      extraData: {
+        guildId,
+        channelId: uniqueId('channel'),
+        gif: null,
+      },
+    };
+
+    const schedule = () => stub.fetch('https://do/schedule', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    const first = await (await schedule()).json();
+    const replay = await (await schedule()).json();
+    expect(replay).toEqual(first);
+
+    const list = await (await stub.fetch('https://do/list')).json();
+    expect(list.totalJobs).toBe(1);
+    expect(list.jobsPreview[0]).toMatchObject({
+      id: first.id,
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      subject: 'only once',
+    });
   });
 
   it('defers /sayat, patches the original response, then supports listing and canceling the scheduled job', async () => {
@@ -540,7 +600,7 @@ describe('Discord interaction worker', () => {
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'role-authorized message',
       extraData: {
         guildId,
@@ -588,7 +648,7 @@ describe('Discord interaction worker', () => {
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat_random',
+      kind: DISCORD_JOB_KINDS.SEND_RANDOM,
       repeats: true,
       extraData: {
         minInterval: 600,
@@ -633,7 +693,7 @@ describe('Discord interaction worker', () => {
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'gif message title',
       extraData: { gif: 'cat dance' },
     });

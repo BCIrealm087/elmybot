@@ -3,13 +3,19 @@ import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
 import {
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
-  evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval, 
-  registerDoAtHandlers
+  evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval
 } from "./message-scheduling/index.js";
 import {
   evalGifOptions, gifMessageInnerContent, gifMessageOuterContent,
   gifMessageCompose
 } from "./gifs-extension.js";
+
+export const DISCORD_JOB_KINDS = Object.freeze({
+  PING_ROLE: "discord.message.ping-role.v1",
+  PING_USER: "discord.message.ping-user.v1",
+  SEND_AT: "discord.message.send-at.v1",
+  SEND_RANDOM: "discord.message.send-random.v1"
+});
 
 /**
  * Build a guild-only deferred scheduling command and register the metadata
@@ -65,10 +71,11 @@ function makeDoAt({
     sendMessage = defaultDoAtSend
   }, 
   scheduleCalculation = getDailyTimeFromTimestamp, 
-  doAtType = undefined
+  jobKind
 }) {
   if (!subjectOption && !optionsOverride) throw new Error("Either `subjectOption` or `optionsOverride` must be defined.");
   if (subjectOption && optionsOverride) throw new Error("Please only define one of `subjectOption` or `optionsOverride`, not both.");
+  if (!jobKind) throw new Error("A stable scheduling job kind is required.");
 
   const composer = {
     innerContent, allowedMentions, outerContent,
@@ -99,15 +106,16 @@ function makeDoAt({
       ...extraOptions
     ] : optionsOverride,
     deferred: true,
-    exec: (interaction, env, name) => {
+    exec: (interaction, env) => {
       return scheduleMessage(interaction, env, {
         getOptions,
         eval: evaluator,
-        type: doAtType || name,
+        kind: jobKind,
         composer
       });
     },
     extra: {
+      jobKind,
       composer,
       calcScheduleTime: scheduleCalculation
     }
@@ -116,6 +124,7 @@ function makeDoAt({
 
 const doAtSchedulingCommands = {
   "pingroleat": makeDoAt({
+    jobKind: DISCORD_JOB_KINDS.PING_ROLE,
     description: "Schedule a role ping at an Unix timestamp (seconds).",
     subjectOption: { name: "role", description: "Role to ping", type: 8, required: true },
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "role") ?? "") }),
@@ -128,6 +137,7 @@ const doAtSchedulingCommands = {
   }),
 
   "pingmeat": makeDoAt({
+    jobKind: DISCORD_JOB_KINDS.PING_USER,
     description: "Schedule an user ping at an Unix timestamp (seconds).",
     subjectOption: { name: "user", description: "User to ping", type: 6, required: true }, // USER
     getOptions: (interaction)=>({ ...getStandardOptions(interaction), subject: String(getOption(interaction, "user") ?? "") }),
@@ -140,6 +150,7 @@ const doAtSchedulingCommands = {
   }),
 
   "sayat": makeDoAt({
+    jobKind: DISCORD_JOB_KINDS.SEND_AT,
     description: "Schedule a message at an Unix timestamp (seconds).",
     subjectOption: { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
     extraOptions: [{ name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }],
@@ -160,6 +171,7 @@ const doAtSchedulingCommands = {
   }),
 
   "sayat_random": makeDoAt({
+    jobKind: DISCORD_JOB_KINDS.SEND_RANDOM,
     description: "Schedule a message to be sent after a semi-random interval (in seconds; default min. 2h max. 6h).",
     optionsOverride: [
       { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
@@ -202,7 +214,22 @@ const doAtSchedulingCommands = {
   })
 }
 
-registerDoAtHandlers(doAtSchedulingCommands);
+const schedulingCommandsByKind = Object.freeze(Object.fromEntries(
+  Object.values(doAtSchedulingCommands).map((definition) => [
+    definition.extra.jobKind,
+    definition
+  ])
+));
+
+export const discordSchedulingHandlers = Object.freeze(Object.fromEntries(
+  Object.values(doAtSchedulingCommands).map((definition) => [
+    definition.extra.jobKind,
+    Object.freeze({
+      deliver: definition.extra.composer.composeAndSend,
+      calcScheduleTime: definition.extra.calcScheduleTime
+    })
+  ])
+));
 
 // `exec` return values are Discord interaction `data` payloads, not full
 // `Response` instances.
@@ -344,7 +371,9 @@ export const commands = {
     },
     deferred: true,
     exec: async (interaction, env) => {
-      const id = env.SCHEDULER.idFromName(interaction.guild_id);
+      const id = env.SCHEDULER.idFromName(
+        `discord:guild:${interaction.guild_id}`
+      );
       const stub = env.SCHEDULER.get(id);
       const r = await stub.fetch("https://do/list");
       if (!r.ok) {
@@ -358,7 +387,7 @@ export const commands = {
       }
 
       const shown = data.jobsPreview.map(j => {
-        const handler = commands[j.type];
+        const handler = schedulingCommandsByKind[j.kind];
         const innerContent = handler.extra.composer.innerContent(j);
         return `• <t:${j.timestamp}:F> (<t:${j.timestamp}:R>) — ${innerContent} in <#${j.extraData.channelId}>` +
           (j.repeats ? ` 🔁 ${handler.extra.composer.repeatDescription(j)}` : "") +
@@ -379,7 +408,9 @@ export const commands = {
       { name: "job_id", description: "Job ID", type: 3, required: true }
     ],
     exec: async (interaction, env) => {
-      const id = env.SCHEDULER.idFromName(interaction.guild_id);
+      const id = env.SCHEDULER.idFromName(
+        `discord:guild:${interaction.guild_id}`
+      );
       const stub = env.SCHEDULER.get(id);
       const jobId = String(getOption(interaction, "job_id") ?? "").trim();
       

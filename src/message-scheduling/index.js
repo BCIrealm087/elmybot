@@ -1,1 +1,5 @@
-export { DeliveryError, GuildScheduler, registerDoAtHandlers } from "./backend.js";
+export {
+  createJobHandlerRegistry,
+  DeliveryError,
+  GuildSchedulerBackend
+} from "./backend.js";
