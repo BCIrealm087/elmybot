@@ -8,8 +8,15 @@ import {
 } from 'cloudflare:test';
 import worker from '../src/index.js';
 import { createJobHandlerRegistry } from '../src/message-scheduling/index.js';
-import { DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
-import { scheduleMessage } from '../src/platforms/discord/message-scheduling/index.js';
+import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
+import {
+  CAPABILITIES,
+  checkPermissions,
+} from '../src/platforms/discord/discord-permissions.js';
+import {
+  getRandomTimeFromInterval,
+  scheduleMessage,
+} from '../src/platforms/discord/message-scheduling/index.js';
 import {
   evalGifOptions,
   gifMessageCompose,
@@ -342,6 +349,76 @@ describe('Discord interaction worker', () => {
     )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
   });
 
+  it('uses explicit capabilities for every guild command', async () => {
+    expect(commands.config_show_value.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_list_entries.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_allow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_disallow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.sayat.guild.capability).toBe(CAPABILITIES.SCHEDULE_CREATE);
+    expect(commands.doat_list.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
+    expect(commands.doat_cancel.guild.capability).toBe(CAPABILITIES.SCHEDULE_CANCEL);
+
+    const missingPolicy = await checkPermissions({}, {}, {
+      capability: 'missing.capability',
+    });
+    expect(missingPolicy).toEqual({
+      allowedGroups: [],
+      configured: false,
+      ok: false,
+    });
+  });
+
+  it('authorizes intrinsic moderators without fetching the guild owner', async () => {
+    const guildId = uniqueId('guild');
+    const patches = [];
+    const fetchMock = vi.fn(async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://discord.com/api/v10/guilds/')) {
+        throw new Error('guild owner lookup should not run');
+      }
+      if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
+        patches.push(JSON.parse(init.body));
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const interaction = buildSlashInteraction({
+      name: 'config_list_entries',
+      guildId,
+      permissions: '32', // MANAGE_GUILD
+    });
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    expect(patches[0].content).toBe('No configured entries.');
+    expect(fetchMock.mock.calls.some(([input]) => (
+      String(typeof input === 'string' ? input : input.url)
+        .startsWith('https://discord.com/api/v10/guilds/')
+    ))).toBe(false);
+  });
+
+  it('keeps initial and repeated random schedules within inclusive bounds', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_999);
+    const random = vi.spyOn(Math, 'random');
+    const job = {
+      id: 'bounded-random-job',
+      timestamp: 1000,
+      runAtMs: 1_000_000,
+      extraData: { minInterval: 10, maxInterval: 20 },
+    };
+
+    random.mockReturnValue(0);
+    expect(getRandomTimeFromInterval(job)).toEqual([1010, 1_010_000]);
+
+    random.mockReturnValue(0.999999999);
+    expect(getRandomTimeFromInterval(job)).toEqual([1020, 1_020_000]);
+
+    now.mockReturnValue(500_000);
+    expect(getRandomTimeFromInterval(job, true)).toEqual([1020, 1_020_000]);
+  });
+
   it('reads an unexpected scheduling response once and logs correlated context', async () => {
     const interaction = buildSlashInteraction({
       id: 'interaction-schedule-error',
@@ -655,7 +732,7 @@ describe('Discord interaction worker', () => {
     const ownerId = uniqueId('owner');
     const roleId = uniqueId('role');
     const memberId = uniqueId('member');
-    const { patches } = mockDiscordApi({ ownerId });
+    const { patches, fetchMock } = mockDiscordApi({ ownerId });
 
     const allowRoleInteraction = buildSlashInteraction({
       name: 'config_allow_role',
@@ -709,6 +786,10 @@ describe('Discord interaction worker', () => {
 
     expect(patches[1].content).toContain('✅ Scheduled job');
     expect(patches[1].content).toContain('Job ID:');
+    expect(fetchMock.mock.calls.filter(([input]) => (
+      String(typeof input === 'string' ? input : input.url)
+        .startsWith('https://discord.com/api/v10/guilds/')
+    ))).toHaveLength(1);
 
     const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
     const schedulerData = await schedulerState.json();

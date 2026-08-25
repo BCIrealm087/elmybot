@@ -106,12 +106,17 @@ All scheduling commands are guild-only, deferred, and protected by the bot's per
 Implemented in `src/platforms/discord/discord-permissions.js`.
 
 - Everyone can run `/alive`.
-- Commands prefixed with `config_` are restricted to guild owner or moderators.
+- Each guild command declares an explicit capability (`config.manage`,
+  `schedule.create`, `schedule.view`, or `schedule.cancel`).
+- `config.manage` is restricted to the guild owner or moderators.
 - Scheduling/list/cancel commands allow any of:
   - guild owner
   - moderator
   - a role listed in the guild's `allowedRoles` configuration
 - Moderator status is inferred from Discord permission bitfields (`ADMINISTRATOR`, `MANAGE_GUILD`, `MANAGE_MESSAGES`, and related moderation permissions).
+- Intrinsic moderator permissions and configured roles are checked before the
+  guild-owner API lookup, avoiding that request when authorization is already
+  established.
 - Owner status is checked by fetching the guild from the Discord REST API and matching `owner_id`.
 
 ## Durable Objects

@@ -1,4 +1,4 @@
-import { PERMS, WATCHED_COMMAND_PREFIX } from "./discord-permissions.js";
+import { CAPABILITIES } from "./discord-permissions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
 import {
@@ -97,7 +97,7 @@ function makeDoAt({
   return {
     description,
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+      capability: CAPABILITIES.SCHEDULE_CREATE
     },
     options: (subjectOption) ? [
       { name: "timestamp", description: "Unix timestamp in seconds", type: 4, required: true },
@@ -268,7 +268,7 @@ export const commands = {
   "config_show_value": {
     description: `Displays the value of a given configuration entry`,
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+      capability: CAPABILITIES.CONFIG_MANAGE
     },
     deferred: true,
     options: [
@@ -302,7 +302,7 @@ export const commands = {
   "config_list_entries": {
     description: `Lists the configured entry keys`,
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+      capability: CAPABILITIES.CONFIG_MANAGE
     }, 
     deferred: true,
     exec: async (interaction, env) => {
@@ -328,9 +328,9 @@ export const commands = {
   },
 
   "config_allow_role": {
-    description: `Enables a role to use some protected commands (commands prefixed with \`${WATCHED_COMMAND_PREFIX}\` are excluded)`,
+    description: "Enables a role to use scheduling commands.",
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+      capability: CAPABILITIES.CONFIG_MANAGE
     }, 
     deferred: true,
     options: [
@@ -359,7 +359,7 @@ export const commands = {
   "config_disallow_role": {
     description: `Removes protected command access from role`,
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS]
+      capability: CAPABILITIES.CONFIG_MANAGE
     }, 
     deferred: true,
     options: [
@@ -388,7 +388,7 @@ export const commands = {
   "doat_list": {
     description: "List scheduled messages for this server.",
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+      capability: CAPABILITIES.SCHEDULE_VIEW
     },
     deferred: true,
     exec: async (interaction, env) => {
@@ -423,7 +423,7 @@ export const commands = {
   "doat_cancel": {
     description: "Cancel a scheduled message by job ID.",
     guild: {
-      allowed: [PERMS.OWNER, PERMS.MODERATORS, PERMS.GUILD_ALLOWED_ROLES]
+      capability: CAPABILITIES.SCHEDULE_CANCEL
     },
     deferred: true,
     options: [

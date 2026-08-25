@@ -138,12 +138,12 @@ export function getDailyTimeFromTimestamp(j, rescheduling=false) {
 }
 
 export function getRandomTimeFromInterval(j, rescheduling = false){
-  const randomOffset =
-    Math.random() * (j.extraData.maxInterval - j.extraData.minInterval + 1) +
-    j.extraData.minInterval;
+  const offset = Math.floor(
+    Math.random() * (j.extraData.maxInterval - j.extraData.minInterval + 1)
+  ) + j.extraData.minInterval;
 
   if (!rescheduling) {
-    const nextUnix = Math.floor(Date.now() / 1000 + randomOffset);
+    const nextUnix = Math.floor(Date.now() / 1000) + offset;
     return [nextUnix, nextUnix * 1000];
   }
 
@@ -151,7 +151,6 @@ export function getRandomTimeFromInterval(j, rescheduling = false){
     throw new Error(`Scheduling error: job \`${j.id}\` lacks valid timestamp data.`);
   }
 
-  const offset = Math.floor(randomOffset);
   const now = Date.now();
   const nextMs = j.runAtMs + offset * 1000;
 

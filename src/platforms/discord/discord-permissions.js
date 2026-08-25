@@ -18,8 +18,34 @@ export const PERM_STRINGS = {
   [PERMS.OWNER]: "server owner"
 }
 
-export const WATCHED_COMMAND_PREFIX = "config_";
-export const WATCHED_COMMAND_PERMS_OVERLOAD = [PERMS.OWNER, PERMS.MODERATORS];
+export const CAPABILITIES = Object.freeze({
+  CONFIG_MANAGE: "config.manage",
+  SCHEDULE_CREATE: "schedule.create",
+  SCHEDULE_VIEW: "schedule.view",
+  SCHEDULE_CANCEL: "schedule.cancel"
+});
+
+const CAPABILITY_POLICIES = Object.freeze({
+  [CAPABILITIES.CONFIG_MANAGE]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS
+  ]),
+  [CAPABILITIES.SCHEDULE_CREATE]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS,
+    PERMS.GUILD_ALLOWED_ROLES
+  ]),
+  [CAPABILITIES.SCHEDULE_VIEW]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS,
+    PERMS.GUILD_ALLOWED_ROLES
+  ]),
+  [CAPABILITIES.SCHEDULE_CANCEL]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS,
+    PERMS.GUILD_ALLOWED_ROLES
+  ])
+});
 
 const DISCORD_PERMS = {
   KICK_MEMBERS: 0x0000000000000002n, // (1 << 1)
@@ -67,25 +93,9 @@ async function fetchGuildOwnerId(env, guildId) {
   return guild.owner_id ?? null;
 }
 
-export async function getPerms(interaction, env) {
-  if (!interaction.guild_id || !interaction.member) return [];
-  const perms = [PERMS.MEMBERS];
-  const permsStr = interaction.member.permissions;
-  if (hasAnyIntrinsicPerm(permsStr, MODERATOR_ANY_OF))
-    perms.push(PERMS.MODERATORS);
-
-  const ownerId = await fetchGuildOwnerId(env, interaction.guild_id);
-  const userId =
-    interaction.member?.user?.id ??
-    interaction.user?.id ?? // sometimes present
-    null;
-  if (!!ownerId && !!userId && ownerId === userId)
-    perms.push(PERMS.OWNER);
-
-  const memberRoles = interaction.member?.roles;
-
-  if (!memberRoles) return perms;
-
+async function hasConfiguredRole(interaction, env) {
+  const memberRoles = interaction.member?.roles ?? [];
+  if (memberRoles.length === 0) return false;
   const id = env.CONFIG.idFromName(interaction.guild_id);
   const stub = env.CONFIG.get(id);
 
@@ -108,22 +118,45 @@ export async function getPerms(interaction, env) {
     throw error;
   }
   const data = await r.json();
-  if (Array.isArray(data.value) && data.value.length > 0) {
-    const allowedRoles = new Set(data.value);
-    const memberRoles = interaction.member?.roles ?? [];
-    if (memberRoles.some(role => allowedRoles.has(role)))
-      perms.push(PERMS.GUILD_ALLOWED_ROLES);
-  }
+  if (!Array.isArray(data.value) || data.value.length === 0) return false;
 
-  return perms;
+  const allowedRoles = new Set(data.value);
+  return memberRoles.some(role => allowedRoles.has(role));
 }
 
 export async function checkPermissions(interaction, env, commandInfo) {
-  const allowedGroups = commandInfo.name.toLowerCase().startsWith(WATCHED_COMMAND_PREFIX)
-    ? WATCHED_COMMAND_PERMS_OVERLOAD
-    : commandInfo.allowedGroups;
-  if (allowedGroups.some(perm => perm===PERMS.ANY || perm===PERMS.MEMBERS)) return { allowedGroups, ok: true };
-  const perms = new Set(await getPerms(interaction, env));
-  const ok = allowedGroups.some(perm => perms.has(perm));
-  return { allowedGroups, ok };
+  const allowedGroups = CAPABILITY_POLICIES[commandInfo.capability];
+  if (!Array.isArray(allowedGroups) || allowedGroups.length === 0) {
+    return { allowedGroups: [], configured: false, ok: false };
+  }
+  if (allowedGroups.some(perm => perm === PERMS.ANY || perm === PERMS.MEMBERS)) {
+    return { allowedGroups, configured: true, ok: true };
+  }
+  if (!interaction.guild_id || !interaction.member) {
+    return { allowedGroups, configured: true, ok: false };
+  }
+
+  if (
+    allowedGroups.includes(PERMS.MODERATORS) &&
+    hasAnyIntrinsicPerm(interaction.member.permissions, MODERATOR_ANY_OF)
+  ) {
+    return { allowedGroups, configured: true, ok: true };
+  }
+
+  if (
+    allowedGroups.includes(PERMS.GUILD_ALLOWED_ROLES) &&
+    await hasConfiguredRole(interaction, env)
+  ) {
+    return { allowedGroups, configured: true, ok: true };
+  }
+
+  if (allowedGroups.includes(PERMS.OWNER)) {
+    const ownerId = await fetchGuildOwnerId(env, interaction.guild_id);
+    const userId = interaction.member?.user?.id ?? interaction.user?.id ?? null;
+    if (ownerId && userId && ownerId === userId) {
+      return { allowedGroups, configured: true, ok: true };
+    }
+  }
+
+  return { allowedGroups, configured: true, ok: false };
 }
