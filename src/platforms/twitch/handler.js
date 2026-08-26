@@ -2,6 +2,7 @@ import { logError, withExternalRequestTimeout } from "../../common.js";
 import { commands } from "./commands.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
 import {
+	handleTwitchChannelConfiguration,
 	handleTwitchEventSubSubscriptions,
 	queueTwitchEventSubRecovery,
 	RECOVERABLE_EVENTSUB_STATUS
@@ -265,12 +266,18 @@ function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
  */
 export async function handleTwitchRequest(request, env, ctx) {
 	const url = new URL(request.url);
-	if (url.pathname === "/twitch/eventsub/subscriptions") {
+	if (
+		url.pathname === "/twitch/eventsub/subscriptions" ||
+		url.pathname === "/twitch/eventsub/channels"
+	) {
 		if (!env.TWITCH_OAUTH_SETUP_TOKEN) {
 			return new Response("Twitch setup is not configured.", { status: 503 });
 		}
 		if (!oauthSetupAuthorized(request, env)) {
 			return new Response("Unauthorized", { status: 401 });
+		}
+		if (url.pathname === "/twitch/eventsub/channels") {
+			return handleTwitchChannelConfiguration(request, env);
 		}
 		return handleTwitchEventSubSubscriptions(request, env);
 	}

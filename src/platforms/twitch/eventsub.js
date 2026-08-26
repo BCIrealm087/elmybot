@@ -9,7 +9,10 @@ const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscri
 const LIST_QUERY_PARAMETERS = Object.freeze(["status", "type", "user_id", "after"]);
 export const RECOVERABLE_EVENTSUB_STATUS = "notification_failures_exceeded";
 const RECOVERY_KEY = "pendingRecovery";
+const CHANNEL_CONFIG_KEY = "channelConfig";
 const RECOVERY_INITIAL_DELAY_MS = 1000;
+const RECONCILIATION_INITIAL_DELAY_MS = 60 * 1000;
+const RECONCILIATION_INTERVAL_MS = 55 * 60 * 1000;
 const RECOVERY_RETRY_DELAYS_MS = Object.freeze([
 	60 * 1000,
 	5 * 60 * 1000,
@@ -145,6 +148,176 @@ async function listEventSubSubscriptions(request, env, clientId, clientSecret) {
 	});
 }
 
+function validateChannelConfig(channel) {
+	if (
+		typeof channel?.broadcasterUserId !== "string" ||
+		channel.broadcasterUserId.length === 0 ||
+		typeof channel.callbackUrl !== "string" ||
+		channel.callbackUrl.length === 0
+	) {
+		throw new TwitchEventSubError("The Twitch channel configuration is invalid.");
+	}
+
+	let callback;
+	try {
+		callback = new URL(channel.callbackUrl);
+	} catch {
+		throw new TwitchEventSubError("The Twitch channel callback is invalid.");
+	}
+	if (callback.protocol !== "https:" || callback.pathname !== "/twitch") {
+		throw new TwitchEventSubError("The Twitch channel callback is invalid.");
+	}
+
+	return {
+		broadcasterUserId: channel.broadcasterUserId,
+		callbackUrl: callback.href
+	};
+}
+
+async function matchingTwitchChatSubscriptions(channel, env) {
+	const clientId = configuredString(env.TWITCH_CLIENT_ID, "TWITCH_CLIENT_ID");
+	const clientSecret = configuredString(env.TWITCH_CLIENT_SECRET, "TWITCH_CLIENT_SECRET");
+	const botUserId = configuredString(env.TWITCH_BOT_USER_ID, "TWITCH_BOT_USER_ID");
+	const accessToken = await getTwitchAppAccessToken(clientId, clientSecret);
+	const subscriptions = [];
+	let cursor = null;
+
+	for (let page = 0; page < 100; page++) {
+		const url = new URL(EVENTSUB_SUBSCRIPTIONS_URL);
+		url.searchParams.set("type", "channel.chat.message");
+		if (cursor) url.searchParams.set("after", cursor);
+
+		const response = await twitchEventSubRequest({
+			method: "GET",
+			url: url.href,
+			clientId,
+			accessToken
+		});
+		if (!response.ok) {
+			await response.text();
+			throw new TwitchEventSubError(
+				`Twitch rejected EventSub reconciliation with status ${response.status}.`,
+				{
+					status: 502,
+					code: "twitch_eventsub_reconciliation_rejected"
+				}
+			);
+		}
+
+		let result;
+		try {
+			result = await response.json();
+		} catch (cause) {
+			throw new TwitchEventSubError("Twitch returned an invalid EventSub list.", {
+				status: 502,
+				code: "twitch_eventsub_invalid_list_response",
+				cause
+			});
+		}
+		if (!Array.isArray(result.data)) {
+			throw new TwitchEventSubError("Twitch returned an invalid EventSub list.", {
+				status: 502,
+				code: "twitch_eventsub_invalid_list_response"
+			});
+		}
+
+		subscriptions.push(...result.data.filter((subscription) =>
+			subscription?.condition?.broadcaster_user_id === channel.broadcasterUserId &&
+			subscription?.condition?.user_id === botUserId
+		));
+		cursor = result.pagination?.cursor;
+		if (typeof cursor !== "string" || cursor.length === 0) break;
+	}
+
+	return { subscriptions, clientId, accessToken };
+}
+
+async function deleteTwitchEventSubSubscription(id, clientId, accessToken) {
+	const url = new URL(EVENTSUB_SUBSCRIPTIONS_URL);
+	url.searchParams.set("id", id);
+	const response = await twitchEventSubRequest({
+		method: "DELETE",
+		url: url.href,
+		clientId,
+		accessToken
+	});
+	if (response.status !== 204) {
+		await response.text();
+		throw new TwitchEventSubError(
+			`Twitch rejected stale subscription removal with status ${response.status}.`,
+			{
+				status: 502,
+				code: "twitch_eventsub_delete_rejected"
+			}
+		);
+	}
+}
+
+export async function ensureTwitchChatSubscription(channel, env) {
+	const validated = validateChannelConfig(channel);
+	const {
+		subscriptions,
+		clientId,
+		accessToken
+	} = await matchingTwitchChatSubscriptions(validated, env);
+	const healthy = subscriptions.find((subscription) =>
+		subscription?.transport?.method === "webhook" &&
+		subscription?.transport?.callback === validated.callbackUrl &&
+		["enabled", "webhook_callback_verification_pending"].includes(subscription.status)
+	);
+	if (healthy) {
+		return {
+			result: "existing",
+			subscriptionId: healthy.id ?? null,
+			status: healthy.status
+		};
+	}
+
+	for (const subscription of subscriptions) {
+		if (typeof subscription?.id === "string" && subscription.id.length > 0) {
+			await deleteTwitchEventSubSubscription(
+				subscription.id,
+				clientId,
+				accessToken
+			);
+		}
+	}
+
+	const response = await createTwitchChatSubscription(validated, env);
+	if (response.status === 409) {
+		await response.text();
+		return {
+			result: "already_exists",
+			subscriptionId: null,
+			status: "unknown"
+		};
+	}
+	if (response.status !== 202) {
+		await response.text();
+		const error = new TwitchEventSubError(
+			`Twitch rejected EventSub creation with status ${response.status}.`,
+			{
+				status: 502,
+				code: "twitch_eventsub_create_rejected"
+			}
+		);
+		error.twitchStatus = response.status;
+		throw error;
+	}
+
+	let result;
+	try {
+		result = await response.json();
+	} catch {
+		result = null;
+	}
+	return {
+		result: "created",
+		subscriptionId: result?.data?.[0]?.id ?? null,
+		status: result?.data?.[0]?.status ?? "webhook_callback_verification_pending"
+	};
+}
+
 async function createChatSubscription(request, env) {
 	let requestBody;
 	try {
@@ -278,29 +451,13 @@ export async function queueTwitchEventSubRecovery(env, recovery) {
 }
 
 function validateRecovery(recovery) {
-	if (
-		typeof recovery?.broadcasterUserId !== "string" ||
-		recovery.broadcasterUserId.length === 0 ||
-		typeof recovery.callbackUrl !== "string" ||
-		recovery.callbackUrl.length === 0 ||
-		recovery.reason !== RECOVERABLE_EVENTSUB_STATUS
-	) {
+	const channel = validateChannelConfig(recovery);
+	if (recovery.reason !== RECOVERABLE_EVENTSUB_STATUS) {
 		throw new TwitchEventSubError("The EventSub recovery request is invalid.");
 	}
 
-	let callback;
-	try {
-		callback = new URL(recovery.callbackUrl);
-	} catch {
-		throw new TwitchEventSubError("The EventSub recovery callback is invalid.");
-	}
-	if (callback.protocol !== "https:" || callback.pathname !== "/twitch") {
-		throw new TwitchEventSubError("The EventSub recovery callback is invalid.");
-	}
-
 	return {
-		broadcasterUserId: recovery.broadcasterUserId,
-		callbackUrl: callback.href,
+		...channel,
 		reason: recovery.reason,
 		sourceSubscriptionId:
 			typeof recovery.sourceSubscriptionId === "string"
@@ -311,18 +468,106 @@ function validateRecovery(recovery) {
 	};
 }
 
+async function managerResponse(env, broadcasterUserId, path, init) {
+	if (!env.TWITCH_EVENTSUB_MANAGER) {
+		throw new TwitchEventSubError("TWITCH_EVENTSUB_MANAGER is not configured.", {
+			status: 503,
+			code: "twitch_eventsub_not_configured"
+		});
+	}
+	return recoveryStub(env, broadcasterUserId).fetch(
+		`https://twitch-eventsub-manager${path}`,
+		init
+	);
+}
+
+async function configureTwitchChannel(request, env) {
+	let body;
+	try {
+		body = await request.json();
+	} catch {
+		throw new TwitchEventSubError("The request body must be valid JSON.");
+	}
+	const requestUrl = new URL(request.url);
+	const channel = validateChannelConfig({
+		broadcasterUserId: body?.broadcasterUserId,
+		callbackUrl: `${requestUrl.origin}/twitch`
+	});
+	return managerResponse(env, channel.broadcasterUserId, "/configure", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(channel)
+	});
+}
+
+async function getTwitchChannelConfiguration(request, env) {
+	const broadcasterUserId = new URL(request.url).searchParams.get("broadcasterUserId");
+	if (typeof broadcasterUserId !== "string" || broadcasterUserId.length === 0) {
+		throw new TwitchEventSubError("broadcasterUserId is required.");
+	}
+	return managerResponse(env, broadcasterUserId, "/status", { method: "GET" });
+}
+
+export async function handleTwitchChannelConfiguration(request, env) {
+	try {
+		if (request.method === "POST") {
+			return await configureTwitchChannel(request, env);
+		}
+		if (request.method === "GET") {
+			return await getTwitchChannelConfiguration(request, env);
+		}
+		return new Response("Method Not Allowed", { status: 405 });
+	} catch (error) {
+		if (error instanceof TwitchEventSubError) {
+			return noStoreJson({ error: error.message, code: error.code }, error.status);
+		}
+		logError("twitch.channel_configuration_failed", {
+			platform: "twitch",
+			correlationId: `twitch-channel-config:${crypto.randomUUID()}`,
+			groupId: null
+		}, error);
+		return noStoreJson({ error: "Twitch channel configuration failed." }, 500);
+	}
+}
+
 export class TwitchEventSubManager {
 	constructor(state, env) {
 		this.state = state;
 		this.env = env;
 	}
 
+	async configureChannel(channel) {
+		const validated = validateChannelConfig(channel);
+		const existing = await this.state.storage.get(CHANNEL_CONFIG_KEY);
+		const configured = {
+			...existing,
+			...validated,
+			configuredAtMs: existing?.configuredAtMs ?? Date.now(),
+			lastResult: existing?.lastResult ?? "pending",
+			consecutiveFailures: existing?.consecutiveFailures ?? 0
+		};
+		await this.state.storage.put(CHANNEL_CONFIG_KEY, configured);
+		await this.state.storage.setAlarm(Date.now() + RECONCILIATION_INITIAL_DELAY_MS);
+		return configured;
+	}
+
 	async queueRecovery(recovery) {
 		const validated = validateRecovery(recovery);
-		const existing = await this.state.storage.get(RECOVERY_KEY);
+		const [existingRecovery, existingConfig] = await Promise.all([
+			this.state.storage.get(RECOVERY_KEY),
+			this.state.storage.get(CHANNEL_CONFIG_KEY)
+		]);
+		await this.state.storage.put(CHANNEL_CONFIG_KEY, {
+			...existingConfig,
+			broadcasterUserId: validated.broadcasterUserId,
+			callbackUrl: validated.callbackUrl,
+			configuredAtMs: existingConfig?.configuredAtMs ?? Date.now(),
+			lastResult: existingConfig?.lastResult ?? "recovery_queued",
+			consecutiveFailures: existingConfig?.consecutiveFailures ?? 0
+		});
 		if (
-			existing?.sourceSubscriptionId &&
-			existing.sourceSubscriptionId === validated.sourceSubscriptionId
+			existingRecovery?.sourceSubscriptionId &&
+			existingRecovery.sourceSubscriptionId === validated.sourceSubscriptionId
 		) {
 			return;
 		}
@@ -332,50 +577,64 @@ export class TwitchEventSubManager {
 	}
 
 	async alarm() {
-		const recovery = await this.state.storage.get(RECOVERY_KEY);
-		if (!recovery) return;
+		const [recovery, channel] = await Promise.all([
+			this.state.storage.get(RECOVERY_KEY),
+			this.state.storage.get(CHANNEL_CONFIG_KEY)
+		]);
+		const target = channel ?? recovery;
+		if (!target) return;
 
 		try {
-			const response = await createTwitchChatSubscription({
-				broadcasterUserId: recovery.broadcasterUserId,
-				callbackUrl: recovery.callbackUrl
-			}, this.env);
-
-			if (response.status !== 202 && response.status !== 409) {
-				await response.text();
-				const error = new Error(
-					`Twitch rejected EventSub recovery with status ${response.status}.`
-				);
-				error.status = response.status;
-				throw error;
+			const result = await ensureTwitchChatSubscription(target, this.env);
+			const nowMs = Date.now();
+			await this.state.storage.put(CHANNEL_CONFIG_KEY, {
+				...target,
+				lastReconciledAtMs: nowMs,
+				lastResult: result.result,
+				lastSubscriptionId: result.subscriptionId,
+				lastSubscriptionStatus: result.status,
+				consecutiveFailures: 0
+			});
+			if (recovery) {
+				await this.state.storage.delete(RECOVERY_KEY);
+				console.log(JSON.stringify({
+					level: "info",
+					event: "twitch.eventsub_recovered",
+					platform: "twitch",
+					groupId: target.broadcasterUserId,
+					sourceSubscriptionId: recovery.sourceSubscriptionId,
+					result: result.result
+				}));
 			}
-
-			await this.state.storage.delete(RECOVERY_KEY);
-			await this.state.storage.deleteAlarm();
-			console.log(JSON.stringify({
-				level: "info",
-				event: "twitch.eventsub_recovered",
-				platform: "twitch",
-				groupId: recovery.broadcasterUserId,
-				sourceSubscriptionId: recovery.sourceSubscriptionId,
-				result: response.status === 409 ? "already_exists" : "created"
-			}));
+			await this.state.storage.setAlarm(nowMs + RECONCILIATION_INTERVAL_MS);
 		} catch (error) {
-			const attempts = (recovery.attempts ?? 0) + 1;
+			const attempts = recovery
+				? (recovery.attempts ?? 0) + 1
+				: (channel?.consecutiveFailures ?? 0) + 1;
 			const delayMs = RECOVERY_RETRY_DELAYS_MS[
 				Math.min(attempts - 1, RECOVERY_RETRY_DELAYS_MS.length - 1)
 			];
-			await this.state.storage.put(RECOVERY_KEY, {
-				...recovery,
-				attempts,
-				lastAttemptAtMs: Date.now()
-			});
+			if (recovery) {
+				await this.state.storage.put(RECOVERY_KEY, {
+					...recovery,
+					attempts,
+					lastAttemptAtMs: Date.now()
+				});
+			}
+			if (channel) {
+				await this.state.storage.put(CHANNEL_CONFIG_KEY, {
+					...channel,
+					lastReconciledAtMs: Date.now(),
+					lastResult: "error",
+					consecutiveFailures: attempts
+				});
+			}
 			await this.state.storage.setAlarm(Date.now() + delayMs);
-			logError("twitch.eventsub_recovery_failed", {
+			logError("twitch.eventsub_reconciliation_failed", {
 				platform: "twitch",
-				correlationId: `twitch-eventsub-recovery:${crypto.randomUUID()}`,
-				groupId: recovery.broadcasterUserId,
-				sourceSubscriptionId: recovery.sourceSubscriptionId,
+				correlationId: `twitch-eventsub-reconciliation:${crypto.randomUUID()}`,
+				groupId: target.broadcasterUserId,
+				sourceSubscriptionId: recovery?.sourceSubscriptionId ?? null,
 				attempts,
 				nextRetryInMs: delayMs
 			}, error);
@@ -389,17 +648,42 @@ export class TwitchEventSubManager {
 				await this.queueRecovery(await request.json());
 				return noStoreJson({ queued: true }, 202);
 			}
+			if (request.method === "POST" && url.pathname === "/configure") {
+				return noStoreJson({
+					configured: true,
+					channel: await this.configureChannel(await request.json())
+				}, 202);
+			}
+			if (request.method === "GET" && url.pathname === "/status") {
+				const [channel, recovery, alarmAtMs] = await Promise.all([
+					this.state.storage.get(CHANNEL_CONFIG_KEY),
+					this.state.storage.get(RECOVERY_KEY),
+					this.state.storage.getAlarm()
+				]);
+				return noStoreJson({
+					configured: Boolean(channel),
+					channel: channel ?? null,
+					recovery: recovery
+						? {
+							reason: recovery.reason,
+							attempts: recovery.attempts,
+							queuedAtMs: recovery.queuedAtMs
+						}
+						: null,
+					alarmAtMs
+				});
+			}
 			return new Response("Not found", { status: 404 });
 		} catch (error) {
 			if (error instanceof TwitchEventSubError) {
 				return noStoreJson({ error: error.message, code: error.code }, error.status);
 			}
-			logError("twitch.eventsub_recovery_queue_failed", {
+			logError("twitch.eventsub_manager_failed", {
 				platform: "twitch",
-				correlationId: `twitch-eventsub-recovery-queue:${crypto.randomUUID()}`,
+				correlationId: `twitch-eventsub-manager:${crypto.randomUUID()}`,
 				groupId: null
 			}, error);
-			return noStoreJson({ error: "Could not queue EventSub recovery." }, 500);
+			return noStoreJson({ error: "Twitch EventSub management failed." }, 500);
 		}
 	}
 }

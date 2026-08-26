@@ -502,6 +502,108 @@ describe("Twitch EventSub management", () => {
 		});
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
+
+	it("stores per-channel desired state and exposes its status", async () => {
+		const broadcasterUserId = "configured-channel-id";
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/channels", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({ broadcasterUserId })
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			configured: true,
+			channel: {
+				broadcasterUserId,
+				callbackUrl: "https://example.com/twitch",
+				lastResult: "pending"
+			}
+		});
+
+		const statusResponse = await worker.fetch(
+			new Request(
+				`https://example.com/twitch/eventsub/channels?broadcasterUserId=${broadcasterUserId}`,
+				{ headers: { Authorization: "Bearer setup-token" } }
+			),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		expect(statusResponse.status).toBe(200);
+		expect(await statusResponse.json()).toMatchObject({
+			configured: true,
+			channel: { broadcasterUserId },
+			recovery: null
+		});
+		await runInDurableObject(
+			twitchEventSubManagerStub(broadcasterUserId),
+			async (_instance, state) => {
+				expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
+		);
+	});
+
+	it("recreates a configured channel subscription when reconciliation finds none", async () => {
+		const broadcasterUserId = "missing-channel-id";
+		const stub = twitchEventSubManagerStub(broadcasterUserId);
+		await stub.fetch("https://twitch-eventsub-manager/configure", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				broadcasterUserId,
+				callbackUrl: "https://example.com/twitch"
+			})
+		});
+		await runInDurableObject(stub, async (instance) => {
+			instance.env = eventSubEnv;
+		});
+
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			if (init.method === "GET") {
+				expect(input).toBe(
+					"https://api.twitch.tv/helix/eventsub/subscriptions?type=channel.chat.message"
+				);
+				return Response.json({ data: [], pagination: {} });
+			}
+
+			expect(init.method).toBe("POST");
+			expect(JSON.parse(init.body).condition.broadcaster_user_id)
+				.toBe(broadcasterUserId);
+			return Response.json({
+				data: [{
+					id: "recreated-subscription-id",
+					status: "webhook_callback_verification_pending"
+				}]
+			}, { status: 202 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(await state.storage.get("channelConfig")).toMatchObject({
+				broadcasterUserId,
+				lastResult: "created",
+				lastSubscriptionId: "recreated-subscription-id",
+				consecutiveFailures: 0
+			});
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
 });
 
 describe("Twitch EventSub recovery", () => {
@@ -546,7 +648,7 @@ describe("Twitch EventSub recovery", () => {
 			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
 
-		const fetchMock = vi.fn(async (input) => {
+		const fetchMock = vi.fn(async (input, init) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
 				return Response.json({
 					access_token: "app-access-token",
@@ -554,19 +656,30 @@ describe("Twitch EventSub recovery", () => {
 					token_type: "bearer"
 				});
 			}
+			if (init.method === "GET") {
+				return Response.json({ data: [], pagination: {} });
+			}
 			expect(input).toBe("https://api.twitch.tv/helix/eventsub/subscriptions");
 			return Response.json({
-				data: [{ id: "replacement-subscription-id" }]
+				data: [{
+					id: "replacement-subscription-id",
+					status: "webhook_callback_verification_pending"
+				}]
 			}, { status: 202 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		vi.spyOn(console, "log").mockImplementation(() => {});
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 		await runInDurableObject(stub, async (_instance, state) => {
 			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-			expect(await state.storage.getAlarm()).toBeNull();
+			expect(await state.storage.get("channelConfig")).toMatchObject({
+				broadcasterUserId: "broadcaster-id",
+				lastResult: "created",
+				lastSubscriptionId: "replacement-subscription-id"
+			});
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
 	});
 
