@@ -176,8 +176,8 @@ const doAtSchedulingCommands = {
     description: "Schedule a message to be sent after a semi-random interval (in seconds; default min. 2h max. 6h).",
     optionsOverride: [
       { name: "message", description: "Message", type: 3, required: true }, // MESSAGE
-      { name: "min_interval", description: "Min. interval", type: 4, required: false },
-      { name: "max_interval", description: "Max. interval", type: 4, required: false },
+      { name: "min_interval", description: "Min. interval (at least 10 minutes)", type: 4, required: false },
+      { name: "max_interval", description: "Max. interval (at most 24 hours)", type: 4, required: false },
       { name: "repeats", description: "If true, repeats at bounded random intervals", type: 5, required: false },
       { name: "gif", description: "Search string for a gif to be included in the message", type: 3, required: false }
     ],
