@@ -1,5 +1,3 @@
-import nacl from "tweetnacl";
-
 import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
 import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
@@ -17,6 +15,11 @@ import { logError, unknownErrorMessage } from "../../common.js";
  */
 
 const encoder = new TextEncoder();
+const ED25519_SIGNATURE_BYTES = 64;
+const ED25519_PUBLIC_KEY_BYTES = 32;
+
+let cachedPublicKeyHex = null;
+let cachedPublicKeyPromise = null;
 
 /**
  * Convert a hex string to Uint8Array for signature verification.
@@ -35,18 +38,35 @@ function hexToU8(hex) {
 /**
  * Verify the Ed25519 signature for a Discord interaction request.
  */
-function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText }) {
+async function verifyDiscordRequest({ publicKeyHex, signatureHex, timestamp, bodyText }) {
   const sig = hexToU8(signatureHex);
   const pk = hexToU8(publicKeyHex);
   if (!sig || !pk) return false;
 
   // Length guards (Ed25519)
-  if (sig.length !== nacl.sign.signatureLength) return false; // 64
-  if (pk.length !== nacl.sign.publicKeyLength) return false;  // 32
+  if (sig.length !== ED25519_SIGNATURE_BYTES) return false;
+  if (pk.length !== ED25519_PUBLIC_KEY_BYTES) return false;
 
   try {
+    if (publicKeyHex !== cachedPublicKeyHex) {
+      cachedPublicKeyHex = publicKeyHex;
+      cachedPublicKeyPromise = crypto.subtle.importKey(
+        "raw",
+        pk,
+        { name: "Ed25519" },
+        false,
+        ["verify"]
+      );
+    }
+
+    const publicKey = await cachedPublicKeyPromise;
     const msg = encoder.encode(timestamp + bodyText);
-    return nacl.sign.detached.verify(msg, sig, pk);
+    return await crypto.subtle.verify(
+      { name: "Ed25519" },
+      publicKey,
+      sig,
+      msg
+    );
   } catch {
     return false;
   }
@@ -146,7 +166,7 @@ export async function handleDiscordRequest(request, env, ctx) {
 
   const bodyText = await request.text();
 
-  const ok = verifyDiscordRequest({
+  const ok = await verifyDiscordRequest({
     publicKeyHex: env.PUBLIC_KEY,
     signatureHex: signature,
     timestamp,
