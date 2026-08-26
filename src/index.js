@@ -20,6 +20,7 @@ export class GroupScheduler extends GroupSchedulerBackend {
 }
 export { GroupConfig } from "./group-configuration.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
+export { TwitchEventSubManager } from "./platforms/twitch/eventsub.js";
 
 /**
  * Cloudflare Worker entrypoint for platform requests.

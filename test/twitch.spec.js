@@ -8,6 +8,9 @@ import {
 } from "cloudflare:test";
 import worker from "../src/index.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
+import {
+	twitchEventSubManagerObjectName
+} from "../src/platforms/twitch/eventsub.js";
 
 const encoder = new TextEncoder();
 const oauthEnv = {
@@ -20,6 +23,13 @@ const oauthEnv = {
 
 function twitchAuthStub() {
 	return env.TWITCH_AUTH.get(env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME));
+}
+
+function twitchEventSubManagerStub(broadcasterUserId = "broadcaster-id") {
+	const name = twitchEventSubManagerObjectName(broadcasterUserId);
+	return env.TWITCH_EVENTSUB_MANAGER.get(
+		env.TWITCH_EVENTSUB_MANAGER.idFromName(name)
+	);
 }
 
 async function storeTwitchTokens(overrides = {}) {
@@ -493,6 +503,147 @@ describe("Twitch EventSub management", () => {
 		});
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
+});
+
+describe("Twitch EventSub recovery", () => {
+	it("queues and completes recovery after notification delivery failures", async () => {
+		const secret = "eventsub-secret";
+		const request = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: {
+					id: "revoked-subscription-id",
+					status: "notification_failures_exceeded",
+					type: "channel.chat.message",
+					version: "1",
+					condition: {
+						broadcaster_user_id: "broadcaster-id",
+						user_id: "bot-user-id"
+					},
+					transport: {
+						method: "webhook",
+						callback: "https://example.com/twitch"
+					}
+				}
+			}),
+			secret,
+			messageType: "revocation"
+		});
+		const ctx = createExecutionContext();
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const response = await worker.fetch(request, eventSubEnv, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(204);
+		const stub = twitchEventSubManagerStub();
+		await runInDurableObject(stub, async (instance, state) => {
+			instance.env = eventSubEnv;
+			expect(await state.storage.get("pendingRecovery")).toMatchObject({
+				broadcasterUserId: "broadcaster-id",
+				reason: "notification_failures_exceeded",
+				sourceSubscriptionId: "revoked-subscription-id",
+				attempts: 0
+			});
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+
+		const fetchMock = vi.fn(async (input) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			expect(input).toBe("https://api.twitch.tv/helix/eventsub/subscriptions");
+			return Response.json({
+				data: [{ id: "replacement-subscription-id" }]
+			}, { status: 202 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
+	});
+
+	it("retries EventSub recovery with an alarm after a temporary failure", async () => {
+		const stub = twitchEventSubManagerStub();
+		await stub.fetch("https://twitch-eventsub-manager/recover", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				broadcasterUserId: "broadcaster-id",
+				callbackUrl: "https://example.com/twitch",
+				reason: "notification_failures_exceeded",
+				sourceSubscriptionId: "revoked-subscription-id"
+			})
+		});
+		await runInDurableObject(stub, async (instance) => {
+			instance.env = eventSubEnv;
+		});
+		const fetchMock = vi.fn(async (input) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			return Response.json({ message: "temporarily unavailable" }, { status: 503 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(await state.storage.get("pendingRecovery")).toMatchObject({
+				attempts: 1
+			});
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
+
+	it("does not recreate subscriptions that require reauthorization", async () => {
+		const secret = "eventsub-secret";
+		const request = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: {
+					id: "revoked-subscription-id",
+					status: "authorization_revoked",
+					type: "channel.chat.message",
+					version: "1",
+					condition: {
+						broadcaster_user_id: "broadcaster-id",
+						user_id: "bot-user-id"
+					}
+				}
+			}),
+			secret,
+			messageType: "revocation"
+		});
+		const ctx = createExecutionContext();
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const response = await worker.fetch(request, eventSubEnv, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(204);
+		expect(fetchMock).not.toHaveBeenCalled();
+		await runInDurableObject(
+			twitchEventSubManagerStub(),
+			async (_instance, state) => {
+				expect(await state.storage.get("pendingRecovery")).toBeUndefined();
+			}
+		);
+	});
+
 });
 
 describe("Twitch OAuth", () => {

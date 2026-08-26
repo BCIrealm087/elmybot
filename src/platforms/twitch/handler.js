@@ -1,7 +1,11 @@
 import { logError, withExternalRequestTimeout } from "../../common.js";
 import { commands } from "./commands.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
-import { handleTwitchEventSubSubscriptions } from "./eventsub.js";
+import {
+	handleTwitchEventSubSubscriptions,
+	queueTwitchEventSubRecovery,
+	RECOVERABLE_EVENTSUB_STATUS
+} from "./eventsub.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -213,6 +217,49 @@ function handleChatNotification(payload, env, ctx, messageId) {
 	);
 }
 
+function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
+	const subscription = payload.subscription;
+	const status = subscription?.status;
+	const broadcasterUserId = subscription?.condition?.broadcaster_user_id;
+
+	console.warn(JSON.stringify({
+		level: "warn",
+		event: "twitch.eventsub_revoked",
+		platform: "twitch",
+		correlationId: `twitch:${messageId}`,
+		groupId: broadcasterUserId ?? null,
+		subscriptionId: subscription?.id ?? null,
+		subscriptionType: subscription?.type ?? null,
+		status: status ?? null,
+		recoverable: status === RECOVERABLE_EVENTSUB_STATUS
+	}));
+
+	if (
+		subscription?.type !== "channel.chat.message" ||
+		status !== RECOVERABLE_EVENTSUB_STATUS ||
+		typeof broadcasterUserId !== "string" ||
+		broadcasterUserId.length === 0
+	) {
+		return;
+	}
+
+	ctx.waitUntil(
+		queueTwitchEventSubRecovery(env, {
+			broadcasterUserId,
+			callbackUrl,
+			reason: status,
+			sourceSubscriptionId: subscription.id
+		}).catch((error) =>
+			logError("twitch.eventsub_recovery_queue_failed", {
+				platform: "twitch",
+				correlationId: `twitch:${messageId}`,
+				groupId: broadcasterUserId,
+				subscriptionId: subscription.id
+			}, error)
+		)
+	);
+}
+
 /**
  * Entrypoint for Twitch EventSub webhook requests.
  */
@@ -274,7 +321,15 @@ export async function handleTwitchRequest(request, env, ctx) {
 		});
 	}
 
-	if (messageType === "notification") {
+	if (messageType === "revocation") {
+		handleEventSubRevocation(
+			payload,
+			env,
+			ctx,
+			messageId,
+			`${url.origin}/twitch`
+		);
+	} else if (messageType === "notification") {
 		handleChatNotification(payload, env, ctx, messageId);
 	}
 
