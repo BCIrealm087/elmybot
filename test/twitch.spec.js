@@ -347,6 +347,154 @@ describe("Twitch EventSub worker", () => {
 	});
 });
 
+describe("Twitch EventSub management", () => {
+	const eventSubEnv = {
+		...oauthEnv,
+		TWITCH_EVENTSUB_SECRET: "eventsub-secret"
+	};
+
+	it("protects subscription management with the setup bearer token", async () => {
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions"),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(401);
+		expect(await response.text()).toBe("Unauthorized");
+	});
+
+	it("creates the bot's channel.chat.message webhook subscription", async () => {
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				expect(init.method).toBe("POST");
+				expect(init.signal).toBeInstanceOf(AbortSignal);
+				expect(init.body.get("grant_type")).toBe("client_credentials");
+				expect(init.body.get("client_id")).toBe("client-id");
+				expect(init.body.get("client_secret")).toBe("client-secret");
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+
+			expect(input).toBe("https://api.twitch.tv/helix/eventsub/subscriptions");
+			expect(init.method).toBe("POST");
+			expect(init.headers).toMatchObject({
+				Authorization: "Bearer app-access-token",
+				"Client-Id": "client-id",
+				"content-type": "application/json"
+			});
+			expect(JSON.parse(init.body)).toEqual({
+				type: "channel.chat.message",
+				version: "1",
+				condition: {
+					broadcaster_user_id: "broadcaster-id",
+					user_id: "bot-user-id"
+				},
+				transport: {
+					method: "webhook",
+					callback: "https://example.com/twitch",
+					secret: "eventsub-secret"
+				}
+			});
+			return Response.json({
+				data: [{ id: "subscription-id", status: "webhook_callback_verification_pending" }],
+				total: 1,
+				total_cost: 0,
+				max_total_cost: 10000
+			}, { status: 202 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({ broadcasterUserId: "broadcaster-id" })
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			data: [{ id: "subscription-id", status: "webhook_callback_verification_pending" }]
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("lists EventSub subscriptions and preserves supported filters", async () => {
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+
+			expect(input).toBe(
+				"https://api.twitch.tv/helix/eventsub/subscriptions?status=enabled&after=next-page"
+			);
+			expect(init.method).toBe("GET");
+			expect(init.headers).toMatchObject({
+				Authorization: "Bearer app-access-token",
+				"Client-Id": "client-id"
+			});
+			return Response.json({
+				data: [{ id: "subscription-id", status: "enabled" }],
+				total: 1,
+				pagination: {}
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const response = await worker.fetch(
+			new Request(
+				"https://example.com/twitch/eventsub/subscriptions?status=enabled&after=next-page",
+				{ headers: { Authorization: "Bearer setup-token" } }
+			),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			data: [{ id: "subscription-id", status: "enabled" }]
+		});
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("rejects a create request without a broadcaster ID before calling Twitch", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({})
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "twitch_eventsub_error"
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
 describe("Twitch OAuth", () => {
 	it("protects OAuth setup with a dedicated bearer token", async () => {
 		const response = await worker.fetch(

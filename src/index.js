@@ -34,7 +34,7 @@ export default {
     if (url.pathname === "/discord") {
       return handleDiscordRequest(request, env, ctx);
     }
-    if (url.pathname === "/twitch" || url.pathname.startsWith("/twitch/oauth/")) {
+    if (url.pathname === "/twitch" || url.pathname.startsWith("/twitch/")) {
       return handleTwitchRequest(request, env, ctx);
     }
     return new Response("Not found", { status: 404 });
