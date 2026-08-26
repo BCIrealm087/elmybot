@@ -2,11 +2,24 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createExecutionContext,
 	env,
+	runInDurableObject,
 	waitOnExecutionContext
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 
 const encoder = new TextEncoder();
+const oauthEnv = {
+	...env,
+	TWITCH_OAUTH_SETUP_TOKEN: "setup-token",
+	TWITCH_CLIENT_ID: "client-id",
+	TWITCH_CLIENT_SECRET: "client-secret",
+	TWITCH_BOT_USER_ID: "bot-user-id"
+};
+
+function twitchAuthStub() {
+	return env.TWITCH_AUTH.get(env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME));
+}
 
 function toHex(bytes) {
 	return Array.from(bytes)
@@ -163,5 +176,109 @@ describe("Twitch EventSub worker", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("Twitch OAuth", () => {
+	it("protects OAuth setup with a dedicated bearer token", async () => {
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/oauth/start", { method: "POST" }),
+			oauthEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(401);
+		expect(await response.text()).toBe("Unauthorized");
+	});
+
+	it("creates an authorization URL with the bot scopes and exact callback", async () => {
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/oauth/start", {
+				method: "POST",
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			oauthEnv,
+			createExecutionContext()
+		);
+		const result = await response.json();
+		const authorizationUrl = new URL(result.authorizationUrl);
+
+		expect(response.status).toBe(200);
+		expect(authorizationUrl.origin + authorizationUrl.pathname)
+			.toBe("https://id.twitch.tv/oauth2/authorize");
+		expect(authorizationUrl.searchParams.get("client_id")).toBe("client-id");
+		expect(authorizationUrl.searchParams.get("redirect_uri"))
+			.toBe("https://example.com/twitch/oauth/callback");
+		expect(authorizationUrl.searchParams.get("scope").split(" ").sort()).toEqual([
+			"user:bot",
+			"user:read:chat",
+			"user:write:chat"
+		]);
+		expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
+		expect(authorizationUrl.searchParams.get("force_verify")).toBe("true");
+		expect(response.headers.get("cache-control")).toBe("no-store");
+	});
+
+	it("exchanges the callback and stores validated OAuth tokens", async () => {
+		const startResponse = await worker.fetch(
+			new Request("https://example.com/twitch/oauth/start", {
+				method: "POST",
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			oauthEnv,
+			createExecutionContext()
+		);
+		const { authorizationUrl } = await startResponse.json();
+		const state = new URL(authorizationUrl).searchParams.get("state");
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				expect(init.method).toBe("POST");
+				expect(init.body.get("client_secret")).toBe("client-secret");
+				return Response.json({
+					access_token: "new-access-token",
+					refresh_token: "new-refresh-token",
+					expires_in: 14400,
+					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+				});
+			}
+
+			expect(input).toBe("https://id.twitch.tv/oauth2/validate");
+			expect(init.headers.Authorization).toBe("OAuth new-access-token");
+			return Response.json({
+				client_id: "client-id",
+				login: "elmybot",
+				user_id: "bot-user-id",
+				scopes: ["user:read:chat", "user:write:chat", "user:bot"],
+				expires_in: 14400
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const response = await worker.fetch(
+			new Request(`https://example.com/twitch/oauth/callback?code=auth-code&state=${state}`),
+			oauthEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("authorization stored");
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			const stored = await state.storage.get("oauthTokens");
+			expect(stored).toMatchObject({
+				accessToken: "new-access-token",
+				refreshToken: "new-refresh-token",
+				userId: "bot-user-id",
+				login: "elmybot"
+			});
+		});
+
+		const replay = await worker.fetch(
+			new Request(`https://example.com/twitch/oauth/callback?code=auth-code&state=${state}`),
+			oauthEnv,
+			createExecutionContext()
+		);
+		expect(replay.status).toBe(400);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 });

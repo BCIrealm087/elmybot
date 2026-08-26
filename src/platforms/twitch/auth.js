@@ -1,0 +1,246 @@
+import {
+	jsonResponse,
+	logError,
+	withExternalRequestTimeout
+} from "../../common.js";
+
+export const TWITCH_AUTH_OBJECT_NAME = "twitch:bot";
+
+const OAUTH_STATE_KEY = "oauthState";
+const OAUTH_TOKENS_KEY = "oauthTokens";
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const REQUIRED_BOT_SCOPES = Object.freeze([
+	"user:read:chat",
+	"user:write:chat",
+	"user:bot"
+]);
+
+class TwitchOAuthError extends Error {
+	constructor(message, { status = 400, code = "twitch_oauth_error", cause } = {}) {
+		super(message, { cause });
+		this.status = status;
+		this.code = code;
+	}
+}
+
+function noStoreJson(obj, status = 200) {
+	const response = jsonResponse(obj, status);
+	response.headers.set("cache-control", "no-store");
+	return response;
+}
+
+function requiredString(value, name) {
+	if (typeof value !== "string" || value.length === 0) {
+		throw new TwitchOAuthError(`${name} is not configured.`, {
+			status: 503,
+			code: "twitch_oauth_not_configured"
+		});
+	}
+	return value;
+}
+
+async function twitchTokenRequest(body) {
+	let response;
+	try {
+		response = await fetch(
+			"https://id.twitch.tv/oauth2/token",
+			withExternalRequestTimeout({
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				body
+			})
+		);
+	} catch (cause) {
+		throw new TwitchOAuthError("Twitch token exchange was unavailable.", {
+			status: 502,
+			code: "twitch_oauth_network_error",
+			cause
+		});
+	}
+
+	if (!response.ok) {
+		await response.text();
+		throw new TwitchOAuthError("Twitch rejected the authorization code.", {
+			status: 502,
+			code: "twitch_oauth_exchange_rejected"
+		});
+	}
+
+	const tokens = await response.json();
+	if (
+		typeof tokens.access_token !== "string" ||
+		typeof tokens.refresh_token !== "string" ||
+		!Number.isFinite(tokens.expires_in) ||
+		tokens.expires_in <= 0
+	) {
+		throw new TwitchOAuthError("Twitch returned an invalid token response.", {
+			status: 502,
+			code: "twitch_oauth_invalid_token_response"
+		});
+	}
+
+	return tokens;
+}
+
+async function validateTwitchUserToken(accessToken) {
+	let response;
+	try {
+		response = await fetch(
+			"https://id.twitch.tv/oauth2/validate",
+			withExternalRequestTimeout({
+				headers: { Authorization: `OAuth ${accessToken}` }
+			})
+		);
+	} catch (cause) {
+		throw new TwitchOAuthError("Twitch token validation was unavailable.", {
+			status: 502,
+			code: "twitch_oauth_validation_network_error",
+			cause
+		});
+	}
+
+	if (!response.ok) {
+		await response.text();
+		throw new TwitchOAuthError("Twitch rejected the new access token.", {
+			status: 502,
+			code: "twitch_oauth_validation_rejected"
+		});
+	}
+
+	return response.json();
+}
+
+export class TwitchAuth {
+	constructor(state) {
+		this.state = state;
+	}
+
+	async startOAuth({ redirectUri, clientId, clientSecret, botUserId }) {
+		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
+		requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
+		requiredString(botUserId, "TWITCH_BOT_USER_ID");
+
+		let parsedRedirect;
+		try {
+			parsedRedirect = new URL(redirectUri);
+		} catch {
+			throw new TwitchOAuthError("OAuth redirect URI is invalid.");
+		}
+		if (parsedRedirect.protocol !== "https:" || parsedRedirect.pathname !== "/twitch/oauth/callback") {
+			throw new TwitchOAuthError("OAuth redirect URI is invalid.");
+		}
+
+		const oauthState = {
+			value: crypto.randomUUID(),
+			redirectUri: parsedRedirect.href,
+			expiresAtMs: Date.now() + OAUTH_STATE_TTL_MS
+		};
+		await this.state.storage.put(OAUTH_STATE_KEY, oauthState);
+
+		const authorizationUrl = new URL("https://id.twitch.tv/oauth2/authorize");
+		authorizationUrl.search = new URLSearchParams({
+			response_type: "code",
+			client_id: clientId,
+			redirect_uri: oauthState.redirectUri,
+			scope: REQUIRED_BOT_SCOPES.join(" "),
+			state: oauthState.value,
+			force_verify: "true"
+		}).toString();
+
+		return {
+			authorizationUrl: authorizationUrl.href,
+			expiresAtMs: oauthState.expiresAtMs
+		};
+	}
+
+	async finishOAuth({ code, state, redirectUri, clientId, clientSecret, botUserId }) {
+		if (![code, state, redirectUri].every((value) => typeof value === "string" && value.length > 0)) {
+			throw new TwitchOAuthError("OAuth callback parameters are incomplete.");
+		}
+
+		const expectedState = await this.state.storage.get(OAUTH_STATE_KEY);
+		if (
+			!expectedState ||
+			expectedState.value !== state ||
+			expectedState.redirectUri !== redirectUri ||
+			expectedState.expiresAtMs < Date.now()
+		) {
+			throw new TwitchOAuthError("OAuth state is invalid or expired.", {
+				code: "twitch_oauth_invalid_state"
+			});
+		}
+
+		await this.state.storage.delete(OAUTH_STATE_KEY);
+
+		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
+		clientSecret = requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
+		botUserId = requiredString(botUserId, "TWITCH_BOT_USER_ID");
+		const tokens = await twitchTokenRequest(new URLSearchParams({
+			client_id: clientId,
+			client_secret: clientSecret,
+			code,
+			grant_type: "authorization_code",
+			redirect_uri: redirectUri
+		}));
+		const validation = await validateTwitchUserToken(tokens.access_token);
+		const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
+
+		if (validation.client_id !== clientId || validation.user_id !== botUserId) {
+			throw new TwitchOAuthError("The authorized Twitch account does not match the configured bot.", {
+				status: 403,
+				code: "twitch_oauth_wrong_user"
+			});
+		}
+		const missingScopes = REQUIRED_BOT_SCOPES.filter((scope) => !scopes.includes(scope));
+		if (missingScopes.length > 0) {
+			throw new TwitchOAuthError("The Twitch authorization is missing required bot scopes.", {
+				status: 403,
+				code: "twitch_oauth_missing_scopes"
+			});
+		}
+
+		const nowMs = Date.now();
+		const storedTokens = {
+			accessToken: tokens.access_token,
+			refreshToken: tokens.refresh_token,
+			expiresAtMs: nowMs + tokens.expires_in * 1000,
+			lastValidatedAtMs: nowMs,
+			userId: validation.user_id,
+			login: validation.login ?? null,
+			scopes: [...scopes].sort()
+		};
+		await this.state.storage.put(OAUTH_TOKENS_KEY, storedTokens);
+
+		return {
+			authorized: true,
+			userId: storedTokens.userId,
+			login: storedTokens.login,
+			scopes: storedTokens.scopes,
+			expiresAtMs: storedTokens.expiresAtMs
+		};
+	}
+
+	async fetch(request) {
+		const url = new URL(request.url);
+		try {
+			if (request.method === "POST" && url.pathname === "/oauth/start") {
+				return noStoreJson(await this.startOAuth(await request.json()));
+			}
+			if (request.method === "POST" && url.pathname === "/oauth/callback") {
+				return noStoreJson(await this.finishOAuth(await request.json()));
+			}
+			return new Response("Not found", { status: 404 });
+		} catch (error) {
+			if (error instanceof TwitchOAuthError) {
+				return noStoreJson({ error: error.message, code: error.code }, error.status);
+			}
+
+			logError("twitch.oauth_failed", {
+				platform: "twitch",
+				correlationId: `twitch-oauth:${crypto.randomUUID()}`,
+				groupId: null
+			}, error);
+			return noStoreJson({ error: "Twitch OAuth failed." }, 500);
+		}
+	}
+}

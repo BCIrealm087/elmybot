@@ -1,5 +1,6 @@
 import { logError, withExternalRequestTimeout } from "../../common.js";
 import { commands } from "./commands.js";
+import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -8,6 +9,70 @@ const EVENTSUB_MAX_AGE_MS = 10 * 60 * 1000;
 
 let cachedSecret = null;
 let cachedSecretKeyPromise = null;
+
+function twitchAuthStub(env) {
+	const id = env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME);
+	return env.TWITCH_AUTH.get(id);
+}
+
+function oauthSetupAuthorized(request, env) {
+	return typeof env.TWITCH_OAUTH_SETUP_TOKEN === "string" &&
+		env.TWITCH_OAUTH_SETUP_TOKEN.length > 0 &&
+		request.headers.get("authorization") === `Bearer ${env.TWITCH_OAUTH_SETUP_TOKEN}`;
+}
+
+async function startTwitchOAuth(request, env) {
+	if (!env.TWITCH_OAUTH_SETUP_TOKEN) {
+		return new Response("Twitch OAuth setup is not configured.", { status: 503 });
+	}
+	if (!oauthSetupAuthorized(request, env)) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+
+	const url = new URL(request.url);
+	return twitchAuthStub(env).fetch("https://twitch-auth/oauth/start", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			redirectUri: `${url.origin}/twitch/oauth/callback`,
+			clientId: env.TWITCH_CLIENT_ID,
+			clientSecret: env.TWITCH_CLIENT_SECRET,
+			botUserId: env.TWITCH_BOT_USER_ID
+		})
+	});
+}
+
+async function finishTwitchOAuth(request, env) {
+	const url = new URL(request.url);
+	if (url.searchParams.has("error")) {
+		return new Response("Twitch authorization was denied.", {
+			status: 400,
+			headers: { "cache-control": "no-store" }
+		});
+	}
+
+	const response = await twitchAuthStub(env).fetch("https://twitch-auth/oauth/callback", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			code: url.searchParams.get("code"),
+			state: url.searchParams.get("state"),
+			redirectUri: `${url.origin}${url.pathname}`,
+			clientId: env.TWITCH_CLIENT_ID,
+			clientSecret: env.TWITCH_CLIENT_SECRET,
+			botUserId: env.TWITCH_BOT_USER_ID
+		})
+	});
+	if (!response.ok) return response;
+
+	return new Response("Twitch bot authorization stored. You can close this tab.", {
+		headers: {
+			"cache-control": "no-store",
+			"content-type": "text/plain; charset=utf-8",
+			"referrer-policy": "no-referrer"
+		}
+	});
+}
 
 function hexToU8(hex) {
 	if (typeof hex !== "string" || hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
@@ -120,6 +185,17 @@ function handleChatNotification(payload, env, ctx, messageId) {
  * Entrypoint for Twitch EventSub webhook requests.
  */
 export async function handleTwitchRequest(request, env, ctx) {
+	const url = new URL(request.url);
+	if (url.pathname === "/twitch/oauth/start") {
+		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+		return startTwitchOAuth(request, env);
+	}
+	if (url.pathname === "/twitch/oauth/callback") {
+		if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
+		return finishTwitchOAuth(request, env);
+	}
+	if (url.pathname !== "/twitch") return new Response("Not found", { status: 404 });
+
 	if (request.method === "GET") return new Response("OK");
 	if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 

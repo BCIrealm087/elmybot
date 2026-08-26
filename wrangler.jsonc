@@ -14,41 +14,47 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
-      { "name": "CONFIG", "class_name": "GroupConfig" }
+			{ "name": "CONFIG", "class_name": "GroupConfig" },
+			{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" }
 		]
-  },
+	},
 
 	"migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["GuildScheduler"]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["GuildConfig"]
-    },
-    {
-      "tag": "v3",
-      "renamed_classes": [
-        { "from": "GuildConfig", "to": "GroupConfig" }
-      ]
-    },
-    {
-      "tag": "v4",
-      "renamed_classes": [
-        { "from": "GuildScheduler", "to": "GroupScheduler" }
-      ]
-    }
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["GuildScheduler"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["GuildConfig"]
+		},
+		{
+			"tag": "v3",
+			"renamed_classes": [
+				{ "from": "GuildConfig", "to": "GroupConfig" }
+			]
+		},
+		{
+			"tag": "v4",
+			"renamed_classes": [
+				{ "from": "GuildScheduler", "to": "GroupScheduler" }
+			]
+		},
+		{
+			"tag": "v5",
+			"new_sqlite_classes": ["TwitchAuth"]
+		}
 	],
 
-  "env": {
-    "test": {
-      "durable_objects": {
-        "bindings": [
-          { "name": "SCHEDULER", "class_name": "GroupScheduler" },
-          { "name": "CONFIG", "class_name": "GroupConfig" }
-        ]
-      }
-    }
-  }
+	"env": {
+		"test": {
+			"durable_objects": {
+				"bindings": [
+					{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
+					{ "name": "CONFIG", "class_name": "GroupConfig" },
+					{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" }
+				]
+			}
+		}
+	}
 }

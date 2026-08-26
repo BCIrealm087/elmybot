@@ -19,6 +19,7 @@ export class GroupScheduler extends GroupSchedulerBackend {
   }
 }
 export { GroupConfig } from "./group-configuration.js";
+export { TwitchAuth } from "./platforms/twitch/auth.js";
 
 /**
  * Cloudflare Worker entrypoint for platform requests.
@@ -33,7 +34,7 @@ export default {
     if (url.pathname === "/discord") {
       return handleDiscordRequest(request, env, ctx);
     }
-    if (url.pathname === "/twitch") {
+    if (url.pathname === "/twitch" || url.pathname.startsWith("/twitch/oauth/")) {
       return handleTwitchRequest(request, env, ctx);
     }
     return new Response("Not found", { status: 404 });
