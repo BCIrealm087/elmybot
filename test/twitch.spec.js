@@ -617,7 +617,7 @@ describe("Twitch EventSub recovery", () => {
 					type: "channel.chat.message",
 					version: "1",
 					condition: {
-						broadcaster_user_id: "broadcaster-id",
+						broadcaster_user_id: "reauthorization-broadcaster-id",
 						user_id: "bot-user-id"
 					}
 				}
@@ -636,7 +636,7 @@ describe("Twitch EventSub recovery", () => {
 		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
 		await runInDurableObject(
-			twitchEventSubManagerStub(),
+			twitchEventSubManagerStub("reauthorization-broadcaster-id"),
 			async (_instance, state) => {
 				expect(await state.storage.get("pendingRecovery")).toBeUndefined();
 			}
