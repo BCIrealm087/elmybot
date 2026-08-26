@@ -454,8 +454,9 @@ describe("Twitch OAuth", () => {
 
 	it("validates hourly by alarm and schedules the next validation", async () => {
 		await storeTwitchTokens({ lastValidatedAtMs: Date.now() - 60 * 60 * 1000 });
-		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
-			await state.storage.setAlarm(Date.now());
+		const stub = twitchAuthStub();
+		await runInDurableObject(stub, async (_instance, state) => {
+			await state.storage.setAlarm(Date.now() + 60 * 1000);
 		});
 		const fetchMock = vi.fn(async (input, init) => {
 			expect(input).toBe("https://id.twitch.tv/oauth2/validate");
@@ -470,9 +471,9 @@ describe("Twitch OAuth", () => {
 		});
 		vi.stubGlobal("fetch", fetchMock);
 
-		expect(await runDurableObjectAlarm(twitchAuthStub())).toBe(true);
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledOnce();
-		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+		await runInDurableObject(stub, async (_instance, state) => {
 			const stored = await state.storage.get("oauthTokens");
 			expect(stored.lastValidatedAtMs).toBeGreaterThan(Date.now() - 5000);
 			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
