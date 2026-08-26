@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createExecutionContext,
 	env,
+	runDurableObjectAlarm,
 	runInDurableObject,
 	waitOnExecutionContext
 } from "cloudflare:test";
@@ -271,6 +272,55 @@ describe("Twitch EventSub worker", () => {
 		]);
 	});
 
+	it("validates a stale OAuth session before sending a chat message", async () => {
+		const secret = "eventsub-secret";
+		const request = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: { type: "channel.chat.message" },
+				event: {
+					broadcaster_user_id: "broadcaster-id",
+					message: { text: "!alive" }
+				}
+			}),
+			secret
+		});
+		await storeTwitchTokens({ lastValidatedAtMs: Date.now() - 61 * 60 * 1000 });
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/validate") {
+				expect(init.headers.Authorization).toBe("OAuth stored-access-token");
+				return Response.json({
+					client_id: "client-id",
+					login: "elmybot",
+					user_id: "bot-user-id",
+					scopes: ["user:read:chat", "user:write:chat", "user:bot"],
+					expires_in: 10800
+				});
+			}
+
+			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
+			return new Response(null, { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const ctx = createExecutionContext();
+
+		const response = await worker.fetch(request, {
+			...oauthEnv,
+			TWITCH_EVENTSUB_SECRET: secret
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(204);
+		expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+			"https://id.twitch.tv/oauth2/validate",
+			"https://api.twitch.tv/helix/chat/messages"
+		]);
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			const stored = await state.storage.get("oauthTokens");
+			expect(stored.lastValidatedAtMs).toBeGreaterThan(Date.now() - 5000);
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
+
 	it("acknowledges non-command chat messages without sending a reply", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
@@ -383,13 +433,14 @@ describe("Twitch OAuth", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
 			const stored = await state.storage.get("oauthTokens");
-			expect(stored).toMatchObject({
+				expect(stored).toMatchObject({
 				accessToken: "new-access-token",
 				refreshToken: "new-refresh-token",
 				clientId: "client-id",
 				userId: "bot-user-id",
 				login: "elmybot"
 			});
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
 
 		const replay = await worker.fetch(
@@ -399,5 +450,61 @@ describe("Twitch OAuth", () => {
 		);
 		expect(replay.status).toBe(400);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("validates hourly by alarm and schedules the next validation", async () => {
+		await storeTwitchTokens({ lastValidatedAtMs: Date.now() - 60 * 60 * 1000 });
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			await state.storage.setAlarm(Date.now());
+		});
+		const fetchMock = vi.fn(async (input, init) => {
+			expect(input).toBe("https://id.twitch.tv/oauth2/validate");
+			expect(init.headers.Authorization).toBe("OAuth stored-access-token");
+			return Response.json({
+				client_id: "client-id",
+				login: "elmybot",
+				user_id: "bot-user-id",
+				scopes: ["user:read:chat", "user:write:chat", "user:bot"],
+				expires_in: 10800
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		expect(await runDurableObjectAlarm(twitchAuthStub())).toBe(true);
+		expect(fetchMock).toHaveBeenCalledOnce();
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			const stored = await state.storage.get("oauthTokens");
+			expect(stored.lastValidatedAtMs).toBeGreaterThan(Date.now() - 5000);
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
+
+	it("ends the stored session when Twitch rejects both access and refresh tokens", async () => {
+		await storeTwitchTokens({ lastValidatedAtMs: Date.now() - 60 * 60 * 1000 });
+		const fetchMock = vi.fn(async (input) => {
+			if (input === "https://id.twitch.tv/oauth2/validate") {
+				return Response.json({ status: 401, message: "invalid access token" }, { status: 401 });
+			}
+			expect(input).toBe("https://id.twitch.tv/oauth2/token");
+			return Response.json({ status: 400, message: "Invalid refresh token" }, { status: 400 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const response = await twitchAuthStub().fetch("https://twitch-auth/oauth/access-token", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				clientId: "client-id",
+				clientSecret: "client-secret",
+				botUserId: "bot-user-id"
+			})
+		});
+
+		expect(response.status).toBe(401);
+		expect(await response.json()).toMatchObject({ code: "twitch_oauth_refresh_rejected" });
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			expect(await state.storage.get("oauthTokens")).toBeUndefined();
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
 	});
 });

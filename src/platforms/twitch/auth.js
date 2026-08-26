@@ -10,6 +10,9 @@ const OAUTH_STATE_KEY = "oauthState";
 const OAUTH_TOKENS_KEY = "oauthTokens";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60 * 1000;
+const TOKEN_VALIDATION_MAX_AGE_MS = 60 * 60 * 1000;
+const TOKEN_VALIDATION_ALARM_DELAY_MS = 55 * 60 * 1000;
+const TOKEN_VALIDATION_RETRY_MS = 5 * 60 * 1000;
 const REQUIRED_BOT_SCOPES = Object.freeze([
 	"user:read:chat",
 	"user:write:chat",
@@ -106,6 +109,12 @@ async function validateTwitchUserToken(accessToken) {
 
 	if (!response.ok) {
 		await response.text();
+		if (response.status === 401) {
+			throw new TwitchOAuthError("The Twitch access token is invalid.", {
+				status: 401,
+				code: "twitch_oauth_token_invalid"
+			});
+		}
 		throw new TwitchOAuthError("Twitch rejected the new access token.", {
 			status: 502,
 			code: "twitch_oauth_validation_rejected"
@@ -116,9 +125,53 @@ async function validateTwitchUserToken(accessToken) {
 }
 
 export class TwitchAuth {
-	constructor(state) {
+	constructor(state, env) {
 		this.state = state;
+		this.env = env;
 		this.refreshPromise = null;
+		this.state.blockConcurrencyWhile(async () => {
+			const [storedTokens, alarm] = await Promise.all([
+				this.state.storage.get(OAUTH_TOKENS_KEY),
+				this.state.storage.getAlarm()
+			]);
+			if (storedTokens?.accessToken && alarm === null) {
+				await this.state.storage.setAlarm(Date.now());
+			}
+		});
+	}
+
+	async scheduleValidation(delayMs = TOKEN_VALIDATION_ALARM_DELAY_MS) {
+		await this.state.storage.setAlarm(Date.now() + delayMs);
+	}
+
+	async ensureValidationAlarm() {
+		if (await this.state.storage.getAlarm() === null) {
+			await this.scheduleValidation();
+		}
+	}
+
+	assertTokenIdentity(validation, { clientId, botUserId }) {
+		const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
+		if (validation.client_id !== clientId || validation.user_id !== botUserId) {
+			throw new TwitchOAuthError("The Twitch authorization does not match the configured bot.", {
+				status: 403,
+				code: "twitch_oauth_wrong_user"
+			});
+		}
+		const missingScopes = REQUIRED_BOT_SCOPES.filter((scope) => !scopes.includes(scope));
+		if (missingScopes.length > 0) {
+			throw new TwitchOAuthError("The Twitch authorization is missing required bot scopes.", {
+				status: 403,
+				code: "twitch_oauth_missing_scopes"
+			});
+		}
+		if (!Number.isFinite(validation.expires_in) || validation.expires_in < 0) {
+			throw new TwitchOAuthError("Twitch returned an invalid validation response.", {
+				status: 502,
+				code: "twitch_oauth_invalid_validation_response"
+			});
+		}
+		return scopes;
 	}
 
 	async startOAuth({ redirectUri, clientId, clientSecret, botUserId }) {
@@ -195,21 +248,7 @@ export class TwitchAuth {
 			}
 		);
 		const validation = await validateTwitchUserToken(tokens.access_token);
-		const scopes = Array.isArray(validation.scopes) ? validation.scopes : [];
-
-		if (validation.client_id !== clientId || validation.user_id !== botUserId) {
-			throw new TwitchOAuthError("The authorized Twitch account does not match the configured bot.", {
-				status: 403,
-				code: "twitch_oauth_wrong_user"
-			});
-		}
-		const missingScopes = REQUIRED_BOT_SCOPES.filter((scope) => !scopes.includes(scope));
-		if (missingScopes.length > 0) {
-			throw new TwitchOAuthError("The Twitch authorization is missing required bot scopes.", {
-				status: 403,
-				code: "twitch_oauth_missing_scopes"
-			});
-		}
+		const scopes = this.assertTokenIdentity(validation, { clientId, botUserId });
 
 		const nowMs = Date.now();
 		const storedTokens = {
@@ -223,6 +262,7 @@ export class TwitchAuth {
 			scopes: [...scopes].sort()
 		};
 		await this.state.storage.put(OAUTH_TOKENS_KEY, storedTokens);
+		await this.scheduleValidation();
 
 		return {
 			authorized: true,
@@ -281,12 +321,74 @@ export class TwitchAuth {
 		return refreshedTokens;
 	}
 
+	async validateStoredSession({ storedTokens, clientId, clientSecret, botUserId }) {
+		let currentTokens = storedTokens;
+		let validation;
+		try {
+			validation = await validateTwitchUserToken(currentTokens.accessToken);
+		} catch (error) {
+			if (!(error instanceof TwitchOAuthError) || error.code !== "twitch_oauth_token_invalid") {
+				throw error;
+			}
+
+			try {
+				clientSecret = requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
+				currentTokens = await this.refreshTokens({
+					storedTokens: currentTokens,
+					clientId,
+					clientSecret,
+					botUserId
+				});
+				validation = await validateTwitchUserToken(currentTokens.accessToken);
+			} catch (recoveryError) {
+				if (
+					recoveryError instanceof TwitchOAuthError &&
+					[
+						"twitch_oauth_refresh_rejected",
+						"twitch_oauth_token_invalid",
+						"twitch_oauth_wrong_user",
+						"twitch_oauth_wrong_client",
+						"twitch_oauth_missing_scopes"
+					].includes(recoveryError.code)
+				) {
+					await this.state.storage.delete(OAUTH_TOKENS_KEY);
+					await this.state.storage.deleteAlarm();
+				}
+				throw recoveryError;
+			}
+		}
+
+		let scopes;
+		try {
+			scopes = this.assertTokenIdentity(validation, { clientId, botUserId });
+		} catch (error) {
+			if (error instanceof TwitchOAuthError && error.status === 403) {
+				await this.state.storage.delete(OAUTH_TOKENS_KEY);
+				await this.state.storage.deleteAlarm();
+			}
+			throw error;
+		}
+
+		const nowMs = Date.now();
+		const validatedTokens = {
+			...currentTokens,
+			expiresAtMs: nowMs + validation.expires_in * 1000,
+			lastValidatedAtMs: nowMs,
+			clientId,
+			userId: validation.user_id,
+			login: validation.login ?? currentTokens.login ?? null,
+			scopes: [...scopes].sort()
+		};
+		await this.state.storage.put(OAUTH_TOKENS_KEY, validatedTokens);
+		return validatedTokens;
+	}
+
 	async getAccessToken({ clientId, clientSecret, botUserId, rejectedAccessToken }) {
 		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
 		clientSecret = requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
 		botUserId = requiredString(botUserId, "TWITCH_BOT_USER_ID");
 
-		const storedTokens = await this.state.storage.get(OAUTH_TOKENS_KEY);
+		let storedTokens = await this.state.storage.get(OAUTH_TOKENS_KEY);
 		if (!storedTokens?.accessToken || !storedTokens?.refreshToken) {
 			throw new TwitchOAuthError("The Twitch bot has not been authorized.", {
 				status: 503,
@@ -304,6 +406,19 @@ export class TwitchAuth {
 				status: 403,
 				code: "twitch_oauth_wrong_client"
 			});
+		}
+		const validationIsStale = !Number.isFinite(storedTokens.lastValidatedAtMs) ||
+			storedTokens.lastValidatedAtMs <= Date.now() - TOKEN_VALIDATION_MAX_AGE_MS;
+		if (validationIsStale) {
+			storedTokens = await this.validateStoredSession({
+				storedTokens,
+				clientId,
+				clientSecret,
+				botUserId
+			});
+			await this.scheduleValidation();
+		} else {
+			await this.ensureValidationAlarm();
 		}
 
 		const tokenWasRejected = typeof rejectedAccessToken === "string" &&
@@ -332,6 +447,34 @@ export class TwitchAuth {
 			accessToken: refreshedTokens.accessToken,
 			expiresAtMs: refreshedTokens.expiresAtMs
 		};
+	}
+
+	async alarm() {
+		const storedTokens = await this.state.storage.get(OAUTH_TOKENS_KEY);
+		if (!storedTokens?.accessToken || !storedTokens?.refreshToken) return;
+
+		try {
+			const clientId = requiredString(this.env?.TWITCH_CLIENT_ID ?? storedTokens.clientId, "TWITCH_CLIENT_ID");
+			const clientSecret = this.env?.TWITCH_CLIENT_SECRET;
+			const botUserId = requiredString(this.env?.TWITCH_BOT_USER_ID ?? storedTokens.userId, "TWITCH_BOT_USER_ID");
+			await this.validateStoredSession({
+				storedTokens,
+				clientId,
+				clientSecret,
+				botUserId
+			});
+			await this.scheduleValidation();
+		} catch (error) {
+			logError("twitch.oauth_validation_failed", {
+				platform: "twitch",
+				correlationId: `twitch-validation:${crypto.randomUUID()}`,
+				groupId: null
+			}, error);
+
+			if (await this.state.storage.get(OAUTH_TOKENS_KEY)) {
+				await this.scheduleValidation(TOKEN_VALIDATION_RETRY_MS);
+			}
+		}
 	}
 
 	async fetch(request) {
