@@ -1,4 +1,5 @@
 import { handleDiscordRequest } from "./platforms/discord/index.js";
+import { handleTwitchRequest } from "./platforms/twitch/index.js";
 import { discordSchedulingHandlers } from "./platforms/discord/commands.js";
 import {
   createJobHandlerRegistry,
@@ -20,17 +21,20 @@ export class GroupScheduler extends GroupSchedulerBackend {
 export { GroupConfig } from "./group-configuration.js";
 
 /**
- * Cloudflare Worker entrypoint for Discord interactions.
+ * Cloudflare Worker entrypoint for platform requests.
  */
 
 export default {
   /**
-   * Cloudflare Worker fetch handler (Discord interactions entrypoint).
+   * Cloudflare Worker fetch handler.
    */
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/discord") {
       return handleDiscordRequest(request, env, ctx);
+    }
+    if (url.pathname === "/twitch") {
+      return handleTwitchRequest(request, env, ctx);
     }
     return new Response("Not found", { status: 404 });
   },
