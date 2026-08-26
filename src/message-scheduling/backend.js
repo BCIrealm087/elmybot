@@ -71,7 +71,10 @@ const DELIVERED_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 30_000;
 const RETRY_MAX_DELAY_MS = 30 * 60 * 1000;
-const MAX_JOBS_PER_ALARM = 25;
+// A Discord GIF delivery can make two external requests (KLIPY + Discord).
+// Twenty jobs therefore leave headroom below the Workers Free 50-subrequest
+// limit for redirects or other delivery-handler requests.
+const MAX_JOBS_PER_ALARM = 20;
 const MAX_DEAD_LETTERS = 100;
 const MAX_DEAD_LETTERS_PREVIEW = 5;
 const MAX_SCHEDULE_SOURCES = 10_000;

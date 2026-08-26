@@ -168,7 +168,10 @@ Current job shape:
 - Discord interaction IDs become `discord:<interactionId>` source IDs; scheduling and source deduplication happen in one storage transaction.
 - Replaying the same interaction returns the original scheduling result without creating another job.
 - After each mutation, the next alarm is recomputed from persisted storage.
-- `alarm()` retries transient failures with backoff, dead-letters terminal/exhausted occurrences, and continues with later due jobs.
+- `alarm()` processes at most 20 jobs per invocation to preserve external
+  subrequest headroom, immediately re-arms for any remaining due work, retries
+  transient failures with backoff, dead-letters terminal/exhausted occurrences,
+  and continues with later due jobs.
 - Repeating timestamp-based jobs advance by one day and catch up if the alarm fires late.
 - Repeating random-interval jobs compute a new bounded random delay each time.
 

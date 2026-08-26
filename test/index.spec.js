@@ -1088,6 +1088,44 @@ describe('Discord interaction worker', () => {
     }
   });
 
+  it('bounds each alarm batch and re-arms immediately for remaining due jobs', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const sentMessages = [];
+
+    vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
+      sentMessages.push(JSON.parse(init.body).content);
+      return jsonResponse({ id: uniqueId('message') });
+    }));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const dueAtMs = Date.now() - 1_000;
+      replaceStoredJobs(state, Array.from({ length: 21 }, (_, index) => (
+        storedMessageJob({
+          id: `batch-job-${String(index).padStart(2, '0')}`,
+          guildId,
+          channelId,
+          subject: `batch-message-${index}`,
+          runAtMs: dueAtMs,
+        })
+      )));
+
+      await instance.alarm();
+
+      expect(sentMessages).toHaveLength(20);
+      const remaining = readStoredJobs(state);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].id).toBe('batch-job-20');
+      const nextAlarm = await state.storage.getAlarm();
+      expect(nextAlarm).toBeGreaterThanOrEqual(
+        remaining[0].delivery.nextAttemptAtMs,
+      );
+      expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
+      await state.storage.deleteAlarm();
+    });
+  });
+
   it('dead-letters a terminal delivery failure and continues with later due jobs', async () => {
     const guildId = uniqueId('guild');
     const stub = schedulerStubFor(guildId);
