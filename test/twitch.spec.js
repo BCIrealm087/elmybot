@@ -21,6 +21,22 @@ function twitchAuthStub() {
 	return env.TWITCH_AUTH.get(env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME));
 }
 
+async function storeTwitchTokens(overrides = {}) {
+	await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+		await state.storage.put("oauthTokens", {
+			accessToken: "stored-access-token",
+			refreshToken: "stored-refresh-token",
+			expiresAtMs: Date.now() + 4 * 60 * 60 * 1000,
+			lastValidatedAtMs: Date.now(),
+			clientId: "client-id",
+			userId: "bot-user-id",
+			login: "elmybot",
+			scopes: ["user:bot", "user:read:chat", "user:write:chat"],
+			...overrides
+		});
+	});
+}
+
 function toHex(bytes) {
 	return Array.from(bytes)
 		.map((byte) => byte.toString(16).padStart(2, "0"))
@@ -123,6 +139,7 @@ describe("Twitch EventSub worker", () => {
 			}),
 			secret
 		});
+		await storeTwitchTokens();
 		const fetchMock = vi.fn(async (_input, init) => {
 			expect(init.signal).toBeInstanceOf(AbortSignal);
 			return new Response(null, { status: 200 });
@@ -134,7 +151,7 @@ describe("Twitch EventSub worker", () => {
 			...env,
 			TWITCH_EVENTSUB_SECRET: secret,
 			TWITCH_CLIENT_ID: "client-id",
-			TWITCH_ACCESS_TOKEN: "access-token",
+			TWITCH_CLIENT_SECRET: "client-secret",
 			TWITCH_BOT_USER_ID: "bot-user-id"
 		}, ctx);
 		await waitOnExecutionContext(ctx);
@@ -143,7 +160,7 @@ describe("Twitch EventSub worker", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 		expect(fetchMock.mock.calls[0][0]).toBe("https://api.twitch.tv/helix/chat/messages");
 		expect(fetchMock.mock.calls[0][1].headers).toMatchObject({
-			Authorization: "Bearer access-token",
+			Authorization: "Bearer stored-access-token",
 			"Client-Id": "client-id"
 		});
 		expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
@@ -151,6 +168,107 @@ describe("Twitch EventSub worker", () => {
 			sender_id: "bot-user-id",
 			message: "I'm here!!1"
 		});
+	});
+
+	it("refreshes an expiring token before sending a chat message", async () => {
+		const secret = "eventsub-secret";
+		const request = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: { type: "channel.chat.message" },
+				event: {
+					broadcaster_user_id: "broadcaster-id",
+					message: { text: "!alive" }
+				}
+			}),
+			secret
+		});
+		await storeTwitchTokens({ expiresAtMs: Date.now() + 30 * 1000 });
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				expect(init.body.get("grant_type")).toBe("refresh_token");
+				expect(init.body.get("refresh_token")).toBe("stored-refresh-token");
+				expect(init.body.get("client_secret")).toBe("client-secret");
+				return Response.json({
+					access_token: "refreshed-access-token",
+					refresh_token: "rotated-refresh-token",
+					expires_in: 14400,
+					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+				});
+			}
+
+			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
+			expect(init.headers.Authorization).toBe("Bearer refreshed-access-token");
+			return new Response(null, { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const ctx = createExecutionContext();
+
+		const response = await worker.fetch(request, {
+			...oauthEnv,
+			TWITCH_EVENTSUB_SECRET: secret
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(204);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+			const stored = await state.storage.get("oauthTokens");
+			expect(stored).toMatchObject({
+				accessToken: "refreshed-access-token",
+				refreshToken: "rotated-refresh-token",
+				clientId: "client-id"
+			});
+		});
+	});
+
+	it("refreshes and retries once when Twitch rejects a stored access token", async () => {
+		const secret = "eventsub-secret";
+		const request = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: { type: "channel.chat.message" },
+				event: {
+					broadcaster_user_id: "broadcaster-id",
+					message: { text: "!alive" }
+				}
+			}),
+			secret
+		});
+		await storeTwitchTokens();
+		let chatRequests = 0;
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "replacement-access-token",
+					refresh_token: "replacement-refresh-token",
+					expires_in: 14400,
+					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+				});
+			}
+
+			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
+			chatRequests += 1;
+			if (chatRequests === 1) {
+				expect(init.headers.Authorization).toBe("Bearer stored-access-token");
+				return new Response("Unauthorized", { status: 401 });
+			}
+			expect(init.headers.Authorization).toBe("Bearer replacement-access-token");
+			return new Response(null, { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const ctx = createExecutionContext();
+
+		const response = await worker.fetch(request, {
+			...oauthEnv,
+			TWITCH_EVENTSUB_SECRET: secret
+		}, ctx);
+		await waitOnExecutionContext(ctx);
+
+		expect(response.status).toBe(204);
+		expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+			"https://api.twitch.tv/helix/chat/messages",
+			"https://id.twitch.tv/oauth2/token",
+			"https://api.twitch.tv/helix/chat/messages"
+		]);
 	});
 
 	it("acknowledges non-command chat messages without sending a reply", async () => {
@@ -268,6 +386,7 @@ describe("Twitch OAuth", () => {
 			expect(stored).toMatchObject({
 				accessToken: "new-access-token",
 				refreshToken: "new-refresh-token",
+				clientId: "client-id",
 				userId: "bot-user-id",
 				login: "elmybot"
 			});

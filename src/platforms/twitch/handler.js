@@ -124,20 +124,34 @@ function commandFromMessage(messageText) {
 	return commands[match[1].toLowerCase()] ?? null;
 }
 
-async function sendTwitchChatMessage(env, event, message) {
-	if (!env.TWITCH_CLIENT_ID || !env.TWITCH_ACCESS_TOKEN || !env.TWITCH_BOT_USER_ID) {
-		throw new Error("Twitch chat credentials are not configured.");
+async function getTwitchAccessToken(env, rejectedAccessToken) {
+	const response = await twitchAuthStub(env).fetch("https://twitch-auth/oauth/access-token", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			clientId: env.TWITCH_CLIENT_ID,
+			clientSecret: env.TWITCH_CLIENT_SECRET,
+			botUserId: env.TWITCH_BOT_USER_ID,
+			rejectedAccessToken
+		})
+	});
+	const result = await response.json();
+	if (!response.ok || typeof result.accessToken !== "string") {
+		const error = new Error(result.error || "Could not obtain a Twitch access token.");
+		error.status = response.status;
+		error.code = result.code;
+		throw error;
 	}
-	if (!event?.broadcaster_user_id) {
-		throw new Error("Twitch chat event is missing its broadcaster ID.");
-	}
+	return result.accessToken;
+}
 
-	const response = await fetch(
+function postTwitchChatMessage(env, event, message, accessToken) {
+	return fetch(
 		"https://api.twitch.tv/helix/chat/messages",
 		withExternalRequestTimeout({
 			method: "POST",
 			headers: {
-				Authorization: `Bearer ${env.TWITCH_ACCESS_TOKEN}`,
+				Authorization: `Bearer ${accessToken}`,
 				"Client-Id": env.TWITCH_CLIENT_ID,
 				"content-type": "application/json"
 			},
@@ -148,6 +162,23 @@ async function sendTwitchChatMessage(env, event, message) {
 			})
 		})
 	);
+}
+
+async function sendTwitchChatMessage(env, event, message) {
+	if (!env.TWITCH_CLIENT_ID || !env.TWITCH_CLIENT_SECRET || !env.TWITCH_BOT_USER_ID) {
+		throw new Error("Twitch chat credentials are not configured.");
+	}
+	if (!event?.broadcaster_user_id) {
+		throw new Error("Twitch chat event is missing its broadcaster ID.");
+	}
+
+	let accessToken = await getTwitchAccessToken(env);
+	let response = await postTwitchChatMessage(env, event, message, accessToken);
+	if (response.status === 401) {
+		await response.text();
+		accessToken = await getTwitchAccessToken(env, accessToken);
+		response = await postTwitchChatMessage(env, event, message, accessToken);
+	}
 
 	if (!response.ok) {
 		await response.text();
