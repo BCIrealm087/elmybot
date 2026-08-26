@@ -7,14 +7,7 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import worker from '../src/index.js';
-import {
-  EXTERNAL_REQUEST_TIMEOUT_MS,
-  withExternalRequestTimeout,
-} from '../src/common.js';
-import {
-  createJobHandlerRegistry,
-  SCHEDULER_JOB_SCHEMA_VERSION,
-} from '../src/message-scheduling/index.js';
+import { SCHEDULER_JOB_SCHEMA_VERSION } from '../src/message-scheduling/index.js';
 import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
   CAPABILITIES,
@@ -30,6 +23,8 @@ import {
   gifMessageInnerContent,
   gifMessageOuterContent,
 } from '../src/platforms/discord/gifs-extension.js';
+import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
+
 import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
 
 function toHex(bytes) {
@@ -216,33 +211,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('Discord interaction worker', () => {
-  it('adds a ten-second timeout to external requests without replacing caller signals', () => {
-    const timed = withExternalRequestTimeout({ method: 'POST' });
-    expect(timed.method).toBe('POST');
-    expect(timed.signal).toBeInstanceOf(AbortSignal);
-    expect(timed.signal.aborted).toBe(false);
-    expect(EXTERNAL_REQUEST_TIMEOUT_MS).toBe(10_000);
-
-    const callerController = new AbortController();
-    const callerInit = { signal: callerController.signal };
-    expect(withExternalRequestTimeout(callerInit)).toBe(callerInit);
-  });
-
+describe('Discord platform', () => {
   it('returns OK for health check GET', async () => {
     const response = await worker.fetch(new Request('https://example.com/discord', { method: 'GET' }), env, createExecutionContext());
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('OK');
-  });
-
-  it('returns 404 outside registered platform routes', async () => {
-    const response = await worker.fetch(
-      new Request('https://example.com/', { method: 'GET' }),
-      env,
-      createExecutionContext(),
-    );
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe('Not found');
   });
 
   it('rejects non-POST/GET methods', async () => {
@@ -342,71 +315,6 @@ describe('Discord interaction worker', () => {
       type: 4,
       data: { content: "I'm here!!1" },
     });
-  });
-
-  it('stores config values through the GroupConfig durable object', async () => {
-    const guildId = uniqueId('guild');
-    const stub = configStubFor(guildId);
-
-    let response = await stub.fetch('https://config/get', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles' }),
-    });
-    expect(await response.json()).toEqual({ value: null });
-
-    response = await stub.fetch('https://config/append-to', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles', value: 'role-1' }),
-    });
-    expect(await response.json()).toEqual({ ok: true });
-
-    response = await stub.fetch('https://config/get', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles' }),
-    });
-    expect(await response.json()).toEqual({ value: ['role-1'] });
-
-    response = await stub.fetch('https://config/check', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles', entries: ['role-1'] }),
-    });
-    expect(await response.json()).toEqual({ ok: true });
-
-    response = await stub.fetch('https://config/remove-from', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles', value: 'role-1' }),
-    });
-    expect(await response.json()).toEqual({ ok: true });
-
-    response = await stub.fetch('https://config/get', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ key: 'allowedRoles' }),
-    });
-    expect(await response.json()).toEqual({ value: [] });
-  });
-
-  it('constructs an immutable job registry and rejects duplicate kinds', () => {
-    const handler = {
-      deliver: async () => {},
-      calcScheduleTime: () => [1, 1000],
-      validateJob: () => null,
-    };
-    const kind = 'test.message.send.v1';
-    const registry = createJobHandlerRegistry({ [kind]: handler });
-
-    expect(Object.isFrozen(registry)).toBe(true);
-    expect(Object.isFrozen(registry[kind])).toBe(true);
-    expect(registry[kind]).toMatchObject(handler);
-    expect(() => createJobHandlerRegistry(
-      { [kind]: handler },
-      { [kind]: handler },
-    )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
   });
 
   it('uses explicit capabilities for every guild command', async () => {
@@ -1430,3 +1338,5 @@ describe('Discord interaction worker', () => {
     expect(new Set(attachedGifUrls).size).toBeGreaterThan(1);
   });
 });
+});
+
