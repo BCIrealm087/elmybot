@@ -3,6 +3,8 @@
  * permission bitfields; they are the higher-level access groups the bot checks.
  */
 
+import { withExternalRequestTimeout } from "../../common.js";
+
 export const PERMS = {
   MEMBERS: 3,
   GUILD_ALLOWED_ROLES: 2,
@@ -85,9 +87,9 @@ function hasAnyIntrinsicPerm(permsStr, flags) {
  * Falls back to `null` when the Discord API call fails.
  */
 async function fetchGuildOwnerId(env, guildId) {
-  const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
+  const res = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, withExternalRequestTimeout({
     headers: { Authorization: `Bot ${env.DISCORD_TOKEN}` },
-  });
+  }));
   if (!res.ok) return null;
   const guild = await res.json();
   return guild.owner_id ?? null;

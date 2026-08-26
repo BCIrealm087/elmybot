@@ -8,6 +8,10 @@ import {
 } from 'cloudflare:test';
 import worker from '../src/index.js';
 import {
+  EXTERNAL_REQUEST_TIMEOUT_MS,
+  withExternalRequestTimeout,
+} from '../src/common.js';
+import {
   createJobHandlerRegistry,
   SCHEDULER_JOB_SCHEMA_VERSION,
 } from '../src/message-scheduling/index.js';
@@ -105,6 +109,7 @@ function mockDiscordApi({ ownerId = 'owner-id', patchStatus = 200 } = {}) {
   const sentMessages = [];
   const fetchMock = vi.fn(async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     if (url.startsWith('https://discord.com/api/v10/guilds/')) {
       return jsonResponse({ owner_id: ownerId });
@@ -212,6 +217,18 @@ afterEach(() => {
 });
 
 describe('Discord interaction worker', () => {
+  it('adds a ten-second timeout to external requests without replacing caller signals', () => {
+    const timed = withExternalRequestTimeout({ method: 'POST' });
+    expect(timed.method).toBe('POST');
+    expect(timed.signal).toBeInstanceOf(AbortSignal);
+    expect(timed.signal.aborted).toBe(false);
+    expect(EXTERNAL_REQUEST_TIMEOUT_MS).toBe(10_000);
+
+    const callerController = new AbortController();
+    const callerInit = { signal: callerController.signal };
+    expect(withExternalRequestTimeout(callerInit)).toBe(callerInit);
+  });
+
   it('returns OK for health check GET', async () => {
     const response = await worker.fetch(new Request('https://example.com/discord', { method: 'GET' }), env, createExecutionContext());
     expect(response.status).toBe(200);
@@ -1095,6 +1112,7 @@ describe('Discord interaction worker', () => {
     const sentMessages = [];
 
     vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       sentMessages.push(JSON.parse(init.body).content);
       return jsonResponse({ id: uniqueId('message') });
     }));
@@ -1226,7 +1244,10 @@ describe('Discord interaction worker', () => {
   });
 
   it('fails command registration when Discord returns a non-2xx response', async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse({ message: 'Unauthorized' }, 401));
+    const fetchImpl = vi.fn(async (_input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      return jsonResponse({ message: 'Unauthorized' }, 401);
+    });
 
     await expect(putDiscordCommands({
       appId: 'app-id',
@@ -1310,7 +1331,8 @@ describe('Discord interaction worker', () => {
   });
 
   it('composes GIF deliveries using the KLIPY result URL and safe mentions', async () => {
-    const fetchMock = vi.fn(async (input) => {
+    const fetchMock = vi.fn(async (input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       const url = typeof input === 'string' ? input : String(input);
       if (!url.startsWith('https://api.klipy.com/v2/search')) {
         throw new Error(`Unexpected external fetch: ${url}`);
@@ -1362,7 +1384,8 @@ describe('Discord interaction worker', () => {
       (_, index) => `https://cdn.example.com/dance-${index % 3}.gif`,
     );
     let requestIndex = 0;
-    const fetchMock = vi.fn(async (input) => {
+    const fetchMock = vi.fn(async (input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       const url = new URL(typeof input === 'string' ? input : String(input));
       if (!url.toString().startsWith('https://api.klipy.com/v2/search')) {
         throw new Error(`Unexpected external fetch: ${url}`);

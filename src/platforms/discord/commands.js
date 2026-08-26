@@ -1,6 +1,7 @@
 import { CAPABILITIES } from "./discord-permissions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
+import { withExternalRequestTimeout } from "../../common.js";
 import {
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
   evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval
@@ -33,14 +34,14 @@ async function defaultDoAtSend(env, job, messageData) {
   try {
     response = await fetch(
       `https://discord.com/api/v10/channels/${job.destination.channelId}/messages`,
-      {
+      withExternalRequestTimeout({
         method: "POST",
         headers: {
           Authorization: `Bot ${env.DISCORD_TOKEN}`,
           "content-type": "application/json",
         },
         body: JSON.stringify(messageData),
-      }
+      })
     );
   } catch (cause) {
     throw new DeliveryError("Discord API request failed.", {

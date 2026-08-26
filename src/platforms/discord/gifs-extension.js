@@ -1,3 +1,5 @@
+import { withExternalRequestTimeout } from "../../common.js";
+
 export const evalGifOptions = (options) => {
   const searchString = String(options.extraData.gif ?? "").trim();
   options.extraData.gif = searchString || null;
@@ -22,7 +24,7 @@ export const gifMessageCompose = async (c, env, stored) => {
   url.searchParams.set("random", "true");
   url.searchParams.set("media_filter", "gif");
 
-  const r = await fetch(url);
+  const r = await fetch(url, withExternalRequestTimeout());
 
   if (!r.ok) {
     throw new Error(`KLIPY API error ${r.status}: ${await r.text()}`);

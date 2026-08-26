@@ -8,6 +8,16 @@ export function jsonResponse(obj, status = 200) {
   });
 }
 
+export const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000;
+
+export function withExternalRequestTimeout(init = {}) {
+  if (init.signal) return init;
+  return {
+    ...init,
+    signal: AbortSignal.timeout(EXTERNAL_REQUEST_TIMEOUT_MS)
+  };
+}
+
 function boundedString(value, maxLength = 500) {
   return String(value ?? "").slice(0, maxLength);
 }

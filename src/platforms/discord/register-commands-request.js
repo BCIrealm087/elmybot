@@ -1,3 +1,5 @@
+import { withExternalRequestTimeout } from "../../common.js";
+
 export async function putDiscordCommands({
   appId,
   token,
@@ -6,11 +8,11 @@ export async function putDiscordCommands({
   log = console.log
 }) {
   const url = `https://discord.com/api/v10/applications/${appId}/commands`;
-  const response = await fetchImpl(url, {
+  const response = await fetchImpl(url, withExternalRequestTimeout({
     method: "PUT",
     headers: { Authorization: `Bot ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(commandDescriptors),
-  });
+  }));
   const responseText = await response.text();
 
   log(response.status, responseText);

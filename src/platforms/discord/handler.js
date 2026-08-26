@@ -1,7 +1,11 @@
 import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
 import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
-import { logError, unknownErrorMessage } from "../../common.js";
+import {
+  logError,
+  unknownErrorMessage,
+  withExternalRequestTimeout
+} from "../../common.js";
 
 /**
  * Entrypoint for Discord interactions.
@@ -94,11 +98,11 @@ async function editOriginalInteractionResponse(interaction, messageData) {
     flags: messageData?.flags,
   };
 
-  const r = await fetch(url, {
+  const r = await fetch(url, withExternalRequestTimeout({
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }));
 
   if (!r.ok) {
     await r.text();

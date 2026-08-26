@@ -195,6 +195,9 @@ message but before the marker is stored can therefore produce a duplicate.
   invocation can be matched to Worker logs.
 - Deferred interaction response failures are observed and logged through the
   `waitUntil` promise chain.
+- Runtime requests to Discord and KLIPY, and the command-registration request,
+  use a 10-second abort timeout so stalled upstreams cannot occupy an invocation
+  indefinitely. Scheduler delivery aborts follow the normal retry policy.
 
 #### Mention policy
 
