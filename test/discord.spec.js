@@ -1338,5 +1338,3 @@ describe('Discord platform', () => {
     expect(new Set(attachedGifUrls).size).toBeGreaterThan(1);
   });
 });
-});
-
