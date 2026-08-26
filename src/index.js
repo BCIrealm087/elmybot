@@ -2,7 +2,7 @@ import { handleDiscordRequest } from "./platforms/discord/index.js";
 import { discordSchedulingHandlers } from "./platforms/discord/commands.js";
 import {
   createJobHandlerRegistry,
-  GuildSchedulerBackend
+  GroupSchedulerBackend
 } from "./message-scheduling/index.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
@@ -12,7 +12,7 @@ const schedulerJobHandlers = createJobHandlerRegistry(
 /**
  * Durable objects
  */
-export class GuildScheduler extends GuildSchedulerBackend {
+export class GroupScheduler extends GroupSchedulerBackend {
   constructor(state, env) {
     super(state, env, schedulerJobHandlers);
   }

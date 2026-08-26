@@ -13,7 +13,7 @@
 
 	"durable_objects": {
 		"bindings": [
-			{ "name": "SCHEDULER", "class_name": "GuildScheduler" },
+			{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
       { "name": "CONFIG", "class_name": "GroupConfig" }
 		]
   },
@@ -32,6 +32,12 @@
       "renamed_classes": [
         { "from": "GuildConfig", "to": "GroupConfig" }
       ]
+    },
+    {
+      "tag": "v4",
+      "renamed_classes": [
+        { "from": "GuildScheduler", "to": "GroupScheduler" }
+      ]
     }
 	],
 
@@ -39,7 +45,7 @@
     "test": {
       "durable_objects": {
         "bindings": [
-          { "name": "SCHEDULER", "class_name": "GuildScheduler" },
+          { "name": "SCHEDULER", "class_name": "GroupScheduler" },
           { "name": "CONFIG", "class_name": "GroupConfig" }
         ]
       }

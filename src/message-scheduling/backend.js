@@ -449,7 +449,7 @@ const requestHandlers = {
   }
 };
 
-export class GuildSchedulerBackend {
+export class GroupSchedulerBackend {
   constructor(state, env, jobHandlers) {
     this.state = state;
     this.env = env;

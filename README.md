@@ -28,7 +28,7 @@ Discord does not run this bot continuously. Instead, Discord sends HTTPS interac
 ```text
 Discord
   -> Worker (src/index.js)
-     -> GuildScheduler Durable Object (src/message-scheduling/backend.js)
+     -> GroupScheduler Durable Object (src/message-scheduling/backend.js)
      -> GroupConfig Durable Object (src/group-configuration.js)
      -> Discord REST API
 ```
@@ -121,11 +121,11 @@ Implemented in `src/platforms/discord/discord-permissions.js`.
 
 ## Durable Objects
 
-### `GuildScheduler`
+### `GroupScheduler`
 
 Implemented in `src/message-scheduling/backend.js`.
 
-Each guild gets one `GuildScheduler` Durable Object instance. It stores scheduled jobs in indexed SQLite rows and maintains one alarm for the next due job.
+Each platform group gets one `GroupScheduler` Durable Object instance. For Discord, a group is a guild. The object stores scheduled jobs in indexed SQLite rows and maintains one alarm for the next due job.
 
 Discord scheduler objects are named `discord:guild:<guildId>` so future
 platform adapters cannot collide with Discord guild storage.
@@ -216,7 +216,7 @@ Each guild gets one `GroupConfig` Durable Object instance. It stores per-guild c
 - `src/index.js` — Worker routing and scheduler composition root.
 - `src/platforms/discord/handler.js` — Discord signature verification and interaction handling.
 - `src/platforms/discord/commands.js` — slash commands and Discord scheduling adapters.
-- `src/message-scheduling/backend.js` — `GuildScheduler` Durable Object and alarm-driven delivery.
+- `src/message-scheduling/backend.js` — `GroupScheduler` Durable Object and alarm-driven delivery.
 - `src/platforms/discord/message-scheduling/commands-extension.js` — Discord scheduling input helpers.
 - `src/group-configuration.js` — `GroupConfig` Durable Object.
 - `src/platforms/discord/discord-permissions.js` — Discord permission evaluation.
@@ -279,9 +279,11 @@ workflow is present on the repository's default branch.
 ## Cloudflare deployment notes
 
 - Durable Object bindings:
-  - `SCHEDULER` -> `GuildScheduler`
+  - `SCHEDULER` -> `GroupScheduler`
   - `CONFIG` -> `GroupConfig`
 - Migration `v2` retains the originally deployed `GuildConfig` creation, and
   `v3` performs the append-only rename to `GroupConfig`.
+- Migration `v4` renames the originally deployed `GuildScheduler` class to
+  `GroupScheduler`, preserving the existing scheduler Durable Object namespace.
 - Durable Object migration tags in `wrangler.jsonc` are append-only after deployment.
 - Non-inheritable environment bindings must be repeated inside environment blocks when needed.
