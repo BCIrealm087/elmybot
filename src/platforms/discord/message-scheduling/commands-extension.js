@@ -1,42 +1,77 @@
 import { getOption, ephemeralData } from "../common.js";
-import { SchedulingUserFacingError } from "./errors.js";
+import { logError, unknownErrorMessage } from "../../../common.js";
+import { SCHEDULER_JOB_SCHEMA_VERSION } from "../../../message-scheduling/index.js";
+
+class SchedulingUserFacingError extends Error {
+  constructor(message) {
+    super (message);
+  }
+}
 
 // Worker-side scheduling helpers. These validate interaction input and forward
 // normalized jobs to the scheduler Durable Object.
 
 export async function scheduleMessage(interaction, env, doAtHandler) {
   let schedulingResult;
+  const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
   try {
+    const interactionId = String(interaction.id ?? "").trim();
+    if (!interactionId) {
+      throw new Error("Discord interaction lacks an ID for scheduling idempotency.");
+    }
+
     // Route all scheduling through the guild-scoped scheduler DO so storage and
     // alarm ownership stay in one place.
-    const id = env.SCHEDULER.idFromName(interaction.guild_id);
+    const id = env.SCHEDULER.idFromName(
+      `discord:guild:${interaction.guild_id}`
+    );
     const stub = env.SCHEDULER.get(id);
 
     const options = doAtHandler.getOptions(interaction);
     if (!options.extraData) options.extraData = { };
-    // `eval` returns a user-facing error message or mutates normalized options
+    options.extraData = {
+      ...options.extraData,
+      guildId: interaction.guild_id,
+      channelId: interaction.channel_id
+    };
+    // `eval` returns a user-facing error message or may mutate options for normalization
     // in-place when needed.
     const error = doAtHandler.eval(options);
     if (error) {
-      throw new SchedulingUserFacingError(error, null);
+      throw new SchedulingUserFacingError(error);
     }
 
     const r = await stub.fetch("https://do/schedule", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        "x-correlation-id": correlationId
+      },
       body: JSON.stringify({
         ...options,
-        guildId: interaction.guild_id,
-        channelId: interaction.channel_id,
-        type: doAtHandler.type,
-        createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null,
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: "discord",
+        kind: doAtHandler.kind,
+        groupKey: `discord:guild:${interaction.guild_id}`,
+        destination: { channelId: interaction.channel_id },
+        sourceEventId: `discord:${interactionId}`,
+        createdBy: interaction.member?.user?.id ?? interaction.user?.id ?? null
       })
     });
     if (!r.ok) {
-      const errData = await r.json();
+      const responseText = await r.text();
+      let errData = null;
+      try {
+        errData = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        // The status and content type are sufficient for safe diagnostics.
+      }
       throw errData?.userFacingError
-        ? new SchedulingUserFacingError(errData.userFacingError, null)
-        : new Error(`Unknown Scheduling Service response error: status: ${r.status}\ncontent:${await r.text()}`);
+        ? new SchedulingUserFacingError(errData.userFacingError)
+        : Object.assign(
+          new Error("Scheduling service returned an unexpected response."),
+          { status: r.status }
+        );
     }
     const data = await r.json();
     schedulingResult = ephemeralData(
@@ -45,7 +80,18 @@ export async function scheduleMessage(interaction, env, doAtHandler) {
       `\nJob ID: \`${data.id}\``,
     );
   } catch(e) {
-    schedulingResult = ephemeralData((e instanceof SchedulingUserFacingError) ? e.message : "Unknown error.");
+    if (e instanceof SchedulingUserFacingError) {
+      schedulingResult = ephemeralData(e.message);
+    } else {
+      logError("discord.scheduling_failed", {
+        platform: "discord",
+        correlationId,
+        groupId: interaction.guild_id ?? null,
+        command: interaction.data?.name ?? null,
+        jobKind: doAtHandler.kind
+      }, e);
+      schedulingResult = ephemeralData(unknownErrorMessage(correlationId));
+    }
   }
   return schedulingResult;
 }
@@ -97,12 +143,12 @@ export function getDailyTimeFromTimestamp(j, rescheduling=false) {
 }
 
 export function getRandomTimeFromInterval(j, rescheduling = false){
-  const randomOffset =
-    Math.random() * (j.extraData.maxInterval - j.extraData.minInterval + 1) +
-    j.extraData.minInterval;
+  const offset = Math.floor(
+    Math.random() * (j.extraData.maxInterval - j.extraData.minInterval + 1)
+  ) + j.extraData.minInterval;
 
   if (!rescheduling) {
-    const nextUnix = Math.floor(Date.now() / 1000 + randomOffset);
+    const nextUnix = Math.floor(Date.now() / 1000) + offset;
     return [nextUnix, nextUnix * 1000];
   }
 
@@ -110,7 +156,6 @@ export function getRandomTimeFromInterval(j, rescheduling = false){
     throw new Error(`Scheduling error: job \`${j.id}\` lacks valid timestamp data.`);
   }
 
-  const offset = Math.floor(randomOffset);
   const now = Date.now();
   const nextMs = j.runAtMs + offset * 1000;
 

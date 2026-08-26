@@ -1,8 +1,36 @@
 import nacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
-import worker from '../src';
-import { gifMessageCompose, gifMessageInnerContent, gifMessageOuterContent } from '../src/gifs-extension';
+import {
+  env,
+  createExecutionContext,
+  runInDurableObject,
+  waitOnExecutionContext,
+} from 'cloudflare:test';
+import worker from '../src/index.js';
+import {
+  EXTERNAL_REQUEST_TIMEOUT_MS,
+  withExternalRequestTimeout,
+} from '../src/common.js';
+import {
+  createJobHandlerRegistry,
+  SCHEDULER_JOB_SCHEMA_VERSION,
+} from '../src/message-scheduling/index.js';
+import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
+import {
+  CAPABILITIES,
+  checkPermissions,
+} from '../src/platforms/discord/discord-permissions.js';
+import {
+  getRandomTimeFromInterval,
+  scheduleMessage,
+} from '../src/platforms/discord/message-scheduling/index.js';
+import {
+  evalGifOptions,
+  gifMessageCompose,
+  gifMessageInnerContent,
+  gifMessageOuterContent,
+} from '../src/platforms/discord/gifs-extension.js';
+import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
 
 function toHex(bytes) {
   return Array.from(bytes)
@@ -14,7 +42,7 @@ function makeSignedDiscordRequest({ body, secretKey, timestamp = `${Math.floor(D
   const message = new TextEncoder().encode(timestamp + body);
   const signature = nacl.sign.detached(message, secretKey);
 
-  return new Request('https://example.com', {
+  return new Request('https://example.com/discord', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -33,6 +61,7 @@ function uniqueId(prefix) {
 }
 
 function buildSlashInteraction({
+  id = uniqueId('interaction'),
   name,
   options = [],
   guildId = uniqueId('guild'),
@@ -44,6 +73,7 @@ function buildSlashInteraction({
   applicationId = 'app-id',
 } = {}) {
   return {
+    id,
     type: 2,
     application_id: applicationId,
     token,
@@ -74,11 +104,12 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
+function mockDiscordApi({ ownerId = 'owner-id', patchStatus = 200 } = {}) {
   const patches = [];
   const sentMessages = [];
   const fetchMock = vi.fn(async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
 
     if (url.startsWith('https://discord.com/api/v10/guilds/')) {
       return jsonResponse({ owner_id: ownerId });
@@ -86,7 +117,7 @@ function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
 
     if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
       patches.push(JSON.parse(init.body));
-      return jsonResponse({ ok: true });
+      return jsonResponse({ ok: patchStatus < 400 }, patchStatus);
     }
 
     if (url.includes('/channels/') && url.endsWith('/messages')) {
@@ -102,7 +133,7 @@ function mockDiscordApi({ ownerId = 'owner-id' } = {}) {
 }
 
 function schedulerStubFor(guildId) {
-  const id = env.SCHEDULER.idFromName(guildId);
+  const id = env.SCHEDULER.idFromName(`discord:guild:${guildId}`);
   return env.SCHEDULER.get(id);
 }
 
@@ -111,27 +142,118 @@ function configStubFor(guildId) {
   return env.CONFIG.get(id);
 }
 
+function storedMessageJob({
+  id = uniqueId('job'),
+  guildId = uniqueId('guild'),
+  channelId = uniqueId('channel'),
+  subject = 'scheduled message',
+  runAtMs = Date.now() - 1000,
+  attempts = 0,
+} = {}) {
+  return {
+    schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+    id,
+    platform: 'discord',
+    kind: DISCORD_JOB_KINDS.SEND_AT,
+    groupKey: `discord:guild:${guildId}`,
+    destination: { channelId },
+    subject,
+    timestamp: Math.floor(runAtMs / 1000),
+    runAtMs,
+    extraData: {
+      guildId,
+      channelId,
+      gif: null,
+    },
+    repeats: false,
+    createdBy: null,
+    sourceEventId: `discord:${id}`,
+    delivery: {
+      state: 'pending',
+      attempts,
+      nextAttemptAtMs: runAtMs,
+      lastAttemptAtMs: null,
+      lastError: null,
+    },
+  };
+}
+
+function replaceStoredJobs(state, jobs) {
+  state.storage.transactionSync(() => {
+    state.storage.sql.exec('DELETE FROM scheduler_jobs');
+    for (const job of jobs) {
+      state.storage.sql.exec(
+        `INSERT INTO scheduler_jobs
+          (id, next_attempt_at_ms, run_at_ms, job_json)
+         VALUES (?, ?, ?, ?)`,
+        job.id,
+        job.delivery.nextAttemptAtMs,
+        job.runAtMs,
+        JSON.stringify(job),
+      );
+    }
+  });
+}
+
+function readStoredJobs(state) {
+  return state.storage.sql.exec(`
+    SELECT job_json
+    FROM scheduler_jobs
+    ORDER BY next_attempt_at_ms, run_at_ms, id
+  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
+}
+
+function readDeadLetters(state) {
+  return state.storage.sql.exec(`
+    SELECT job_json
+    FROM scheduler_dead_letters
+    ORDER BY failed_at_ms, dead_letter_id
+  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('Discord interaction worker', () => {
+  it('adds a ten-second timeout to external requests without replacing caller signals', () => {
+    const timed = withExternalRequestTimeout({ method: 'POST' });
+    expect(timed.method).toBe('POST');
+    expect(timed.signal).toBeInstanceOf(AbortSignal);
+    expect(timed.signal.aborted).toBe(false);
+    expect(EXTERNAL_REQUEST_TIMEOUT_MS).toBe(10_000);
+
+    const callerController = new AbortController();
+    const callerInit = { signal: callerController.signal };
+    expect(withExternalRequestTimeout(callerInit)).toBe(callerInit);
+  });
+
   it('returns OK for health check GET', async () => {
-    const response = await worker.fetch(new Request('https://example.com', { method: 'GET' }), env, createExecutionContext());
+    const response = await worker.fetch(new Request('https://example.com/discord', { method: 'GET' }), env, createExecutionContext());
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('OK');
   });
 
+  it('returns 404 outside registered platform routes', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/', { method: 'GET' }),
+      env,
+      createExecutionContext(),
+    );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('Not found');
+  });
+
   it('rejects non-POST/GET methods', async () => {
-    const response = await worker.fetch(new Request('https://example.com', { method: 'PUT' }), env, createExecutionContext());
+    const response = await worker.fetch(new Request('https://example.com/discord', { method: 'PUT' }), env, createExecutionContext());
     expect(response.status).toBe(405);
     expect(await response.text()).toBe('Method Not Allowed');
   });
 
   it('returns 400 when signature headers are missing', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com', {
+      new Request('https://example.com/discord', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 1 }),
@@ -146,7 +268,7 @@ describe('Discord interaction worker', () => {
 
   it('returns 401 when signature is invalid', async () => {
     const response = await worker.fetch(
-      new Request('https://example.com', {
+      new Request('https://example.com/discord', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -222,7 +344,7 @@ describe('Discord interaction worker', () => {
     });
   });
 
-  it('stores config values through the GuildConfig durable object', async () => {
+  it('stores config values through the GroupConfig durable object', async () => {
     const guildId = uniqueId('guild');
     const stub = configStubFor(guildId);
 
@@ -269,6 +391,208 @@ describe('Discord interaction worker', () => {
     expect(await response.json()).toEqual({ value: [] });
   });
 
+  it('constructs an immutable job registry and rejects duplicate kinds', () => {
+    const handler = {
+      deliver: async () => {},
+      calcScheduleTime: () => [1, 1000],
+      validateJob: () => null,
+    };
+    const kind = 'test.message.send.v1';
+    const registry = createJobHandlerRegistry({ [kind]: handler });
+
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(Object.isFrozen(registry[kind])).toBe(true);
+    expect(registry[kind]).toMatchObject(handler);
+    expect(() => createJobHandlerRegistry(
+      { [kind]: handler },
+      { [kind]: handler },
+    )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
+  });
+
+  it('uses explicit capabilities for every guild command', async () => {
+    expect(commands.config_show_value.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_list_entries.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_allow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.config_disallow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
+    expect(commands.sayat.guild.capability).toBe(CAPABILITIES.SCHEDULE_CREATE);
+    expect(commands.doat_list.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
+    expect(commands.doat_dead_letters.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
+    expect(commands.doat_cancel.guild.capability).toBe(CAPABILITIES.SCHEDULE_CANCEL);
+
+    const missingPolicy = await checkPermissions({}, {}, {
+      capability: 'missing.capability',
+    });
+    expect(missingPolicy).toEqual({
+      allowedGroups: [],
+      configured: false,
+      ok: false,
+    });
+  });
+
+  it('authorizes intrinsic moderators without fetching the guild owner', async () => {
+    const guildId = uniqueId('guild');
+    const patches = [];
+    const fetchMock = vi.fn(async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://discord.com/api/v10/guilds/')) {
+        throw new Error('guild owner lookup should not run');
+      }
+      if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
+        patches.push(JSON.parse(init.body));
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const interaction = buildSlashInteraction({
+      name: 'config_list_entries',
+      guildId,
+      permissions: '32', // MANAGE_GUILD
+    });
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    expect(patches[0].content).toBe('No configured entries.');
+    expect(fetchMock.mock.calls.some(([input]) => (
+      String(typeof input === 'string' ? input : input.url)
+        .startsWith('https://discord.com/api/v10/guilds/')
+    ))).toBe(false);
+  });
+
+  it('keeps initial and repeated random schedules within inclusive bounds', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_999);
+    const random = vi.spyOn(Math, 'random');
+    const job = {
+      id: 'bounded-random-job',
+      timestamp: 1000,
+      runAtMs: 1_000_000,
+      extraData: { minInterval: 10, maxInterval: 20 },
+    };
+
+    random.mockReturnValue(0);
+    expect(getRandomTimeFromInterval(job)).toEqual([1010, 1_010_000]);
+
+    random.mockReturnValue(0.999999999);
+    expect(getRandomTimeFromInterval(job)).toEqual([1020, 1_020_000]);
+
+    now.mockReturnValue(500_000);
+    expect(getRandomTimeFromInterval(job, true)).toEqual([1020, 1_020_000]);
+  });
+
+  it('reads an unexpected scheduling response once and logs correlated context', async () => {
+    const interaction = buildSlashInteraction({
+      id: 'interaction-schedule-error',
+      name: 'sayat',
+    });
+    const responseText = vi.fn(async () => 'upstream failure');
+    const scheduleFetch = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+      text: responseText,
+    }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const scheduler = {
+      idFromName: vi.fn(() => 'scheduler-id'),
+      get: vi.fn(() => ({ fetch: scheduleFetch })),
+    };
+
+    const result = await scheduleMessage(interaction, { SCHEDULER: scheduler }, {
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      getOptions: () => ({
+        subject: 'message',
+        timestamp: Math.floor(Date.now() / 1000) + 3600,
+        repeats: false,
+      }),
+      eval: () => null,
+      composer: { repeatDescription: () => 'daily' },
+    });
+
+    expect(responseText).toHaveBeenCalledTimes(1);
+    expect(result.content).toBe(
+      'Unknown error. Reference: `discord:interaction-schedule-error`.',
+    );
+    expect(scheduleFetch.mock.calls[0][1].headers['x-correlation-id'])
+      .toBe('discord:interaction-schedule-error');
+
+    const log = JSON.parse(consoleError.mock.calls[0][0]);
+    expect(log).toMatchObject({
+      event: 'discord.scheduling_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-schedule-error',
+      groupId: interaction.guild_id,
+      command: 'sayat',
+      jobKind: DISCORD_JOB_KINDS.SEND_AT,
+      error: { status: 503 },
+    });
+  });
+
+  it('logs unexpected command failures and returns a safe reference', async () => {
+    const guildId = uniqueId('guild');
+    const ownerId = uniqueId('owner');
+    const interaction = buildSlashInteraction({
+      id: 'interaction-command-error',
+      name: 'config_list_entries',
+      guildId,
+      userId: ownerId,
+    });
+    const patches = [];
+    vi.stubGlobal('fetch', vi.fn(async (input, init = {}) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://discord.com/api/v10/guilds/')) {
+        throw new Error('owner lookup failed');
+      }
+      if (url.includes('/webhooks/') && url.endsWith('/messages/@original')) {
+        patches.push(JSON.parse(init.body));
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    }));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    expect(patches[0].content).toBe(
+      'Unknown error. Reference: `discord:interaction-command-error`.',
+    );
+    const log = JSON.parse(consoleError.mock.calls[0][0]);
+    expect(log).toMatchObject({
+      event: 'discord.command_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-command-error',
+      groupId: guildId,
+      command: 'config_list_entries',
+      error: { name: 'Error', message: 'owner lookup failed' },
+    });
+  });
+
+  it('observes deferred response edit failures through the waitUntil chain', async () => {
+    const guildId = uniqueId('guild');
+    const ownerId = uniqueId('owner');
+    mockDiscordApi({ ownerId, patchStatus: 500 });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const interaction = buildSlashInteraction({
+      id: 'interaction-patch-error',
+      name: 'config_list_entries',
+      guildId,
+      userId: ownerId,
+    });
+
+    const { ctx } = await dispatchInteraction(interaction);
+    await waitOnExecutionContext(ctx);
+
+    const logs = consoleError.mock.calls.map(([entry]) => JSON.parse(entry));
+    expect(logs).toContainEqual(expect.objectContaining({
+      event: 'discord.deferred_response_failed',
+      platform: 'discord',
+      correlationId: 'discord:interaction-patch-error',
+      groupId: guildId,
+      command: 'config_list_entries',
+      error: expect.objectContaining({ status: 500 }),
+    }));
+  });
+
   it('stores scheduled jobs sorted by run time and supports cancellation through the scheduler DO', async () => {
     const guildId = uniqueId('guild');
     const stub = schedulerStubFor(guildId);
@@ -280,13 +604,20 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        guildId,
-        channelId: 'channel-1',
-        type: 'sayat',
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: 'discord',
+        kind: DISCORD_JOB_KINDS.SEND_AT,
+        groupKey: `discord:guild:${guildId}`,
+        destination: { channelId: 'channel-1' },
+        sourceEventId: 'discord:direct-later',
         subject: 'later',
         timestamp: laterTs,
         repeats: false,
-        extraData: {},
+        extraData: {
+          guildId,
+          channelId: 'channel-1',
+          gif: null,
+        },
       }),
     });
     const laterJob = await laterResponse.json();
@@ -295,13 +626,20 @@ describe('Discord interaction worker', () => {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        guildId,
-        channelId: 'channel-1',
-        type: 'sayat',
+        schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+        platform: 'discord',
+        kind: DISCORD_JOB_KINDS.SEND_AT,
+        groupKey: `discord:guild:${guildId}`,
+        destination: { channelId: 'channel-1' },
+        sourceEventId: 'discord:direct-sooner',
         subject: 'sooner',
         timestamp: soonerTs,
         repeats: false,
-        extraData: {},
+        extraData: {
+          guildId,
+          channelId: 'channel-1',
+          gif: null,
+        },
       }),
     });
     const soonerJob = await soonerResponse.json();
@@ -312,6 +650,12 @@ describe('Discord interaction worker', () => {
     expect(listData.jobsPreview).toHaveLength(2);
     expect(listData.jobsPreview.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
     expect(listData.jobsPreview.map((job) => job.subject)).toEqual(['sooner', 'later']);
+    await runInDurableObject(stub, async (_, state) => {
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS count FROM scheduler_jobs',
+      ).one().count).toBe(2);
+      expect(await state.storage.get('jobs')).toBeUndefined();
+    });
 
     const cancelResponse = await stub.fetch('https://do/cancel', {
       method: 'POST',
@@ -324,6 +668,98 @@ describe('Discord interaction worker', () => {
     listData = await listResponse.json();
     expect(listData.totalJobs).toBe(1);
     expect(listData.jobsPreview[0].id).toBe(laterJob.id);
+  });
+
+  it('deduplicates scheduling transactionally by source event ID', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const sourceEventId = `discord:${uniqueId('interaction')}`;
+    const timestamp = Math.floor(Date.now() / 1000) + 3600;
+    const requestBody = {
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
+      sourceEventId,
+      subject: 'only once',
+      timestamp,
+      repeats: false,
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
+    };
+
+    const schedule = () => stub.fetch('https://do/schedule', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    });
+
+    const first = await (await schedule()).json();
+    const replay = await (await schedule()).json();
+    expect(replay).toEqual(first);
+
+    const list = await (await stub.fetch('https://do/list')).json();
+    expect(list.totalJobs).toBe(1);
+    expect(list.jobsPreview[0]).toMatchObject({
+      id: first.id,
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      subject: 'only once',
+    });
+  });
+
+  it('rejects malformed shared envelopes and adapter payloads before persistence', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const timestamp = Math.floor(Date.now() / 1000) + 3600;
+    const valid = {
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
+      sourceEventId: `discord:${uniqueId('interaction')}`,
+      subject: 'validated message',
+      timestamp,
+      repeats: false,
+      createdBy: null,
+      extraData: { guildId, channelId, gif: null },
+    };
+    const invalidCases = [
+      [{ ...valid, schemaVersion: 99 }, 'Unsupported scheduling schema version.'],
+      [{ ...valid, destination: {} }, 'Scheduling destination is required.'],
+      [
+        { ...valid, destination: { channelId: 'different-channel' } },
+        'Discord scheduling destination metadata is inconsistent.',
+      ],
+      [{ ...valid, timestamp: null }, 'Scheduling handler produced invalid time metadata.'],
+    ];
+
+    for (const [body, message] of invalidCases) {
+      const response = await stub.fetch('https://do/schedule', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ userFacingError: message });
+    }
+
+    const malformedJson = await stub.fetch('https://do/schedule', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{',
+    });
+    expect(malformedJson.status).toBe(400);
+    expect((await malformedJson.json()).userFacingError).toBe(
+      'Request body must be valid JSON.',
+    );
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(0);
   });
 
   it('defers /sayat, patches the original response, then supports listing and canceling the scheduled job', async () => {
@@ -365,7 +801,14 @@ describe('Discord interaction worker', () => {
     const listAfterScheduleData = await listAfterSchedule.json();
     expect(listAfterScheduleData.totalJobs).toBe(1);
     const scheduledJob = listAfterScheduleData.jobsPreview[0];
-    expect(scheduledJob.subject).toBe('hello future');
+    expect(scheduledJob).toMatchObject({
+      subject: 'hello future',
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
+    });
 
     const listInteraction = buildSlashInteraction({
       name: 'doat_list',
@@ -419,7 +862,7 @@ describe('Discord interaction worker', () => {
     const ownerId = uniqueId('owner');
     const roleId = uniqueId('role');
     const memberId = uniqueId('member');
-    const { patches } = mockDiscordApi({ ownerId });
+    const { patches, fetchMock } = mockDiscordApi({ ownerId });
 
     const allowRoleInteraction = buildSlashInteraction({
       name: 'config_allow_role',
@@ -473,14 +916,22 @@ describe('Discord interaction worker', () => {
 
     expect(patches[1].content).toContain('✅ Scheduled job');
     expect(patches[1].content).toContain('Job ID:');
+    expect(fetchMock.mock.calls.filter(([input]) => (
+      String(typeof input === 'string' ? input : input.url)
+        .startsWith('https://discord.com/api/v10/guilds/')
+    ))).toHaveLength(1);
 
     const schedulerState = await schedulerStubFor(guildId).fetch('https://do/list');
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'role-authorized message',
-      channelId,
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
     });
   });
 
@@ -522,7 +973,7 @@ describe('Discord interaction worker', () => {
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat_random',
+      kind: DISCORD_JOB_KINDS.SEND_RANDOM,
       repeats: true,
       extraData: {
         minInterval: 600,
@@ -531,7 +982,7 @@ describe('Discord interaction worker', () => {
     });
   });
 
-  it('accepts /sayat with gif=true, stores gif metadata, and renders list entries with GIF marker', async () => {
+  it('accepts /sayat with a GIF query, stores GIF metadata, and renders list entries with GIF marker', async () => {
     const guildId = uniqueId('guild');
     const channelId = uniqueId('channel');
     const ownerId = uniqueId('owner');
@@ -567,7 +1018,7 @@ describe('Discord interaction worker', () => {
     const schedulerData = await schedulerState.json();
     expect(schedulerData.totalJobs).toBe(1);
     expect(schedulerData.jobsPreview[0]).toMatchObject({
-      type: 'sayat',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'gif message title',
       extraData: { gif: 'cat dance' },
     });
@@ -634,8 +1085,254 @@ describe('Discord interaction worker', () => {
     expect(schedulerData.totalJobs).toBe(0);
   });
 
+  it('normalizes omitted, empty, whitespace, and valid optional GIF queries', () => {
+    const cases = [
+      { input: undefined, normalized: null, error: null },
+      { input: '', normalized: null, error: null },
+      { input: '   ', normalized: null, error: null },
+      { input: '  cat dance  ', normalized: 'cat dance', error: null },
+      {
+        input: 'this query is definitely too long',
+        normalized: 'this query is definitely too long',
+        error: 'Search string too long (max 20 chars).',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const options = { extraData: { gif: testCase.input } };
+      expect(evalGifOptions(options)).toBe(testCase.error);
+      expect(options.extraData.gif).toBe(testCase.normalized);
+    }
+  });
+
+  it('bounds each alarm batch and re-arms immediately for remaining due jobs', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const sentMessages = [];
+
+    vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      sentMessages.push(JSON.parse(init.body).content);
+      return jsonResponse({ id: uniqueId('message') });
+    }));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const dueAtMs = Date.now() - 1_000;
+      replaceStoredJobs(state, Array.from({ length: 21 }, (_, index) => (
+        storedMessageJob({
+          id: `batch-job-${String(index).padStart(2, '0')}`,
+          guildId,
+          channelId,
+          subject: `batch-message-${index}`,
+          runAtMs: dueAtMs,
+        })
+      )));
+
+      await instance.alarm();
+
+      expect(sentMessages).toHaveLength(20);
+      const remaining = readStoredJobs(state);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].id).toBe('batch-job-20');
+      const nextAlarm = await state.storage.getAlarm();
+      expect(nextAlarm).toBeGreaterThanOrEqual(
+        remaining[0].delivery.nextAttemptAtMs,
+      );
+      expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
+      await state.storage.deleteAlarm();
+    });
+  });
+
+  it('dead-letters a terminal delivery failure and continues with later due jobs', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    const failedChannelId = uniqueId('deleted-channel');
+    const liveChannelId = uniqueId('live-channel');
+    const sentChannels = [];
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = String(input);
+      if (url.includes(`/channels/${failedChannelId}/messages`)) {
+        return jsonResponse({ message: 'Unknown Channel' }, 404);
+      }
+      if (url.includes(`/channels/${liveChannelId}/messages`)) {
+        sentChannels.push(liveChannelId);
+        return jsonResponse({ id: uniqueId('message') });
+      }
+      throw new Error(`Unexpected external fetch: ${url}`);
+    }));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const nowMs = Date.now();
+      replaceStoredJobs(state, [
+        storedMessageJob({
+          id: 'terminal-job',
+          guildId,
+          channelId: failedChannelId,
+          runAtMs: nowMs - 2000,
+        }),
+        storedMessageJob({
+          id: 'later-job',
+          guildId,
+          channelId: liveChannelId,
+          runAtMs: nowMs - 1000,
+        }),
+      ]);
+
+      await instance.alarm();
+
+      expect(readStoredJobs(state)).toEqual([]);
+      expect(sentChannels).toEqual([liveChannelId]);
+
+      const deadLetters = readDeadLetters(state);
+      expect(deadLetters).toHaveLength(1);
+      expect(deadLetters[0]).toMatchObject({
+        id: 'terminal-job',
+        delivery: {
+          state: 'dead_letter',
+          attempts: 1,
+          lastError: {
+            code: 'discord_http_error',
+            metadata: { status: 404 },
+          },
+        },
+      });
+
+      const log = JSON.parse(consoleError.mock.calls[0][0]);
+      expect(log).toMatchObject({
+        event: 'scheduler.delivery_failed',
+        platform: 'discord',
+        correlationId: 'discord:terminal-job',
+        groupId: guildId,
+        jobKind: DISCORD_JOB_KINDS.SEND_AT,
+        jobId: 'terminal-job',
+        attempt: 1,
+        retryable: false,
+        error: {
+          name: 'DeliveryError',
+          code: 'discord_http_error',
+          metadata: { status: 404 },
+        },
+      });
+    });
+
+    const deadLettersResponse = await stub.fetch('https://do/dead-letters');
+    expect(deadLettersResponse.status).toBe(200);
+    const deadLettersData = await deadLettersResponse.json();
+    expect(deadLettersData.totalDeadLetters).toBe(1);
+    expect(deadLettersData.deadLettersPreview).toHaveLength(1);
+    expect(deadLettersData.deadLettersPreview[0]).toMatchObject({
+      job: {
+        id: 'terminal-job',
+        delivery: {
+          state: 'dead_letter',
+          lastError: { code: 'discord_http_error' },
+        },
+      },
+    });
+
+    const commandResult = await commands.doat_dead_letters.exec({
+      id: uniqueId('interaction'),
+      guild_id: guildId,
+    }, env);
+    expect(commandResult.flags).toBe(64);
+    expect(commandResult.content).toContain('Failed scheduled deliveries (1 total, showing 1)');
+    expect(commandResult.content).toContain('terminal-job');
+    expect(commandResult.content).toContain('discord_http_error');
+  });
+
+  it('fails command registration when Discord returns a non-2xx response', async () => {
+    const fetchImpl = vi.fn(async (_input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      return jsonResponse({ message: 'Unauthorized' }, 401);
+    });
+
+    await expect(putDiscordCommands({
+      appId: 'app-id',
+      token: 'token',
+      commandDescriptors: [],
+      fetchImpl,
+      log: () => {},
+    })).rejects.toThrow('Discord command registration failed with status 401.');
+  });
+
+  it('explicitly re-arms retryable delivery failures with backoff', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+
+    vi.stubGlobal('fetch', vi.fn(async () => (
+      jsonResponse({ message: 'Temporary failure' }, 503)
+    )));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      replaceStoredJobs(state, [
+        storedMessageJob({ id: 'retry-job', guildId }),
+      ]);
+
+      const beforeAlarm = Date.now();
+      await instance.alarm();
+
+      const jobs = readStoredJobs(state);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]).toMatchObject({
+        id: 'retry-job',
+        delivery: {
+          state: 'retry_wait',
+          attempts: 1,
+          lastError: {
+            code: 'discord_http_error',
+            metadata: { status: 503 },
+          },
+        },
+      });
+      expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
+        beforeAlarm + 30_000,
+      );
+
+      const nextAlarm = await state.storage.getAlarm();
+      expect(nextAlarm).toBe(jobs[0].delivery.nextAttemptAtMs);
+      await state.storage.deleteAlarm();
+    });
+  });
+
+  it('dead-letters retryable failures after the fifth attempt', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+
+    vi.stubGlobal('fetch', vi.fn(async () => (
+      jsonResponse({ message: 'Temporary failure' }, 503)
+    )));
+
+    await runInDurableObject(stub, async (instance, state) => {
+      replaceStoredJobs(state, [
+        storedMessageJob({
+          id: 'exhausted-job',
+          guildId,
+          attempts: 4,
+        }),
+      ]);
+
+      await instance.alarm();
+
+      expect(readStoredJobs(state)).toEqual([]);
+      const deadLetters = readDeadLetters(state);
+      expect(deadLetters).toHaveLength(1);
+      expect(deadLetters[0]).toMatchObject({
+        id: 'exhausted-job',
+        delivery: {
+          state: 'dead_letter',
+          attempts: 5,
+          lastError: { code: 'discord_http_error' },
+        },
+      });
+    });
+  });
+
   it('composes GIF deliveries using the KLIPY result URL and safe mentions', async () => {
-    const fetchMock = vi.fn(async (input) => {
+    const fetchMock = vi.fn(async (input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       const url = typeof input === 'string' ? input : String(input);
       if (!url.startsWith('https://api.klipy.com/v2/search')) {
         throw new Error(`Unexpected external fetch: ${url}`);
@@ -653,12 +1350,12 @@ describe('Discord interaction worker', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const composed = await gifMessageCompose(
-      { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
       {
         innerContent: gifMessageInnerContent,
         allowedMentions: () => ({ parse: [] }),
         outerContent: gifMessageOuterContent,
       },
+      { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
       { subject: 'dance!', extraData: { gif: 'dance cat' } },
     );
 
@@ -687,7 +1384,8 @@ describe('Discord interaction worker', () => {
       (_, index) => `https://cdn.example.com/dance-${index % 3}.gif`,
     );
     let requestIndex = 0;
-    const fetchMock = vi.fn(async (input) => {
+    const fetchMock = vi.fn(async (input, init) => {
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       const url = new URL(typeof input === 'string' ? input : String(input));
       if (!url.toString().startsWith('https://api.klipy.com/v2/search')) {
         throw new Error(`Unexpected external fetch: ${url}`);
@@ -715,8 +1413,8 @@ describe('Discord interaction worker', () => {
     const composedMessages = await Promise.all(
       Array.from({ length: 10 }, (_, index) => (
         gifMessageCompose(
-          { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
           composer,
+          { KLIPY_API_KEY: 'k-api', KLIPY_API_KEY_NAME: 'k-client' },
           { subject: `dance ${index}`, extraData: { gif: 'dance cat' } },
         )
       )),
