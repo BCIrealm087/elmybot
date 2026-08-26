@@ -154,7 +154,7 @@ async function createChatSubscription(request, env) {
 	}
 
 	const requestUrl = new URL(request.url);
-	return createTwitchChatSubscription({
+	return await createTwitchChatSubscription({
 		broadcasterUserId: requestBody?.broadcasterUserId,
 		callbackUrl: `${requestUrl.origin}/twitch`
 	}, env);

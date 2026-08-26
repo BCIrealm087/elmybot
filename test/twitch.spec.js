@@ -20,6 +20,10 @@ const oauthEnv = {
 	TWITCH_CLIENT_SECRET: "client-secret",
 	TWITCH_BOT_USER_ID: "bot-user-id"
 };
+const eventSubEnv = {
+	...oauthEnv,
+	TWITCH_EVENTSUB_SECRET: "eventsub-secret"
+};
 
 function twitchAuthStub() {
 	return env.TWITCH_AUTH.get(env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME));
@@ -358,11 +362,6 @@ describe("Twitch EventSub worker", () => {
 });
 
 describe("Twitch EventSub management", () => {
-	const eventSubEnv = {
-		...oauthEnv,
-		TWITCH_EVENTSUB_SECRET: "eventsub-secret"
-	};
-
 	it("protects subscription management with the setup bearer token", async () => {
 		const response = await worker.fetch(
 			new Request("https://example.com/twitch/eventsub/subscriptions"),
