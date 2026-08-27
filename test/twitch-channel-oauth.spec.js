@@ -42,6 +42,14 @@ function eventSubManagerStub(broadcasterUserId = "broadcaster-id") {
 	);
 }
 
+async function invitationStorageKey(token) {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+	const hash = Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, "0")
+	).join("");
+	return `channelInvitation:${hash}`;
+}
+
 async function startChannelOAuth() {
 	const response = await worker.fetch(
 		new Request("https://example.com/twitch/channels/oauth/start", {
@@ -85,6 +93,105 @@ afterEach(() => {
 });
 
 describe("Twitch broadcaster OAuth", () => {
+	it("creates a hashed, expiring, single-use invitation behind setup authorization", async () => {
+		const unauthorized = await worker.fetch(
+			new Request("https://example.com/twitch/channels/invitations", { method: "POST" }),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		expect(unauthorized.status).toBe(401);
+
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/channels/invitations", {
+				method: "POST",
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const result = await response.json();
+		const invitationUrl = new URL(result.invitationUrl);
+		const invitationToken = invitationUrl.hash.slice("#invite=".length);
+
+		expect(response.status).toBe(201);
+		expect(invitationUrl.origin + invitationUrl.pathname)
+			.toBe("https://example.com/twitch/channels/connect");
+		expect(invitationUrl.search).toBe("");
+		expect(invitationToken).toMatch(/^[0-9a-f]{64}$/);
+		expect(result.expiresAtMs).toBeGreaterThan(Date.now() + 59 * 60 * 1000);
+		expect(result.expiresAtMs).toBeLessThanOrEqual(Date.now() + 60 * 60 * 1000);
+		await runInDurableObject(channelOAuthCoordinatorStub(), async (_instance, state) => {
+			const invitations = await state.storage.list({ prefix: "channelInvitation:" });
+			expect(invitations.size).toBe(1);
+			expect([...invitations.keys()][0]).not.toContain(invitationToken);
+			expect(JSON.stringify([...invitations.values()])).not.toContain(invitationToken);
+			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
+
+	it("serves a hardened public connection page", async () => {
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/channels/connect"),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const html = await response.text();
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/html");
+		expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+		expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+		expect(html).toContain("Connect your channel");
+		expect(html).toContain("Continue with Twitch");
+		expect(html).toContain('action="/twitch/channels/connect"');
+	});
+
+	it("consumes an invitation once and redirects the broadcaster to Twitch", async () => {
+		const invitationResponse = await worker.fetch(
+			new Request("https://example.com/twitch/channels/invitations", {
+				method: "POST",
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const invitation = await invitationResponse.json();
+		const invitationToken = new URL(invitation.invitationUrl).hash.slice("#invite=".length);
+		const invitationKey = await invitationStorageKey(invitationToken);
+		const makeConnectRequest = () => new Request(
+			"https://example.com/twitch/channels/connect",
+			{
+				method: "POST",
+				headers: { "content-type": "application/x-www-form-urlencoded" },
+				body: new URLSearchParams({ invite: invitationToken })
+			}
+		);
+
+		const response = await worker.fetch(
+			makeConnectRequest(),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const authorizationUrl = new URL(response.headers.get("location"));
+		expect(response.status).toBe(303);
+		expect(authorizationUrl.origin + authorizationUrl.pathname)
+			.toBe("https://id.twitch.tv/oauth2/authorize");
+		expect(authorizationUrl.searchParams.get("scope")).toBe("channel:bot");
+		expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
+
+		const replay = await worker.fetch(
+			makeConnectRequest(),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		expect(replay.status).toBe(400);
+		expect(await replay.text()).toContain("invalid, expired, or has already been used");
+		await runInDurableObject(channelOAuthCoordinatorStub(), async (_instance, state) => {
+			expect(await state.storage.get(invitationKey)).toBeUndefined();
+			expect((await state.storage.list({ prefix: "channelOAuthState:" })).size).toBe(1);
+		});
+	});
+
 	it("protects channel OAuth start and requests only channel:bot", async () => {
 		const unauthorized = await worker.fetch(
 			new Request("https://example.com/twitch/channels/oauth/start", { method: "POST" }),
@@ -146,7 +253,8 @@ describe("Twitch broadcaster OAuth", () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(await response.text()).toContain("Twitch channel broadcaster authorized");
+		expect(response.headers.get("content-type")).toContain("text/html");
+		expect(await response.text()).toContain("Elmybot is ready");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		await runInDurableObject(channelAuthStub(), async (_instance, durableState) => {
 			expect(await durableState.storage.get("channelAuthorization")).toMatchObject({
@@ -198,9 +306,7 @@ describe("Twitch broadcaster OAuth", () => {
 			createExecutionContext()
 		);
 		expect(replayResponse.status).toBe(400);
-		expect(await replayResponse.json()).toMatchObject({
-			code: "twitch_channel_oauth_invalid_state"
-		});
+		expect(await replayResponse.text()).toContain("invalid or expired");
 	});
 
 	it("refreshes and validates a broadcaster authorization with its alarm", async () => {

@@ -14,7 +14,9 @@ export const TWITCH_CHANNEL_OAUTH_COORDINATOR_NAME = "twitch:channel-oauth";
 
 const CHANNEL_AUTH_KEY = "channelAuthorization";
 const OAUTH_STATE_PREFIX = "channelOAuthState:";
+const INVITATION_PREFIX = "channelInvitation:";
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const INVITATION_TTL_MS = 60 * 60 * 1000;
 const VALIDATION_INTERVAL_MS = 55 * 60 * 1000;
 const VALIDATION_RETRY_MS = 5 * 60 * 1000;
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 60 * 1000;
@@ -60,6 +62,40 @@ function validatedCallbackUrl(value) {
 		throw channelOAuthError("EventSub callback URL is invalid.");
 	}
 	return callbackUrl.href;
+}
+
+function validatedConnectUrl(value) {
+	let connectUrl;
+	try {
+		connectUrl = new URL(value);
+	} catch {
+		throw channelOAuthError("Channel invitation URL is invalid.");
+	}
+	if (connectUrl.protocol !== "https:" || connectUrl.pathname !== "/twitch/channels/connect") {
+		throw channelOAuthError("Channel invitation URL is invalid.");
+	}
+	connectUrl.hash = "";
+	connectUrl.search = "";
+	return connectUrl.href;
+}
+
+function randomInvitationToken() {
+	const bytes = new Uint8Array(32);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function invitationStorageKey(token) {
+	if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token)) {
+		throw channelOAuthError("The channel invitation is invalid or expired.", {
+			code: "twitch_channel_invitation_invalid"
+		});
+	}
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+	const hash = Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, "0")
+	).join("");
+	return `${INVITATION_PREFIX}${hash}`;
 }
 
 function assertChannelIdentity(validation, clientId, expectedUserId) {
@@ -209,14 +245,36 @@ export class TwitchChannelOAuthCoordinator {
 		this.env = env;
 	}
 
-	async scheduleStateCleanup(expiresAtMs) {
+	async scheduleCleanup(expiresAtMs) {
 		const alarmAtMs = await this.state.storage.getAlarm();
 		if (alarmAtMs === null || expiresAtMs < alarmAtMs) {
 			await this.state.storage.setAlarm(expiresAtMs);
 		}
 	}
 
-	async startOAuth({ redirectUri, callbackUrl, clientId, clientSecret }) {
+	async createInvitation({ connectUrl }) {
+		connectUrl = validatedConnectUrl(connectUrl);
+		const token = randomInvitationToken();
+		const nowMs = Date.now();
+		const invitation = {
+			createdAtMs: nowMs,
+			expiresAtMs: nowMs + INVITATION_TTL_MS
+		};
+		await this.state.storage.put(await invitationStorageKey(token), invitation);
+		await this.scheduleCleanup(invitation.expiresAtMs);
+		return {
+			invitationUrl: `${connectUrl}#invite=${token}`,
+			expiresAtMs: invitation.expiresAtMs
+		};
+	}
+
+	async startOAuth({
+		redirectUri,
+		callbackUrl,
+		clientId,
+		clientSecret,
+		invitationToken
+	}) {
 		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
 		requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
 		redirectUri = validatedRedirectUri(redirectUri);
@@ -229,8 +287,23 @@ export class TwitchChannelOAuthCoordinator {
 			callbackUrl,
 			expiresAtMs: Date.now() + OAUTH_STATE_TTL_MS
 		};
-		await this.state.storage.put(`${OAUTH_STATE_PREFIX}${state}`, pending);
-		await this.scheduleStateCleanup(pending.expiresAtMs);
+		const stateKey = `${OAUTH_STATE_PREFIX}${state}`;
+		if (invitationToken === undefined) {
+			await this.state.storage.put(stateKey, pending);
+		} else {
+			const invitationKey = await invitationStorageKey(invitationToken);
+			await this.state.storage.transaction(async (transaction) => {
+				const invitation = await transaction.get(invitationKey);
+				if (!invitation || invitation.expiresAtMs < Date.now()) {
+					throw channelOAuthError("The channel invitation is invalid or expired.", {
+						code: "twitch_channel_invitation_invalid"
+					});
+				}
+				await transaction.delete(invitationKey);
+				await transaction.put(stateKey, pending);
+			});
+		}
+		await this.scheduleCleanup(pending.expiresAtMs);
 
 		const authorizationUrl = new URL("https://id.twitch.tv/oauth2/authorize");
 		authorizationUrl.search = new URLSearchParams({
@@ -305,10 +378,13 @@ export class TwitchChannelOAuthCoordinator {
 
 	async alarm() {
 		const nowMs = Date.now();
-		const states = await this.state.storage.list({ prefix: OAUTH_STATE_PREFIX });
+		const [states, invitations] = await Promise.all([
+			this.state.storage.list({ prefix: OAUTH_STATE_PREFIX }),
+			this.state.storage.list({ prefix: INVITATION_PREFIX })
+		]);
 		const expiredKeys = [];
 		let nextExpiry = null;
-		for (const [key, pending] of states) {
+		for (const [key, pending] of [...states, ...invitations]) {
 			if (!Number.isFinite(pending?.expiresAtMs) || pending.expiresAtMs <= nowMs) {
 				expiredKeys.push(key);
 			} else if (nextExpiry === null || pending.expiresAtMs < nextExpiry) {
@@ -323,6 +399,9 @@ export class TwitchChannelOAuthCoordinator {
 	async fetch(request) {
 		const url = new URL(request.url);
 		try {
+			if (request.method === "POST" && url.pathname === "/invitations/create") {
+				return noStoreJson(await this.createInvitation(await request.json()), 201);
+			}
 			if (request.method === "POST" && url.pathname === "/oauth/start") {
 				return noStoreJson(await this.startOAuth(await request.json()));
 			}

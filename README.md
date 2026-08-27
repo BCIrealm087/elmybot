@@ -258,8 +258,12 @@ https://<worker-host>/twitch/channels/oauth/callback
 
 The management endpoints use `TWITCH_OAUTH_SETUP_TOKEN` as a bearer token:
 
+- `POST /twitch/channels/invitations` creates a one-hour, single-use
+  broadcaster invitation. The returned URL keeps its bearer token in the URL
+  fragment so it is submitted only from the connection page's form.
 - `POST /twitch/channels/oauth/start` creates a ten-minute, one-time
-  authorization URL requesting only `channel:bot`.
+  authorization URL requesting only `channel:bot`; this remains available as
+  the operator-driven fallback.
 - `GET /twitch/channels/oauth?broadcasterUserId=<id>` reports safe session
   metadata without returning access or refresh tokens.
 - `DELETE /twitch/channels/oauth?broadcasterUserId=<id>` revokes the stored
@@ -270,6 +274,12 @@ After a successful callback, the channel is registered automatically with the
 and validated by a Durable Object alarm at least hourly. Revoked or
 irrecoverable sessions are marked `reauthorization_required`, and their
 EventSub desired state is disabled until the broadcaster authorizes again.
+
+The broadcaster opens the invitation URL without an administrative token. The
+public `GET /twitch/channels/connect` page extracts the invitation from the URL
+fragment, removes it from the address bar, and submits it to the Worker. A
+successful single-use redemption redirects the broadcaster to Twitch and ends
+on a no-store success page after authorization.
 
 ## Local development
 

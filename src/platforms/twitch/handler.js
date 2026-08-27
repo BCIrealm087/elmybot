@@ -12,6 +12,11 @@ import {
 	twitchChannelAuthObjectName,
 	twitchChannelOAuthCoordinatorStub
 } from "./channel-auth.js";
+import {
+	renderTwitchConnectPage,
+	renderTwitchOnboardingError,
+	renderTwitchOnboardingSuccess
+} from "./onboarding.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -85,14 +90,7 @@ async function finishTwitchOAuth(request, env) {
 	});
 }
 
-async function startTwitchChannelOAuth(request, env) {
-	if (!env.TWITCH_OAUTH_SETUP_TOKEN || !env.TWITCH_CHANNEL_OAUTH) {
-		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
-	}
-	if (!oauthSetupAuthorized(request, env)) {
-		return new Response("Unauthorized", { status: 401 });
-	}
-	const url = new URL(request.url);
+function requestTwitchChannelOAuthStart(url, env, invitationToken) {
 	return twitchChannelOAuthCoordinatorStub(env).fetch(
 		"https://twitch-channel-oauth/oauth/start",
 		{
@@ -102,10 +100,77 @@ async function startTwitchChannelOAuth(request, env) {
 				redirectUri: `${url.origin}/twitch/channels/oauth/callback`,
 				callbackUrl: `${url.origin}/twitch`,
 				clientId: env.TWITCH_CLIENT_ID,
-				clientSecret: env.TWITCH_CLIENT_SECRET
+				clientSecret: env.TWITCH_CLIENT_SECRET,
+				...(invitationToken === undefined ? {} : { invitationToken })
 			})
 		}
 	);
+}
+
+async function startTwitchChannelOAuth(request, env) {
+	if (!env.TWITCH_OAUTH_SETUP_TOKEN || !env.TWITCH_CHANNEL_OAUTH) {
+		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
+	}
+	if (!oauthSetupAuthorized(request, env)) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	return requestTwitchChannelOAuthStart(new URL(request.url), env);
+}
+
+async function createTwitchChannelInvitation(request, env) {
+	if (!env.TWITCH_OAUTH_SETUP_TOKEN || !env.TWITCH_CHANNEL_OAUTH) {
+		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
+	}
+	if (!oauthSetupAuthorized(request, env)) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const url = new URL(request.url);
+	return twitchChannelOAuthCoordinatorStub(env).fetch(
+		"https://twitch-channel-oauth/invitations/create",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ connectUrl: `${url.origin}/twitch/channels/connect` })
+		}
+	);
+}
+
+async function beginInvitedTwitchChannelOAuth(request, env) {
+	if (!env.TWITCH_CHANNEL_OAUTH) {
+		return renderTwitchOnboardingError(
+			"Channel onboarding is temporarily unavailable.",
+			503
+		);
+	}
+	let invitationToken;
+	try {
+		invitationToken = (await request.formData()).get("invite");
+	} catch {
+		return renderTwitchOnboardingError("This invitation is invalid or expired.");
+	}
+	const response = await requestTwitchChannelOAuthStart(
+		new URL(request.url),
+		env,
+		invitationToken
+	);
+	if (!response.ok) {
+		await response.text();
+		return renderTwitchOnboardingError(
+			response.status >= 500
+				? "Channel onboarding is temporarily unavailable. Please try again later."
+				: "This invitation is invalid, expired, or has already been used.",
+			response.status >= 500 ? 503 : 400
+		);
+	}
+	const result = await response.json();
+	return new Response(null, {
+		status: 303,
+		headers: {
+			"cache-control": "no-store",
+			location: result.authorizationUrl,
+			"referrer-policy": "no-referrer"
+		}
+	});
 }
 
 async function finishTwitchChannelOAuth(request, env) {
@@ -114,10 +179,7 @@ async function finishTwitchChannelOAuth(request, env) {
 	}
 	const url = new URL(request.url);
 	if (url.searchParams.has("error")) {
-		return new Response("Twitch channel authorization was denied.", {
-			status: 400,
-			headers: { "cache-control": "no-store" }
-		});
+		return renderTwitchOnboardingError("Twitch channel authorization was denied.");
 	}
 	const response = await twitchChannelOAuthCoordinatorStub(env).fetch(
 		"https://twitch-channel-oauth/oauth/callback",
@@ -133,19 +195,18 @@ async function finishTwitchChannelOAuth(request, env) {
 			})
 		}
 	);
-	if (!response.ok) return response;
+	if (!response.ok) {
+		await response.text();
+		return renderTwitchOnboardingError(
+			response.status >= 500
+				? "Twitch authorization is temporarily unavailable. Please try again later."
+				: "This authorization link is invalid or expired.",
+			response.status >= 500 ? 503 : 400
+		);
+	}
 	const result = await response.json();
 	const channel = result.authorization?.login || result.authorization?.broadcasterUserId;
-	return new Response(
-		`Twitch channel ${channel} authorized. You can close this tab.`,
-		{
-			headers: {
-				"cache-control": "no-store",
-				"content-type": "text/plain; charset=utf-8",
-				"referrer-policy": "no-referrer"
-			}
-		}
-	);
+	return renderTwitchOnboardingSuccess(channel);
 }
 
 function twitchChannelAuthStub(env, broadcasterUserId) {
@@ -383,6 +444,15 @@ function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
  */
 export async function handleTwitchRequest(request, env, ctx) {
 	const url = new URL(request.url);
+	if (url.pathname === "/twitch/channels/invitations") {
+		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+		return createTwitchChannelInvitation(request, env);
+	}
+	if (url.pathname === "/twitch/channels/connect") {
+		if (request.method === "GET") return renderTwitchConnectPage();
+		if (request.method === "POST") return beginInvitedTwitchChannelOAuth(request, env);
+		return new Response("Method Not Allowed", { status: 405 });
+	}
 	if (url.pathname === "/twitch/channels/oauth/start") {
 		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 		return startTwitchChannelOAuth(request, env);
