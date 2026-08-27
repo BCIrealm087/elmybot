@@ -2,6 +2,7 @@ import { logError, withExternalRequestTimeout } from "../../common.js";
 import { commands } from "./commands.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
 import {
+	claimTwitchEventSubMessage,
 	handleTwitchChannelConfiguration,
 	handleTwitchEventSubSubscriptions,
 	queueTwitchEventSubRecovery,
@@ -524,6 +525,34 @@ export async function handleTwitchRequest(request, env, ctx) {
 		return new Response(payload.challenge, {
 			headers: { "content-type": "text/plain; charset=utf-8" }
 		});
+	}
+
+	if (messageType === "notification" || messageType === "revocation") {
+		const broadcasterUserId =
+			payload.subscription?.condition?.broadcaster_user_id ??
+			payload.event?.broadcaster_user_id;
+		try {
+			const claimed = await claimTwitchEventSubMessage(env, {
+				broadcasterUserId,
+				messageId
+			});
+			if (!claimed) return new Response(null, { status: 204 });
+		} catch (error) {
+			logError("twitch.eventsub_message_claim_failed", {
+				platform: "twitch",
+				correlationId: `twitch:${messageId}`,
+				groupId: broadcasterUserId ?? null,
+				messageType
+			}, error);
+			const status = Number.isInteger(error?.status) &&
+				error.status >= 400 && error.status < 500
+				? error.status
+				: 503;
+			return new Response(
+				status === 400 ? "Bad Request" : "Service Unavailable",
+				{ status }
+			);
+		}
 	}
 
 	if (messageType === "revocation") {

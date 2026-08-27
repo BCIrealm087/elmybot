@@ -14,6 +14,7 @@ import {
 } from "../src/platforms/twitch/eventsub.js";
 
 const encoder = new TextEncoder();
+let twitchMessageIdCounter = 0;
 const oauthEnv = {
 	...env,
 	TWITCH_OAUTH_SETUP_TOKEN: "setup-token",
@@ -62,10 +63,11 @@ function toHex(bytes) {
 async function makeSignedTwitchRequest({
 	body,
 	secret = "eventsub-secret",
-	messageId = "message-id",
+	messageId,
 	messageType = "notification",
 	timestamp = new Date().toISOString()
 }) {
+	const resolvedMessageId = messageId ?? `message-id-${++twitchMessageIdCounter}`;
 	const key = await crypto.subtle.importKey(
 		"raw",
 		encoder.encode(secret),
@@ -76,14 +78,14 @@ async function makeSignedTwitchRequest({
 	const signature = await crypto.subtle.sign(
 		"HMAC",
 		key,
-		encoder.encode(messageId + timestamp + body)
+		encoder.encode(resolvedMessageId + timestamp + body)
 	);
 
 	return new Request("https://example.com/twitch", {
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
-			"Twitch-Eventsub-Message-Id": messageId,
+			"Twitch-Eventsub-Message-Id": resolvedMessageId,
 			"Twitch-Eventsub-Message-Timestamp": timestamp,
 			"Twitch-Eventsub-Message-Signature": `sha256=${toHex(new Uint8Array(signature))}`,
 			"Twitch-Eventsub-Message-Type": messageType
@@ -184,6 +186,57 @@ describe("Twitch EventSub worker", () => {
 			sender_id: "bot-user-id",
 			message: "I'm here!!1"
 		});
+	});
+
+	it("acknowledges a duplicate notification without running its command twice", async () => {
+		const broadcasterUserId = "duplicate-command-broadcaster";
+		const body = JSON.stringify({
+			subscription: {
+				type: "channel.chat.message",
+				condition: { broadcaster_user_id: broadcasterUserId }
+			},
+			event: {
+				broadcaster_user_id: broadcasterUserId,
+				message: { text: "!alive" }
+			}
+		});
+		const requestOptions = {
+			body,
+			messageId: "duplicate-notification-id",
+			timestamp: new Date().toISOString()
+		};
+		await storeTwitchTokens();
+		const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const firstContext = createExecutionContext();
+		const firstResponse = await worker.fetch(
+			await makeSignedTwitchRequest(requestOptions),
+			eventSubEnv,
+			firstContext
+		);
+		await waitOnExecutionContext(firstContext);
+
+		const secondContext = createExecutionContext();
+		const secondResponse = await worker.fetch(
+			await makeSignedTwitchRequest(requestOptions),
+			eventSubEnv,
+			secondContext
+		);
+		await waitOnExecutionContext(secondContext);
+
+		expect(firstResponse.status).toBe(204);
+		expect(secondResponse.status).toBe(204);
+		expect(fetchMock).toHaveBeenCalledOnce();
+		await runInDurableObject(
+			twitchEventSubManagerStub(broadcasterUserId),
+			async (_instance, state) => {
+				const rows = state.storage.sql.exec(
+					"SELECT message_id FROM eventsub_seen_messages"
+				).toArray();
+				expect(rows).toEqual([{ message_id: "duplicate-notification-id" }]);
+			}
+		);
 	});
 
 	it("refreshes an expiring token before sending a chat message", async () => {
@@ -753,8 +806,7 @@ describe("Twitch EventSub management", () => {
 describe("Twitch EventSub recovery", () => {
 	it("queues and completes recovery after notification delivery failures", async () => {
 		const secret = "eventsub-secret";
-		const request = await makeSignedTwitchRequest({
-			body: JSON.stringify({
+		const body = JSON.stringify({
 				subscription: {
 					id: "revoked-subscription-id",
 					status: "notification_failures_exceeded",
@@ -769,17 +821,33 @@ describe("Twitch EventSub recovery", () => {
 						callback: "https://example.com/twitch"
 					}
 				}
-			}),
+			});
+		const requestOptions = {
+			body,
 			secret,
+			messageId: "duplicate-revocation-id",
 			messageType: "revocation"
-		});
+		};
 		const ctx = createExecutionContext();
-		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-		const response = await worker.fetch(request, eventSubEnv, ctx);
+		const response = await worker.fetch(
+			await makeSignedTwitchRequest(requestOptions),
+			eventSubEnv,
+			ctx
+		);
 		await waitOnExecutionContext(ctx);
+		const duplicateContext = createExecutionContext();
+		const duplicateResponse = await worker.fetch(
+			await makeSignedTwitchRequest(requestOptions),
+			eventSubEnv,
+			duplicateContext
+		);
+		await waitOnExecutionContext(duplicateContext);
 
 		expect(response.status).toBe(204);
+		expect(duplicateResponse.status).toBe(204);
+		expect(warnSpy).toHaveBeenCalledOnce();
 		const stub = twitchEventSubManagerStub();
 		await runInDurableObject(stub, async (instance, state) => {
 			instance.env = eventSubEnv;

@@ -17,6 +17,8 @@ export const TWITCH_CHANNEL_AUTHORIZATION_MODES = Object.freeze([
 const RECOVERY_INITIAL_DELAY_MS = 1000;
 const RECONCILIATION_INITIAL_DELAY_MS = 60 * 1000;
 const RECONCILIATION_INTERVAL_MS = 55 * 60 * 1000;
+const EVENTSUB_MESSAGE_TTL_MS = 60 * 60 * 1000;
+const MAX_EVENTSUB_MESSAGE_ID_LENGTH = 512;
 const RECOVERY_RETRY_DELAYS_MS = Object.freeze([
 	60 * 1000,
 	5 * 60 * 1000,
@@ -40,6 +42,32 @@ function noStoreJson(value, status = 200) {
 	const response = jsonResponse(value, status);
 	response.headers.set("cache-control", "no-store");
 	return response;
+}
+
+function initializeEventSubManagerTables(state) {
+	state.storage.sql.exec(`
+		CREATE TABLE IF NOT EXISTS eventsub_seen_messages (
+			message_id TEXT PRIMARY KEY,
+			seen_at_ms INTEGER NOT NULL,
+			expires_at_ms INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS eventsub_seen_messages_expiry
+			ON eventsub_seen_messages (expires_at_ms);
+	`);
+}
+
+function validateEventSubMessageId(messageId) {
+	if (
+		typeof messageId !== "string" ||
+		messageId.length === 0 ||
+		messageId.length > MAX_EVENTSUB_MESSAGE_ID_LENGTH
+	) {
+		throw new TwitchEventSubError("The EventSub message ID is invalid.", {
+			status: 400,
+			code: "twitch_eventsub_invalid_message_id"
+		});
+	}
+	return messageId;
 }
 
 function configuredString(value, name) {
@@ -482,6 +510,56 @@ export async function queueTwitchEventSubRecovery(env, recovery) {
 	}
 }
 
+export async function claimTwitchEventSubMessage(
+	env,
+	{ broadcasterUserId, messageId }
+) {
+	if (
+		typeof broadcasterUserId !== "string" ||
+		broadcasterUserId.length === 0
+	) {
+		throw new TwitchEventSubError("The EventSub broadcaster ID is invalid.", {
+			status: 400,
+			code: "twitch_eventsub_invalid_broadcaster_id"
+		});
+	}
+	validateEventSubMessageId(messageId);
+
+	const response = await managerResponse(
+		env,
+		broadcasterUserId,
+		"/events/claim",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ messageId })
+		}
+	);
+	let result;
+	try {
+		result = await response.json();
+	} catch (cause) {
+		throw new TwitchEventSubError(
+			"The EventSub message claim returned an invalid response.",
+			{
+				status: 502,
+				code: "twitch_eventsub_message_claim_invalid_response",
+				cause
+			}
+		);
+	}
+	if (!response.ok || typeof result.claimed !== "boolean") {
+		throw new TwitchEventSubError(
+			result.error || "Could not claim the EventSub message.",
+			{
+				status: response.ok ? 502 : response.status,
+				code: result.code || "twitch_eventsub_message_claim_failed"
+			}
+		);
+	}
+	return result.claimed;
+}
+
 function validateRecovery(recovery) {
 	const channel = validateChannelConfig(recovery);
 	if (recovery.reason !== RECOVERABLE_EVENTSUB_STATUS) {
@@ -596,6 +674,37 @@ export class TwitchEventSubManager {
 	constructor(state, env) {
 		this.state = state;
 		this.env = env;
+		initializeEventSubManagerTables(state);
+	}
+
+	claimMessage(messageId) {
+		const validated = validateEventSubMessageId(messageId);
+		const nowMs = Date.now();
+		return this.state.storage.transactionSync(() => {
+			this.pruneSeenMessages(nowMs);
+			const existing = this.state.storage.sql.exec(
+				"SELECT 1 AS seen FROM eventsub_seen_messages WHERE message_id = ?",
+				validated
+			).toArray()[0];
+			if (existing) return false;
+
+			this.state.storage.sql.exec(
+				`INSERT INTO eventsub_seen_messages
+					(message_id, seen_at_ms, expires_at_ms)
+				 VALUES (?, ?, ?)`,
+				validated,
+				nowMs,
+				nowMs + EVENTSUB_MESSAGE_TTL_MS
+			);
+			return true;
+		});
+	}
+
+	pruneSeenMessages(nowMs = Date.now()) {
+		this.state.storage.sql.exec(
+			"DELETE FROM eventsub_seen_messages WHERE expires_at_ms <= ?",
+			nowMs
+		);
 	}
 
 	async configureChannel(channel) {
@@ -674,6 +783,7 @@ export class TwitchEventSubManager {
 	}
 
 	async alarm() {
+		this.pruneSeenMessages();
 		const [recovery, channel] = await Promise.all([
 			this.state.storage.get(RECOVERY_KEY),
 			this.state.storage.get(CHANNEL_CONFIG_KEY)
@@ -759,6 +869,10 @@ export class TwitchEventSubManager {
 	async fetch(request) {
 		const url = new URL(request.url);
 		try {
+			if (request.method === "POST" && url.pathname === "/events/claim") {
+				const input = await request.json();
+				return noStoreJson({ claimed: this.claimMessage(input?.messageId) });
+			}
 			if (request.method === "POST" && url.pathname === "/recover") {
 				const queued = await this.queueRecovery(await request.json());
 				return noStoreJson({ queued }, 202);

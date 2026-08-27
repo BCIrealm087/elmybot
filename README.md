@@ -34,6 +34,7 @@ WebSocket connection is required.
 ### Twitch
 
 - Signed EventSub webhook handling at `/twitch`
+- Durable message-ID deduplication for EventSub retries
 - `!alive` chat command
 - Chat replies through the Twitch Send Chat Message API
 - Durable bot OAuth authorization, refresh-token rotation, and hourly validation
@@ -174,6 +175,12 @@ Requests with invalid HMAC signatures or timestamps outside the ten-minute
 acceptance window are rejected. Callback challenges are returned synchronously;
 notifications and recovery work are acknowledged promptly and completed with
 `ctx.waitUntil(...)`.
+
+Twitch may deliver the same notification more than once. After signature
+verification, Elmybot atomically claims each notification or revocation message
+ID in the broadcaster's `TwitchEventSubManager`. Claims remain for one hour;
+duplicate deliveries are acknowledged with HTTP `204` without repeating command
+or recovery side effects.
 
 ### OAuth ownership
 
@@ -455,9 +462,6 @@ browser Work environment cannot execute a deploy-shaped command.
 
 ## Operational limitations
 
-- Twitch EventSub delivery is at least once. Elmybot currently validates message
-  IDs but does not persist a duplicate-message cache, so repeated notifications
-  may execute the same chat command more than once.
 - Twitch can return HTTP `200` from Send Chat Message while reporting
   `is_sent: false`. The current chat sender does not yet inspect that field.
 - Configured Twitch channels are stored in per-broadcaster objects and are not
