@@ -31,7 +31,11 @@ export function errorDetails(error) {
     name: error.name,
     message: boundedString(error.message),
     ...(error.code !== undefined ? { code: boundedString(error.code, 100) } : {}),
+    ...(error.classification !== undefined
+      ? { classification: boundedString(error.classification, 100) }
+      : {}),
     ...(error.status !== undefined ? { status: error.status } : {}),
+    ...(error.retryable !== undefined ? { retryable: error.retryable === true } : {}),
     ...(error.metadata !== undefined ? { metadata: error.metadata } : {}),
     ...(error.cause instanceof Error ? {
       cause: {

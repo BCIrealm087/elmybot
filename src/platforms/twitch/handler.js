@@ -23,6 +23,7 @@ const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
 const EVENTSUB_SIGNATURE_BYTES = 32;
 const EVENTSUB_MAX_AGE_MS = 10 * 60 * 1000;
+const TWITCH_CHAT_METADATA_STRING_MAX_LENGTH = 500;
 
 let cachedSecret = null;
 let cachedSecretKeyPromise = null;
@@ -312,23 +313,159 @@ async function getTwitchAccessToken(env, rejectedAccessToken) {
 	return result.accessToken;
 }
 
-function postTwitchChatMessage(env, event, message, accessToken) {
-	return fetch(
-		"https://api.twitch.tv/helix/chat/messages",
-		withExternalRequestTimeout({
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${accessToken}`,
-				"Client-Id": env.TWITCH_CLIENT_ID,
-				"content-type": "application/json"
-			},
-			body: JSON.stringify({
-				broadcaster_id: event.broadcaster_user_id,
-				sender_id: env.TWITCH_BOT_USER_ID,
-				message
+class TwitchChatDeliveryError extends Error {
+	constructor(message, {
+		classification,
+		code,
+		status,
+		retryable = false,
+		metadata = {},
+		cause
+	}) {
+		super(message, { cause });
+		this.name = "TwitchChatDeliveryError";
+		this.classification = classification;
+		this.code = code;
+		this.retryable = retryable;
+		if (status !== undefined) this.status = status;
+		if (Object.keys(metadata).length > 0) this.metadata = metadata;
+	}
+}
+
+function boundedTwitchChatMetadataString(value) {
+	return typeof value === "string"
+		? value.slice(0, TWITCH_CHAT_METADATA_STRING_MAX_LENGTH)
+		: null;
+}
+
+function twitchChatHttpError(status) {
+	if (status === 401) {
+		return new TwitchChatDeliveryError(
+			"Twitch rejected the refreshed chat authorization.",
+			{
+				classification: "authentication",
+				code: "twitch_chat_authentication_failed",
+				status
+			}
+		);
+	}
+	if (status === 403) {
+		return new TwitchChatDeliveryError(
+			"The bot is not permitted to send to this Twitch channel.",
+			{
+				classification: "authorization",
+				code: "twitch_chat_authorization_failed",
+				status
+			}
+		);
+	}
+	if (status === 429) {
+		return new TwitchChatDeliveryError("Twitch chat rate limit exceeded.", {
+			classification: "rate_limit",
+			code: "twitch_chat_rate_limited",
+			status,
+			retryable: true
+		});
+	}
+	if (status >= 500) {
+		return new TwitchChatDeliveryError("Twitch chat is temporarily unavailable.", {
+			classification: "service",
+			code: "twitch_chat_service_unavailable",
+			status,
+			retryable: true
+		});
+	}
+	if (status === 400 || status === 422) {
+		return new TwitchChatDeliveryError("Twitch rejected the chat request.", {
+			classification: "invalid_request",
+			code: "twitch_chat_invalid_request",
+			status
+		});
+	}
+	return new TwitchChatDeliveryError("Twitch rejected the chat request.", {
+		classification: "http",
+		code: "twitch_chat_http_error",
+		status
+	});
+}
+
+async function postTwitchChatMessage(env, event, message, accessToken) {
+	try {
+		return await fetch(
+			"https://api.twitch.tv/helix/chat/messages",
+			withExternalRequestTimeout({
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"Client-Id": env.TWITCH_CLIENT_ID,
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({
+					broadcaster_id: event.broadcaster_user_id,
+					sender_id: env.TWITCH_BOT_USER_ID,
+					message
+				})
 			})
-		})
-	);
+		);
+	} catch (cause) {
+		throw new TwitchChatDeliveryError("Twitch chat request failed.", {
+			classification: "network",
+			code: "twitch_chat_network_error",
+			retryable: true,
+			cause
+		});
+	}
+}
+
+async function validateTwitchChatResponse(response) {
+	if (!response.ok) {
+		await response.text();
+		throw twitchChatHttpError(response.status);
+	}
+
+	let result;
+	try {
+		result = await response.json();
+	} catch (cause) {
+		throw new TwitchChatDeliveryError(
+			"Twitch returned an invalid chat response.",
+			{
+				classification: "invalid_response",
+				code: "twitch_chat_invalid_response",
+				retryable: true,
+				cause
+			}
+		);
+	}
+
+	const sent = result?.data?.[0];
+	if (sent?.is_sent === false) {
+		throw new TwitchChatDeliveryError("Twitch dropped the chat message.", {
+			classification: "dropped",
+			code: "twitch_chat_message_dropped",
+			metadata: {
+				dropReason: {
+					code: boundedTwitchChatMetadataString(sent.drop_reason?.code),
+					message: boundedTwitchChatMetadataString(sent.drop_reason?.message)
+				}
+			}
+		});
+	}
+	if (
+		sent?.is_sent !== true ||
+		typeof sent.message_id !== "string" ||
+		sent.message_id.length === 0
+	) {
+		throw new TwitchChatDeliveryError(
+			"Twitch returned an invalid chat response.",
+			{
+				classification: "invalid_response",
+				code: "twitch_chat_invalid_response",
+				retryable: true
+			}
+		);
+	}
+	return sent.message_id;
 }
 
 async function sendTwitchChatMessage(env, event, message) {
@@ -347,12 +484,7 @@ async function sendTwitchChatMessage(env, event, message) {
 		response = await postTwitchChatMessage(env, event, message, accessToken);
 	}
 
-	if (!response.ok) {
-		await response.text();
-		const error = new Error("Twitch rejected the chat message.");
-		error.status = response.status;
-		throw error;
-	}
+	return validateTwitchChatResponse(response);
 }
 
 function handleChatNotification(payload, env, ctx, messageId) {

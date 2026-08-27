@@ -94,6 +94,43 @@ async function makeSignedTwitchRequest({
 	});
 }
 
+function successfulTwitchChatResponse(messageId = "sent-message-id") {
+	return Response.json({
+		data: [{
+			message_id: messageId,
+			is_sent: true,
+			drop_reason: null
+		}]
+	});
+}
+
+async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) {
+	const request = await makeSignedTwitchRequest({
+		body: JSON.stringify({
+			subscription: {
+				type: "channel.chat.message",
+				condition: { broadcaster_user_id: broadcasterUserId }
+			},
+			event: {
+				broadcaster_user_id: broadcasterUserId,
+				message: { text: "!alive" }
+			}
+		})
+	});
+	await storeTwitchTokens();
+	const fetchMock = vi.fn(fetchImplementation);
+	vi.stubGlobal("fetch", fetchMock);
+	const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+	const ctx = createExecutionContext();
+	const response = await worker.fetch(request, eventSubEnv, ctx);
+	await waitOnExecutionContext(ctx);
+	return {
+		response,
+		fetchMock,
+		errorLogs: errorSpy.mock.calls.map(([entry]) => JSON.parse(entry))
+	};
+}
+
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -160,7 +197,7 @@ describe("Twitch EventSub worker", () => {
 		await storeTwitchTokens();
 		const fetchMock = vi.fn(async (_input, init) => {
 			expect(init.signal).toBeInstanceOf(AbortSignal);
-			return new Response(null, { status: 200 });
+			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const ctx = createExecutionContext();
@@ -206,7 +243,7 @@ describe("Twitch EventSub worker", () => {
 			timestamp: new Date().toISOString()
 		};
 		await storeTwitchTokens();
-		const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+		const fetchMock = vi.fn(async () => successfulTwitchChatResponse());
 		vi.stubGlobal("fetch", fetchMock);
 
 		const firstContext = createExecutionContext();
@@ -267,7 +304,7 @@ describe("Twitch EventSub worker", () => {
 
 			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
 			expect(init.headers.Authorization).toBe("Bearer refreshed-access-token");
-			return new Response(null, { status: 200 });
+			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const ctx = createExecutionContext();
@@ -321,7 +358,7 @@ describe("Twitch EventSub worker", () => {
 				return new Response("Unauthorized", { status: 401 });
 			}
 			expect(init.headers.Authorization).toBe("Bearer replacement-access-token");
-			return new Response(null, { status: 200 });
+			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const ctx = createExecutionContext();
@@ -366,7 +403,7 @@ describe("Twitch EventSub worker", () => {
 			}
 
 			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
-			return new Response(null, { status: 200 });
+			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
 		const ctx = createExecutionContext();
@@ -386,6 +423,152 @@ describe("Twitch EventSub worker", () => {
 			const stored = await state.storage.get("oauthTokens");
 			expect(stored.lastValidatedAtMs).toBeGreaterThan(Date.now() - 5000);
 			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+		});
+	});
+
+	it("reports a Twitch-declared chat drop with its bounded reason", async () => {
+		const oversizedMessage = "x".repeat(600);
+		const result = await runAliveCommandWithFetch(
+			async () => Response.json({
+				data: [{
+					message_id: "",
+					is_sent: false,
+					drop_reason: {
+						code: "automod_held",
+						message: oversizedMessage
+					}
+				}]
+			}),
+			"dropped-message-broadcaster"
+		);
+
+		expect(result.response.status).toBe(204);
+		expect(result.errorLogs).toHaveLength(1);
+		expect(result.errorLogs[0]).toMatchObject({
+			event: "twitch.command_failed",
+			groupId: "dropped-message-broadcaster",
+			error: {
+				name: "TwitchChatDeliveryError",
+				code: "twitch_chat_message_dropped",
+				classification: "dropped",
+				retryable: false,
+				metadata: {
+					dropReason: {
+						code: "automod_held",
+						message: "x".repeat(500)
+					}
+				}
+			}
+		});
+	});
+
+	it.each([
+		{
+			status: 400,
+			classification: "invalid_request",
+			code: "twitch_chat_invalid_request",
+			retryable: false
+		},
+		{
+			status: 403,
+			classification: "authorization",
+			code: "twitch_chat_authorization_failed",
+			retryable: false
+		},
+		{
+			status: 429,
+			classification: "rate_limit",
+			code: "twitch_chat_rate_limited",
+			retryable: true
+		},
+		{
+			status: 503,
+			classification: "service",
+			code: "twitch_chat_service_unavailable",
+			retryable: true
+		}
+	])(
+		"classifies Twitch chat HTTP $status failures",
+		async ({ status, classification, code, retryable }) => {
+			const result = await runAliveCommandWithFetch(
+				async () => new Response(null, { status }),
+				`http-${status}-broadcaster`
+			);
+
+			expect(result.response.status).toBe(204);
+			expect(result.errorLogs).toHaveLength(1);
+				expect(result.errorLogs[0].error).toMatchObject({
+					name: "TwitchChatDeliveryError",
+					code,
+					classification,
+					status,
+					retryable
+				});
+		}
+	);
+
+	it("classifies a repeated 401 after token refresh as authentication failure", async () => {
+		let chatRequests = 0;
+		const result = await runAliveCommandWithFetch(async (input) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "replacement-access-token",
+					refresh_token: "replacement-refresh-token",
+					expires_in: 14400,
+					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+				});
+			}
+			chatRequests += 1;
+			return new Response("Unauthorized", { status: 401 });
+		}, "authentication-failure-broadcaster");
+
+		expect(result.response.status).toBe(204);
+		expect(chatRequests).toBe(2);
+		expect(result.errorLogs).toHaveLength(1);
+		expect(result.errorLogs[0].error).toMatchObject({
+			name: "TwitchChatDeliveryError",
+			code: "twitch_chat_authentication_failed",
+			classification: "authentication",
+			status: 401,
+			retryable: false
+		});
+	});
+
+	it("classifies a malformed successful Twitch chat response", async () => {
+		const result = await runAliveCommandWithFetch(
+			async () => Response.json({ data: [] }),
+			"invalid-chat-response-broadcaster"
+		);
+
+		expect(result.response.status).toBe(204);
+		expect(result.errorLogs).toHaveLength(1);
+		expect(result.errorLogs[0].error).toMatchObject({
+			name: "TwitchChatDeliveryError",
+			code: "twitch_chat_invalid_response",
+			classification: "invalid_response",
+			retryable: true
+		});
+	});
+
+	it("classifies Twitch chat network failures as transient", async () => {
+		const result = await runAliveCommandWithFetch(
+			async () => {
+				throw new TypeError("network unavailable");
+			},
+			"network-failure-broadcaster"
+		);
+
+		expect(result.response.status).toBe(204);
+		expect(result.errorLogs).toHaveLength(1);
+		expect(result.errorLogs[0].error).toMatchObject({
+			name: "TwitchChatDeliveryError",
+			code: "twitch_chat_network_error",
+			classification: "network",
+			retryable: true,
+			cause: {
+				name: "TypeError",
+				message: "network unavailable"
+			}
 		});
 	});
 

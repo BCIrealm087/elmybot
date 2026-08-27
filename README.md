@@ -37,6 +37,7 @@ WebSocket connection is required.
 - Durable message-ID deduplication for EventSub retries
 - `!alive` chat command
 - Chat replies through the Twitch Send Chat Message API
+- Validation and structured classification of Twitch chat delivery results
 - Durable bot OAuth authorization, refresh-token rotation, and hourly validation
 - Moderator-free channel authorization through the `channel:bot` scope
 - One-hour, single-use broadcaster invitation links
@@ -181,6 +182,14 @@ verification, Elmybot atomically claims each notification or revocation message
 ID in the broadcaster's `TwitchEventSubManager`. Claims remain for one hour;
 duplicate deliveries are acknowledged with HTTP `204` without repeating command
 or recovery side effects.
+
+Chat delivery treats a `200 OK` response as successful only when Twitch returns
+`is_sent: true` with a non-empty message ID. Declared drops retain Twitch's
+bounded `drop_reason` code and message in structured logs. Network failures,
+authentication/authorization failures, rate limits, invalid requests, malformed
+responses, and Twitch service failures receive separate stable classifications
+and retryability metadata. Elmybot does not automatically retry ambiguous chat
+delivery failures because a lost response could otherwise produce a duplicate.
 
 ### OAuth ownership
 
@@ -462,8 +471,6 @@ browser Work environment cannot execute a deploy-shaped command.
 
 ## Operational limitations
 
-- Twitch can return HTTP `200` from Send Chat Message while reporting
-  `is_sent: false`. The current chat sender does not yet inspect that field.
 - Configured Twitch channels are stored in per-broadcaster objects and are not
   currently enumerable through one central channel registry.
 - EventSub reconciliation scans the application's chat subscriptions separately
