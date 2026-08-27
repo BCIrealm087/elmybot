@@ -19,7 +19,7 @@ const REQUIRED_BOT_SCOPES = Object.freeze([
 	"user:bot"
 ]);
 
-class TwitchOAuthError extends Error {
+export class TwitchOAuthError extends Error {
 	constructor(message, { status = 400, code = "twitch_oauth_error", cause } = {}) {
 		super(message, { cause });
 		this.status = status;
@@ -33,7 +33,7 @@ function noStoreJson(obj, status = 200) {
 	return response;
 }
 
-function requiredString(value, name) {
+export function requiredString(value, name) {
 	if (typeof value !== "string" || value.length === 0) {
 		throw new TwitchOAuthError(`${name} is not configured.`, {
 			status: 503,
@@ -43,7 +43,7 @@ function requiredString(value, name) {
 	return value;
 }
 
-async function twitchTokenRequest(body, {
+export async function twitchTokenRequest(body, {
 	rejectedMessage = "Twitch rejected the token request.",
 	rejectedCode = "twitch_oauth_token_rejected",
 	rejectedStatus = 502
@@ -90,7 +90,7 @@ async function twitchTokenRequest(body, {
 	return tokens;
 }
 
-async function validateTwitchUserToken(accessToken) {
+export async function validateTwitchUserToken(accessToken) {
 	let response;
 	try {
 		response = await fetch(

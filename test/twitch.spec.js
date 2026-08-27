@@ -8,6 +8,7 @@ import {
 } from "cloudflare:test";
 import worker from "../src/index.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
+import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
@@ -864,6 +865,28 @@ describe("Twitch EventSub recovery", () => {
 	});
 
 	it("does not recreate subscriptions that require reauthorization", async () => {
+		const broadcasterUserId = "reauthorization-broadcaster-id";
+		const channelAuthStub = env.TWITCH_CHANNEL_AUTH.get(
+			env.TWITCH_CHANNEL_AUTH.idFromName(twitchChannelAuthObjectName(broadcasterUserId))
+		);
+		await runInDurableObject(channelAuthStub, async (instance, state) => {
+			instance.env = eventSubEnv;
+			await state.storage.put("channelAuthorization", {
+				status: "authorized",
+				accessToken: "channel-access-token",
+				refreshToken: "channel-refresh-token",
+				expiresAtMs: Date.now() + 4 * 60 * 60 * 1000,
+				lastValidatedAtMs: Date.now(),
+				authorizedAtMs: Date.now(),
+				clientId: "client-id",
+				userId: broadcasterUserId,
+				login: "reauthorization-broadcaster",
+				scopes: ["channel:bot"],
+				callbackUrl: "https://example.com/twitch",
+				provisioningPending: false,
+				deconfigurationPending: false
+			});
+		});
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
 			body: JSON.stringify({
@@ -873,7 +896,7 @@ describe("Twitch EventSub recovery", () => {
 					type: "channel.chat.message",
 					version: "1",
 					condition: {
-						broadcaster_user_id: "reauthorization-broadcaster-id",
+						broadcaster_user_id: broadcasterUserId,
 						user_id: "bot-user-id"
 					}
 				}
@@ -891,10 +914,25 @@ describe("Twitch EventSub recovery", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+		await runInDurableObject(channelAuthStub, async (_instance, state) => {
+			const authorization = await state.storage.get("channelAuthorization");
+			expect(authorization).toMatchObject({
+				status: "reauthorization_required",
+				userId: broadcasterUserId,
+				reason: "eventsub_authorization_revoked"
+			});
+			expect(authorization.accessToken).toBeUndefined();
+			expect(authorization.refreshToken).toBeUndefined();
+		});
 		await runInDurableObject(
-			twitchEventSubManagerStub("reauthorization-broadcaster-id"),
+			twitchEventSubManagerStub(broadcasterUserId),
 			async (_instance, state) => {
 				expect(await state.storage.get("pendingRecovery")).toBeUndefined();
+				expect(await state.storage.get("channelConfig")).toMatchObject({
+					broadcasterUserId,
+					enabled: false,
+					lastResult: "deconfiguration_pending"
+				});
 			}
 		);
 	});

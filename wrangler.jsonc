@@ -16,6 +16,8 @@
 			{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
 			{ "name": "CONFIG", "class_name": "GroupConfig" },
 			{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
+			{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
+			{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 			{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" }
 		]
 	},
@@ -48,6 +50,10 @@
 		{
 			"tag": "v6",
 			"new_sqlite_classes": ["TwitchEventSubManager"]
+		},
+		{
+			"tag": "v7",
+			"new_sqlite_classes": ["TwitchChannelOAuthCoordinator", "TwitchChannelAuth"]
 		}
 	],
 
@@ -58,6 +64,8 @@
 					{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
 					{ "name": "CONFIG", "class_name": "GroupConfig" },
 					{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
+					{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
+					{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 					{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" }
 				]
 			}

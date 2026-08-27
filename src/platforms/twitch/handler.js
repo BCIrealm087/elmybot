@@ -7,6 +7,11 @@ import {
 	queueTwitchEventSubRecovery,
 	RECOVERABLE_EVENTSUB_STATUS
 } from "./eventsub.js";
+import {
+	markTwitchChannelAuthorizationRevoked,
+	twitchChannelAuthObjectName,
+	twitchChannelOAuthCoordinatorStub
+} from "./channel-auth.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -78,6 +83,100 @@ async function finishTwitchOAuth(request, env) {
 			"referrer-policy": "no-referrer"
 		}
 	});
+}
+
+async function startTwitchChannelOAuth(request, env) {
+	if (!env.TWITCH_OAUTH_SETUP_TOKEN || !env.TWITCH_CHANNEL_OAUTH) {
+		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
+	}
+	if (!oauthSetupAuthorized(request, env)) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const url = new URL(request.url);
+	return twitchChannelOAuthCoordinatorStub(env).fetch(
+		"https://twitch-channel-oauth/oauth/start",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				redirectUri: `${url.origin}/twitch/channels/oauth/callback`,
+				callbackUrl: `${url.origin}/twitch`,
+				clientId: env.TWITCH_CLIENT_ID,
+				clientSecret: env.TWITCH_CLIENT_SECRET
+			})
+		}
+	);
+}
+
+async function finishTwitchChannelOAuth(request, env) {
+	if (!env.TWITCH_CHANNEL_OAUTH) {
+		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
+	}
+	const url = new URL(request.url);
+	if (url.searchParams.has("error")) {
+		return new Response("Twitch channel authorization was denied.", {
+			status: 400,
+			headers: { "cache-control": "no-store" }
+		});
+	}
+	const response = await twitchChannelOAuthCoordinatorStub(env).fetch(
+		"https://twitch-channel-oauth/oauth/callback",
+		{
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				code: url.searchParams.get("code"),
+				state: url.searchParams.get("state"),
+				redirectUri: `${url.origin}${url.pathname}`,
+				clientId: env.TWITCH_CLIENT_ID,
+				clientSecret: env.TWITCH_CLIENT_SECRET
+			})
+		}
+	);
+	if (!response.ok) return response;
+	const result = await response.json();
+	const channel = result.authorization?.login || result.authorization?.broadcasterUserId;
+	return new Response(
+		`Twitch channel ${channel} authorized. You can close this tab.`,
+		{
+			headers: {
+				"cache-control": "no-store",
+				"content-type": "text/plain; charset=utf-8",
+				"referrer-policy": "no-referrer"
+			}
+		}
+	);
+}
+
+function twitchChannelAuthStub(env, broadcasterUserId) {
+	return env.TWITCH_CHANNEL_AUTH.get(
+		env.TWITCH_CHANNEL_AUTH.idFromName(twitchChannelAuthObjectName(broadcasterUserId))
+	);
+}
+
+async function handleTwitchChannelAuthorization(request, env) {
+	if (!env.TWITCH_OAUTH_SETUP_TOKEN || !env.TWITCH_CHANNEL_AUTH) {
+		return new Response("Twitch channel OAuth is not configured.", { status: 503 });
+	}
+	if (!oauthSetupAuthorized(request, env)) {
+		return new Response("Unauthorized", { status: 401 });
+	}
+	const broadcasterUserId = new URL(request.url).searchParams.get("broadcasterUserId");
+	if (!broadcasterUserId) {
+		return new Response("broadcasterUserId is required.", { status: 400 });
+	}
+	if (request.method === "GET") {
+		return twitchChannelAuthStub(env, broadcasterUserId).fetch(
+			"https://twitch-channel-auth/status"
+		);
+	}
+	if (request.method === "DELETE") {
+		return twitchChannelAuthStub(env, broadcasterUserId).fetch(
+			"https://twitch-channel-auth/authorization",
+			{ method: "DELETE" }
+		);
+	}
+	return new Response("Method Not Allowed", { status: 405 });
 }
 
 function hexToU8(hex) {
@@ -236,6 +335,24 @@ function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
 	}));
 
 	if (
+		subscription?.type === "channel.chat.message" &&
+		status === "authorization_revoked" &&
+		typeof broadcasterUserId === "string" &&
+		broadcasterUserId.length > 0
+	) {
+		ctx.waitUntil(
+			markTwitchChannelAuthorizationRevoked(env, broadcasterUserId).catch((error) =>
+				logError("twitch.channel_oauth_revocation_failed", {
+					platform: "twitch",
+					correlationId: `twitch:${messageId}`,
+					groupId: broadcasterUserId,
+					subscriptionId: subscription.id ?? null
+				}, error)
+			)
+		);
+	}
+
+	if (
 		subscription?.type !== "channel.chat.message" ||
 		status !== RECOVERABLE_EVENTSUB_STATUS ||
 		typeof broadcasterUserId !== "string" ||
@@ -266,6 +383,17 @@ function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
  */
 export async function handleTwitchRequest(request, env, ctx) {
 	const url = new URL(request.url);
+	if (url.pathname === "/twitch/channels/oauth/start") {
+		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+		return startTwitchChannelOAuth(request, env);
+	}
+	if (url.pathname === "/twitch/channels/oauth/callback") {
+		if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
+		return finishTwitchChannelOAuth(request, env);
+	}
+	if (url.pathname === "/twitch/channels/oauth") {
+		return handleTwitchChannelAuthorization(request, env);
+	}
 	if (
 		url.pathname === "/twitch/eventsub/subscriptions" ||
 		url.pathname === "/twitch/eventsub/channels"

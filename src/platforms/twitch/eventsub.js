@@ -513,6 +513,24 @@ async function managerResponse(env, broadcasterUserId, path, init) {
 	);
 }
 
+export async function putTwitchChannelDesiredState(env, channel) {
+	const validated = validateChannelConfig(channel);
+	return managerResponse(env, validated.broadcasterUserId, "/configure", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(validated)
+	});
+}
+
+export async function deconfigureTwitchChannelDesiredState(env, channel) {
+	const validated = validateChannelConfig(channel);
+	return managerResponse(env, validated.broadcasterUserId, "/deconfigure", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(validated)
+	});
+}
+
 async function configureTwitchChannel(request, env) {
 	let body;
 	try {
@@ -526,11 +544,7 @@ async function configureTwitchChannel(request, env) {
 		callbackUrl: `${requestUrl.origin}/twitch`,
 		authorizationMode: body?.authorizationMode
 	});
-	return managerResponse(env, channel.broadcasterUserId, "/configure", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify(channel)
-	});
+	return putTwitchChannelDesiredState(env, channel);
 }
 
 async function deconfigureTwitchChannel(request, env) {
@@ -539,13 +553,9 @@ async function deconfigureTwitchChannel(request, env) {
 	if (typeof broadcasterUserId !== "string" || broadcasterUserId.length === 0) {
 		throw new TwitchEventSubError("broadcasterUserId is required.");
 	}
-	return managerResponse(env, broadcasterUserId, "/deconfigure", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			broadcasterUserId,
-			callbackUrl: `${requestUrl.origin}/twitch`
-		})
+	return deconfigureTwitchChannelDesiredState(env, {
+		broadcasterUserId,
+		callbackUrl: `${requestUrl.origin}/twitch`
 	});
 }
 

@@ -222,6 +222,7 @@ Each guild gets one `GroupConfig` Durable Object instance. It stores per-guild c
 - `src/platforms/discord/discord-permissions.js` — Discord permission evaluation.
 - `src/common.js` — shared response/option helpers.
 - `src/platforms/discord/register-commands.js` — Discord slash-command registration script.
+- `src/platforms/twitch/channel-auth.js` — per-broadcaster OAuth and token lifecycle.
 - `test/index.spec.js` — Worker/DO integration-style test coverage.
 - `wrangler.jsonc` — Worker config, Durable Object bindings, and migrations.
 
@@ -240,6 +241,35 @@ Each guild gets one `GroupConfig` Durable Object instance. It stores per-guild c
 
 - production (default): `APP_ID`, `DISCORD_TOKEN`
 - test (`--test`): `TEST_APP_ID`, `TEST_DISCORD_TOKEN`
+
+## Twitch broadcaster authorization
+
+Twitch channels can authorize the application with `channel:bot` instead of
+making the bot account a moderator. The Worker uses the authorization-code
+flow, derives the broadcaster ID from Twitch's token validation response, and
+stores each broadcaster's rotating tokens in a separate `TwitchChannelAuth`
+Durable Object.
+
+Register this additional OAuth redirect URL in the Twitch developer console:
+
+```text
+https://<worker-host>/twitch/channels/oauth/callback
+```
+
+The management endpoints use `TWITCH_OAUTH_SETUP_TOKEN` as a bearer token:
+
+- `POST /twitch/channels/oauth/start` creates a ten-minute, one-time
+  authorization URL requesting only `channel:bot`.
+- `GET /twitch/channels/oauth?broadcasterUserId=<id>` reports safe session
+  metadata without returning access or refresh tokens.
+- `DELETE /twitch/channels/oauth?broadcasterUserId=<id>` revokes the stored
+  token and deconfigures the channel.
+
+After a successful callback, the channel is registered automatically with the
+`broadcaster_oauth` authorization mode. Access tokens are refreshed as needed
+and validated by a Durable Object alarm at least hourly. Revoked or
+irrecoverable sessions are marked `reauthorization_required`, and their
+EventSub desired state is disabled until the broadcaster authorizes again.
 
 ## Local development
 
@@ -281,9 +311,16 @@ workflow is present on the repository's default branch.
 - Durable Object bindings:
   - `SCHEDULER` -> `GroupScheduler`
   - `CONFIG` -> `GroupConfig`
+  - `TWITCH_AUTH` -> `TwitchAuth`
+  - `TWITCH_EVENTSUB_MANAGER` -> `TwitchEventSubManager`
+  - `TWITCH_CHANNEL_OAUTH` -> `TwitchChannelOAuthCoordinator`
+  - `TWITCH_CHANNEL_AUTH` -> `TwitchChannelAuth`
 - Migration `v2` retains the originally deployed `GuildConfig` creation, and
   `v3` performs the append-only rename to `GroupConfig`.
 - Migration `v4` renames the originally deployed `GuildScheduler` class to
   `GroupScheduler`, preserving the existing scheduler Durable Object namespace.
+- Migrations `v5` through `v7` add the Twitch bot authorization, EventSub
+  manager, broadcaster OAuth coordinator, and per-broadcaster authorization
+  Durable Objects.
 - Durable Object migration tags in `wrangler.jsonc` are append-only after deployment.
 - Non-inheritable environment bindings must be repeated inside environment blocks when needed.
