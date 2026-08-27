@@ -250,6 +250,8 @@ in a futile loop.
 | `TWITCH_BOT_USER_ID` | No | Numeric Twitch user ID of the bot account |
 | `TWITCH_EVENTSUB_SECRET` | Yes | HMAC secret for EventSub webhook verification; 10–100 characters |
 | `TWITCH_OAUTH_SETUP_TOKEN` | Yes | Operator bearer token protecting management endpoints |
+| `TWITCH_DEPLOYMENT_ENVIRONMENT` | No | Static `production` or `test` identity from `wrangler.jsonc` |
+| `TWITCH_PUBLIC_ORIGIN` | No | Canonical Worker origin used for Twitch callbacks and EventSub |
 
 Sensitive values should be stored with Wrangler secrets. Non-sensitive values
 may also be stored as secrets or supplied as environment variables. Configure
@@ -268,6 +270,11 @@ npx wrangler secret put TWITCH_OAUTH_SETUP_TOKEN --env test
 ```
 
 `TWITCH_ACCESS_TOKEN` is obsolete and is not read by the Worker.
+
+`TWITCH_DEPLOYMENT_ENVIRONMENT` and `TWITCH_PUBLIC_ORIGIN` are committed as
+environment-specific Wrangler variables. Update `TWITCH_PUBLIC_ORIGIN` before
+deployment if the Worker uses a custom domain or a different `workers.dev`
+subdomain. Do not store either value as a secret with a conflicting value.
 
 ### Discord command-registration environment
 
@@ -293,11 +300,21 @@ The first callback authorizes the bot account. The second authorizes
 broadcasters. Add the second URL alongside the first; do not replace the bot
 callback.
 
-Use separate Twitch applications for test and production if both environments
-may manage the same broadcaster. EventSub subscriptions belong to the Twitch
-application, and each environment reconciles callback mismatches. Sharing an
-application can therefore make the environments replace each other's
-subscriptions.
+Use separate Twitch applications **and separate bot accounts** for test and
+production. The existing test application and bot should remain assigned to the
+test Worker; create a new application and bot account before production setup.
+
+EventSub subscriptions belong to the Twitch application, and each environment
+reconciles callback mismatches. Sharing an application can therefore make the
+environments replace each other's subscriptions. Separate bot accounts also
+prevent test replies and authorization changes from affecting production chat.
+
+Elmybot rejects Twitch requests received through an origin other than the
+environment's `TWITCH_PUBLIC_ORIGIN`. OAuth redirect URLs, broadcaster invite
+URLs, and EventSub callback URLs are generated from that canonical value rather
+than the incoming request host. Token validation separately confirms that each
+OAuth session belongs to the configured `TWITCH_CLIENT_ID` and
+`TWITCH_BOT_USER_ID`.
 
 ### 2. Deploy the configured Worker
 
@@ -365,6 +382,44 @@ The channel OAuth response should report `authorized: true`. Reconciliation may
 initially report `pending`; it should later report an existing or newly created
 subscription and continue checking it unattended.
 
+### 6. Verify test/production isolation
+
+After both environments are configured, retrieve their non-secret identities:
+
+```powershell
+$testWorkerUrl = "https://elmybot-worker-test.cutelmy.workers.dev"
+$productionWorkerUrl = "https://elmybot-worker.cutelmy.workers.dev"
+$testSetupToken = Read-Host "Test TWITCH_OAUTH_SETUP_TOKEN"
+$productionSetupToken = Read-Host "Production TWITCH_OAUTH_SETUP_TOKEN"
+
+$testIdentity = Invoke-RestMethod `
+    -Uri "$testWorkerUrl/twitch/configuration" `
+    -Headers @{ Authorization = "Bearer $testSetupToken" }
+
+$productionIdentity = Invoke-RestMethod `
+    -Uri "$productionWorkerUrl/twitch/configuration" `
+    -Headers @{ Authorization = "Bearer $productionSetupToken" }
+
+if ($testIdentity.deploymentEnvironment -ne "test") {
+    throw "The test Worker has the wrong deployment identity."
+}
+if ($productionIdentity.deploymentEnvironment -ne "production") {
+    throw "The production Worker has the wrong deployment identity."
+}
+if ($testIdentity.clientId -eq $productionIdentity.clientId) {
+    throw "Test and production are using the same Twitch application."
+}
+if ($testIdentity.botUserId -eq $productionIdentity.botUserId) {
+    throw "Test and production are using the same Twitch bot account."
+}
+
+$testIdentity
+$productionIdentity
+```
+
+This comparison exposes only public identifiers; client secrets, EventSub
+secrets, setup tokens, and OAuth tokens are never returned.
+
 ## Twitch operator endpoints
 
 Except for public connection/callback routes, these endpoints require:
@@ -375,6 +430,7 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 
 | Method and route | Purpose |
 |---|---|
+| `GET /twitch/configuration` | Inspect the safe deployment, origin, application, and bot identity |
 | `POST /twitch/oauth/start` | Create the bot-account authorization URL |
 | `POST /twitch/channels/invitations` | Create a one-hour, single-use broadcaster invite |
 | `POST /twitch/channels/oauth/start` | Create a broadcaster OAuth URL without an invitation; operator fallback |
@@ -441,6 +497,7 @@ src/
       commands.js                           Twitch chat commands
       auth.js                               Bot OAuth lifecycle
       channel-auth.js                       Broadcaster invitations and OAuth lifecycle
+      environment.js                        Deployment identity and canonical-origin validation
       eventsub.js                           Subscription management and reconciliation
       onboarding.js                         Public broadcaster connection pages
 test/

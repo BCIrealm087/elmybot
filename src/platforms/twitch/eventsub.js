@@ -3,6 +3,7 @@ import {
 	logError,
 	withExternalRequestTimeout
 } from "../../common.js";
+import { twitchPublicUrl } from "./environment.js";
 
 const APP_TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
@@ -211,7 +212,20 @@ function validateChannelConfig(channel) {
 	};
 }
 
+function assertEnvironmentCallback(callbackUrl, env) {
+	if (callbackUrl !== twitchPublicUrl(env, "/twitch")) {
+		throw new TwitchEventSubError(
+			"The Twitch channel callback does not match this deployment environment.",
+			{
+				status: 503,
+				code: "twitch_eventsub_environment_mismatch"
+			}
+		);
+	}
+}
+
 async function matchingTwitchChatSubscriptions(channel, env) {
+	assertEnvironmentCallback(channel.callbackUrl, env);
 	const clientId = configuredString(env.TWITCH_CLIENT_ID, "TWITCH_CLIENT_ID");
 	const clientSecret = configuredString(env.TWITCH_CLIENT_SECRET, "TWITCH_CLIENT_SECRET");
 	const botUserId = configuredString(env.TWITCH_BOT_USER_ID, "TWITCH_BOT_USER_ID");
@@ -386,10 +400,9 @@ async function createChatSubscription(request, env) {
 		throw new TwitchEventSubError("The request body must be valid JSON.");
 	}
 
-	const requestUrl = new URL(request.url);
 	return await createTwitchChatSubscription({
 		broadcasterUserId: requestBody?.broadcasterUserId,
-		callbackUrl: `${requestUrl.origin}/twitch`
+		callbackUrl: twitchPublicUrl(env, "/twitch")
 	}, env);
 }
 
@@ -416,6 +429,7 @@ export async function createTwitchChatSubscription({
 			code: "twitch_eventsub_invalid_callback"
 		});
 	}
+	assertEnvironmentCallback(parsedCallback.href, env);
 
 	const clientId = configuredString(env.TWITCH_CLIENT_ID, "TWITCH_CLIENT_ID");
 	const clientSecret = configuredString(env.TWITCH_CLIENT_SECRET, "TWITCH_CLIENT_SECRET");
@@ -616,24 +630,22 @@ async function configureTwitchChannel(request, env) {
 	} catch {
 		throw new TwitchEventSubError("The request body must be valid JSON.");
 	}
-	const requestUrl = new URL(request.url);
 	const channel = validateChannelConfig({
 		broadcasterUserId: body?.broadcasterUserId,
-		callbackUrl: `${requestUrl.origin}/twitch`,
+		callbackUrl: twitchPublicUrl(env, "/twitch"),
 		authorizationMode: body?.authorizationMode
 	});
 	return putTwitchChannelDesiredState(env, channel);
 }
 
 async function deconfigureTwitchChannel(request, env) {
-	const requestUrl = new URL(request.url);
-	const broadcasterUserId = requestUrl.searchParams.get("broadcasterUserId");
+	const broadcasterUserId = new URL(request.url).searchParams.get("broadcasterUserId");
 	if (typeof broadcasterUserId !== "string" || broadcasterUserId.length === 0) {
 		throw new TwitchEventSubError("broadcasterUserId is required.");
 	}
 	return deconfigureTwitchChannelDesiredState(env, {
 		broadcasterUserId,
-		callbackUrl: `${requestUrl.origin}/twitch`
+		callbackUrl: twitchPublicUrl(env, "/twitch")
 	});
 }
 

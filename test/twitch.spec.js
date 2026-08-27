@@ -10,6 +10,7 @@ import worker from "../src/index.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
+	ensureTwitchChatSubscription,
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
 
@@ -17,6 +18,8 @@ const encoder = new TextEncoder();
 let twitchMessageIdCounter = 0;
 const oauthEnv = {
 	...env,
+	TWITCH_DEPLOYMENT_ENVIRONMENT: "test",
+	TWITCH_PUBLIC_ORIGIN: "https://example.com",
 	TWITCH_OAUTH_SETUP_TOKEN: "setup-token",
 	TWITCH_CLIENT_ID: "client-id",
 	TWITCH_CLIENT_SECRET: "client-secret",
@@ -148,6 +151,39 @@ describe("Twitch EventSub worker", () => {
 		expect(await response.text()).toBe("OK");
 	});
 
+	it("reports the safe Twitch deployment identity to authorized operators", async () => {
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/configuration", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			oauthEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(await response.json()).toEqual({
+			deploymentEnvironment: "test",
+			publicOrigin: "https://example.com",
+			clientId: "client-id",
+			botUserId: "bot-user-id"
+		});
+	});
+
+	it("rejects Twitch requests sent through a noncanonical origin", async () => {
+		const response = await worker.fetch(
+			new Request("https://other.example/twitch/oauth/start", {
+				method: "POST",
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			oauthEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(421);
+		expect(await response.text()).toContain("configured Twitch public origin");
+	});
+
 	it("returns a signed EventSub verification challenge", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
@@ -158,7 +194,7 @@ describe("Twitch EventSub worker", () => {
 
 		const response = await worker.fetch(
 			request,
-			{ ...env, TWITCH_EVENTSUB_SECRET: secret },
+			{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
 			createExecutionContext()
 		);
 
@@ -174,7 +210,7 @@ describe("Twitch EventSub worker", () => {
 
 		const response = await worker.fetch(
 			request,
-			{ ...env, TWITCH_EVENTSUB_SECRET: "eventsub-secret" },
+			{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: "eventsub-secret" },
 			createExecutionContext()
 		);
 
@@ -204,6 +240,8 @@ describe("Twitch EventSub worker", () => {
 
 		const response = await worker.fetch(request, {
 			...env,
+			TWITCH_DEPLOYMENT_ENVIRONMENT: "test",
+			TWITCH_PUBLIC_ORIGIN: "https://example.com",
 			TWITCH_EVENTSUB_SECRET: secret,
 			TWITCH_CLIENT_ID: "client-id",
 			TWITCH_CLIENT_SECRET: "client-secret",
@@ -589,7 +627,7 @@ describe("Twitch EventSub worker", () => {
 
 		const response = await worker.fetch(
 			request,
-			{ ...env, TWITCH_EVENTSUB_SECRET: secret },
+			{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
 			createExecutionContext()
 		);
 
@@ -599,6 +637,20 @@ describe("Twitch EventSub worker", () => {
 });
 
 describe("Twitch EventSub management", () => {
+	it("refuses to reconcile subscriptions for another environment's callback", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(ensureTwitchChatSubscription({
+			broadcasterUserId: "broadcaster-id",
+			callbackUrl: "https://production.example/twitch"
+		}, eventSubEnv)).rejects.toMatchObject({
+			code: "twitch_eventsub_environment_mismatch",
+			status: 503
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it("protects subscription management with the setup bearer token", async () => {
 		const response = await worker.fetch(
 			new Request("https://example.com/twitch/eventsub/subscriptions"),

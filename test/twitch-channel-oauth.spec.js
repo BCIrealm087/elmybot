@@ -16,6 +16,8 @@ import {
 
 const channelOAuthEnv = {
 	...env,
+	TWITCH_DEPLOYMENT_ENVIRONMENT: "test",
+	TWITCH_PUBLIC_ORIGIN: "https://example.com",
 	TWITCH_OAUTH_SETUP_TOKEN: "setup-token",
 	TWITCH_CLIENT_ID: "client-id",
 	TWITCH_CLIENT_SECRET: "client-secret",

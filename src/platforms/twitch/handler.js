@@ -18,6 +18,11 @@ import {
 	renderTwitchOnboardingError,
 	renderTwitchOnboardingSuccess
 } from "./onboarding.js";
+import {
+	assertTwitchRequestOrigin,
+	TwitchEnvironmentError,
+	twitchPublicUrl
+} from "./environment.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -47,12 +52,11 @@ async function startTwitchOAuth(request, env) {
 		return new Response("Unauthorized", { status: 401 });
 	}
 
-	const url = new URL(request.url);
 	return twitchAuthStub(env).fetch("https://twitch-auth/oauth/start", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify({
-			redirectUri: `${url.origin}/twitch/oauth/callback`,
+			redirectUri: twitchPublicUrl(env, "/twitch/oauth/callback"),
 			clientId: env.TWITCH_CLIENT_ID,
 			clientSecret: env.TWITCH_CLIENT_SECRET,
 			botUserId: env.TWITCH_BOT_USER_ID
@@ -75,7 +79,7 @@ async function finishTwitchOAuth(request, env) {
 		body: JSON.stringify({
 			code: url.searchParams.get("code"),
 			state: url.searchParams.get("state"),
-			redirectUri: `${url.origin}${url.pathname}`,
+			redirectUri: twitchPublicUrl(env, "/twitch/oauth/callback"),
 			clientId: env.TWITCH_CLIENT_ID,
 			clientSecret: env.TWITCH_CLIENT_SECRET,
 			botUserId: env.TWITCH_BOT_USER_ID
@@ -92,15 +96,15 @@ async function finishTwitchOAuth(request, env) {
 	});
 }
 
-function requestTwitchChannelOAuthStart(url, env, invitationToken) {
+function requestTwitchChannelOAuthStart(env, invitationToken) {
 	return twitchChannelOAuthCoordinatorStub(env).fetch(
 		"https://twitch-channel-oauth/oauth/start",
 		{
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({
-				redirectUri: `${url.origin}/twitch/channels/oauth/callback`,
-				callbackUrl: `${url.origin}/twitch`,
+				redirectUri: twitchPublicUrl(env, "/twitch/channels/oauth/callback"),
+				callbackUrl: twitchPublicUrl(env, "/twitch"),
 				clientId: env.TWITCH_CLIENT_ID,
 				clientSecret: env.TWITCH_CLIENT_SECRET,
 				...(invitationToken === undefined ? {} : { invitationToken })
@@ -116,7 +120,7 @@ async function startTwitchChannelOAuth(request, env) {
 	if (!oauthSetupAuthorized(request, env)) {
 		return new Response("Unauthorized", { status: 401 });
 	}
-	return requestTwitchChannelOAuthStart(new URL(request.url), env);
+	return requestTwitchChannelOAuthStart(env);
 }
 
 async function createTwitchChannelInvitation(request, env) {
@@ -126,13 +130,14 @@ async function createTwitchChannelInvitation(request, env) {
 	if (!oauthSetupAuthorized(request, env)) {
 		return new Response("Unauthorized", { status: 401 });
 	}
-	const url = new URL(request.url);
 	return twitchChannelOAuthCoordinatorStub(env).fetch(
 		"https://twitch-channel-oauth/invitations/create",
 		{
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ connectUrl: `${url.origin}/twitch/channels/connect` })
+			body: JSON.stringify({
+				connectUrl: twitchPublicUrl(env, "/twitch/channels/connect")
+			})
 		}
 	);
 }
@@ -150,11 +155,7 @@ async function beginInvitedTwitchChannelOAuth(request, env) {
 	} catch {
 		return renderTwitchOnboardingError("This invitation is invalid or expired.");
 	}
-	const response = await requestTwitchChannelOAuthStart(
-		new URL(request.url),
-		env,
-		invitationToken
-	);
+	const response = await requestTwitchChannelOAuthStart(env, invitationToken);
 	if (!response.ok) {
 		await response.text();
 		return renderTwitchOnboardingError(
@@ -191,7 +192,7 @@ async function finishTwitchChannelOAuth(request, env) {
 			body: JSON.stringify({
 				code: url.searchParams.get("code"),
 				state: url.searchParams.get("state"),
-				redirectUri: `${url.origin}${url.pathname}`,
+				redirectUri: twitchPublicUrl(env, "/twitch/channels/oauth/callback"),
 				clientId: env.TWITCH_CLIENT_ID,
 				clientSecret: env.TWITCH_CLIENT_SECRET
 			})
@@ -577,6 +578,35 @@ function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
  */
 export async function handleTwitchRequest(request, env, ctx) {
 	const url = new URL(request.url);
+	const isHealthCheck = url.pathname === "/twitch" && request.method === "GET";
+	let environmentConfiguration;
+	if (!isHealthCheck) {
+		try {
+			environmentConfiguration = assertTwitchRequestOrigin(request, env);
+		} catch (error) {
+			if (error instanceof TwitchEnvironmentError) {
+				return new Response(error.message, {
+					status: error.status,
+					headers: { "cache-control": "no-store" }
+				});
+			}
+			throw error;
+		}
+	}
+	if (url.pathname === "/twitch/configuration") {
+		if (!env.TWITCH_OAUTH_SETUP_TOKEN) {
+			return new Response("Twitch setup is not configured.", { status: 503 });
+		}
+		if (!oauthSetupAuthorized(request, env)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		if (request.method !== "GET") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		return Response.json(environmentConfiguration, {
+			headers: { "cache-control": "no-store" }
+		});
+	}
 	if (url.pathname === "/twitch/channels/invitations") {
 		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 		return createTwitchChannelInvitation(request, env);
@@ -693,7 +723,7 @@ export async function handleTwitchRequest(request, env, ctx) {
 			env,
 			ctx,
 			messageId,
-			`${url.origin}/twitch`
+			twitchPublicUrl(env, "/twitch")
 		);
 	} else if (messageType === "notification") {
 		handleChatNotification(payload, env, ctx, messageId);

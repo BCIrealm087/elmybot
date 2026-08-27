@@ -10,6 +10,10 @@
 	"observability": {
 		"enabled": true
 	},
+	"vars": {
+		"TWITCH_DEPLOYMENT_ENVIRONMENT": "production",
+		"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev"
+	},
 
 	"durable_objects": {
 		"bindings": [
@@ -59,6 +63,10 @@
 
 	"env": {
 		"test": {
+			"vars": {
+				"TWITCH_DEPLOYMENT_ENVIRONMENT": "test",
+				"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev"
+			},
 			"durable_objects": {
 				"bindings": [
 					{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
