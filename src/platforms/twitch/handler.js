@@ -3,6 +3,7 @@ import { commands } from "./commands.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
 import {
 	claimTwitchEventSubMessage,
+	getTwitchEventSubServiceStatus,
 	handleTwitchChannelConfiguration,
 	handleTwitchEventSubSubscriptions,
 	queueTwitchEventSubRecovery,
@@ -639,7 +640,8 @@ export async function handleTwitchRequest(request, env, ctx) {
 	}
 	if (
 		url.pathname === "/twitch/eventsub/subscriptions" ||
-		url.pathname === "/twitch/eventsub/channels"
+		url.pathname === "/twitch/eventsub/channels" ||
+		url.pathname === "/twitch/eventsub/service"
 	) {
 		if (!env.TWITCH_OAUTH_SETUP_TOKEN) {
 			return new Response("Twitch setup is not configured.", { status: 503 });
@@ -649,6 +651,12 @@ export async function handleTwitchRequest(request, env, ctx) {
 		}
 		if (url.pathname === "/twitch/eventsub/channels") {
 			return handleTwitchChannelConfiguration(request, env);
+		}
+		if (url.pathname === "/twitch/eventsub/service") {
+			if (request.method !== "GET") {
+				return new Response("Method Not Allowed", { status: 405 });
+			}
+			return getTwitchEventSubServiceStatus(env);
 		}
 		return handleTwitchEventSubSubscriptions(request, env);
 	}

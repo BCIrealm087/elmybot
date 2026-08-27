@@ -23,6 +23,7 @@
 			{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
 			{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 			{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
+			{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
 			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
 		]
 	},
@@ -63,6 +64,10 @@
 		{
 			"tag": "v8",
 			"new_sqlite_classes": ["TwitchChannelRegistry"]
+		},
+		{
+			"tag": "v9",
+			"new_sqlite_classes": ["TwitchEventSubService"]
 		}
 	],
 
@@ -80,6 +85,7 @@
 					{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
 					{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 					{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
+					{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
 					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
 				]
 			}

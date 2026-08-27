@@ -25,6 +25,7 @@ export {
   TwitchChannelOAuthCoordinator
 } from "./platforms/twitch/channel-auth.js";
 export { TwitchEventSubManager } from "./platforms/twitch/eventsub.js";
+export { TwitchEventSubService } from "./platforms/twitch/eventsub-service.js";
 export { TwitchChannelRegistry } from "./platforms/twitch/channel-registry.js";
 
 /**

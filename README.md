@@ -87,6 +87,7 @@ flowchart TD
 | `TWITCH_CHANNEL_OAUTH` | `TwitchChannelOAuthCoordinator` | Singleton broadcaster OAuth states and hashed invitation records |
 | `TWITCH_CHANNEL_AUTH` | `TwitchChannelAuth` | One object per broadcaster OAuth session |
 | `TWITCH_EVENTSUB_MANAGER` | `TwitchEventSubManager` | One object per broadcaster for EventSub desired state and reconciliation |
+| `TWITCH_EVENTSUB_SERVICE` | `TwitchEventSubService` | Singleton app-token cache and coordinated EventSub API access |
 | `TWITCH_CHANNEL_REGISTRY` | `TwitchChannelRegistry` | Singleton channel membership index; stores no OAuth tokens or secrets |
 
 All currently configured Durable Object classes use SQLite-backed namespaces.
@@ -234,6 +235,13 @@ Each configured broadcaster has persistent desired state. Its manager:
 - retries temporary Twitch and network failures with increasing delays;
 - reconciles healthy channels approximately every 55 minutes;
 - deconfigures subscriptions after broadcaster authorization loss.
+
+The singleton `TwitchEventSubService` performs the external subscription work
+for those managers. It caches the Twitch app access token until shortly before
+expiry, refreshes and retries once after a `401`, and serializes mutations for
+the same broadcaster. Reconciliation lists only subscriptions matching that
+broadcaster through Twitch's `user_id` filter instead of scanning the
+application's complete subscription inventory for every channel.
 
 `notification_failures_exceeded` revocations are recoverable automatically.
 Statuses such as `authorization_revoked`, `user_removed`, and `version_removed`
@@ -444,6 +452,7 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 | `DELETE /twitch/channels/oauth?broadcasterUserId=<id>` | Revoke stored broadcaster authorization and deconfigure its subscription |
 | `GET /twitch/eventsub/subscriptions` | List the Twitch application's subscriptions |
 | `POST /twitch/eventsub/subscriptions` | Manually create a `channel.chat.message` subscription |
+| `GET /twitch/eventsub/service` | Inspect safe app-token cache metadata; never returns the token |
 | `GET /twitch/eventsub/channels?broadcasterUserId=<id>` | Inspect desired state, recovery state, and next alarm |
 | `POST /twitch/eventsub/channels` | Manually configure desired state for a broadcaster |
 | `DELETE /twitch/eventsub/channels?broadcasterUserId=<id>` | Disable desired state and remove matching subscriptions |
@@ -518,6 +527,7 @@ src/
       channel-auth.js                       Broadcaster invitations and OAuth lifecycle
       environment.js                        Deployment identity and canonical-origin validation
       eventsub.js                           Subscription management and reconciliation
+      eventsub-service.js                   App-token cache and coordinated EventSub API access
       onboarding.js                         Public broadcaster connection pages
 test/
   generic.spec.js                           Shared Worker and GroupConfig tests
@@ -547,11 +557,10 @@ browser Work environment cannot execute a deploy-shaped command.
 
 ## Operational limitations
 
-- Configured Twitch channels are stored in per-broadcaster objects and are not
-  currently enumerable through one central channel registry.
-- EventSub reconciliation scans the application's chat subscriptions separately
-  for each configured channel. This is appropriate for the current small scale
-  but should be centralized before broad multi-channel adoption.
+- EventSub desired state and alarms remain isolated per broadcaster, while the
+  singleton service coordinates credentials and external subscription API
+  mutations. This keeps channel failures isolated but makes the service a
+  deliberate application-level coordination point.
 - Chat messages currently use the bot's user access token. This is valid for the
   API, but Twitch's formal cloud-chatbot/Chat Bot badge path requires app-access-
   token delivery.
