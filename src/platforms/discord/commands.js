@@ -2,6 +2,7 @@ import { CAPABILITIES } from "./discord-permissions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
 import { withExternalRequestTimeout } from "../../common.js";
+import { discordGroupConfigFetch } from "./group-config.js";
 import {
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
   evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval
@@ -337,11 +338,9 @@ export const commands = {
       { name: "entry", description: "Configuration entry name", type: 3, required: true }
     ],
     exec: async (interaction, env) => {
-      const id = env.CONFIG.idFromName(interaction.guild_id);
-      const stub = env.CONFIG.get(id);
       const key = String(getOption(interaction, "entry") ?? "");
 
-      const r = await stub.fetch("https://config/get", {
+      const r = await discordGroupConfigFetch(env, interaction.guild_id, "https://config/get", {
         method: "POST",
         headers: internalRequestHeaders(interaction),
         body: JSON.stringify({
@@ -368,10 +367,7 @@ export const commands = {
     }, 
     deferred: true,
     exec: async (interaction, env) => {
-      const id = env.CONFIG.idFromName(interaction.guild_id);
-      const stub = env.CONFIG.get(id);
-
-      const r = await stub.fetch("https://config/list", {
+      const r = await discordGroupConfigFetch(env, interaction.guild_id, "https://config/list", {
         headers: internalRequestHeaders(interaction)
       });
       if (!r.ok) {
@@ -399,11 +395,9 @@ export const commands = {
       { name: "role", description: "Role to allow", type: 8, required: true }
     ],
     exec: async (interaction, env) => {
-      const id = env.CONFIG.idFromName(interaction.guild_id);
-      const stub = env.CONFIG.get(id);
       const role = String(getOption(interaction, "role") ?? "");
 
-      const r = await stub.fetch("https://config/append-to", {
+      const r = await discordGroupConfigFetch(env, interaction.guild_id, "https://config/append-to", {
         method: "POST",
         headers: internalRequestHeaders(interaction),
         body: JSON.stringify({
@@ -428,11 +422,9 @@ export const commands = {
       { name: "role", description: "Role to diallow", type: 8, required: true }
     ],
     exec: async (interaction, env) => {
-      const id = env.CONFIG.idFromName(interaction.guild_id);
-      const stub = env.CONFIG.get(id);
       const role = String(getOption(interaction, "role") ?? "");
 
-      const r = await stub.fetch("https://config/remove-from", {
+      const r = await discordGroupConfigFetch(env, interaction.guild_id, "https://config/remove-from", {
         method: "POST",
         headers: internalRequestHeaders(interaction),
         body: JSON.stringify({

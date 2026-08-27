@@ -8,6 +8,10 @@ class GroupConfigUserFacingError extends Error {
 }
 
 const CONFIG_KEYS_KEY = "__configKeys";
+const IDENTITY_MIGRATION_KEY = "__identityMigration";
+const LEGACY_GROUP_ID_HEADER = "x-group-config-legacy-id";
+const INTERNAL_EXPORT_PATH = "/internal/export";
+const RESERVED_CONFIG_KEYS = new Set([CONFIG_KEYS_KEY, IDENTITY_MIGRATION_KEY]);
 
 const isNotAnArrayMessage = "The provided key does not index a list (array).";
 
@@ -18,13 +22,18 @@ async function getConfig(state, key) {
   return await state.storage.get(key);
 }
 
-async function updateConfigKeyIndex(txn, key, shouldExist) {
-  if (!key || key === CONFIG_KEYS_KEY) {
+function validateConfigKey(key) {
+  if (!key || RESERVED_CONFIG_KEYS.has(key)) {
     throw new GroupConfigUserFacingError(
       "A valid configuration key is required.",
       422
     );
   }
+  return key;
+}
+
+async function updateConfigKeyIndex(txn, key, shouldExist) {
+  validateConfigKey(key);
 
   const storedKeys = (await txn.get(CONFIG_KEYS_KEY)) ?? [];
 
@@ -86,6 +95,7 @@ async function addRowToConfig(state, key, payload) {
 }
 
 async function removeRowFromConfig(state, key, payload) {
+  validateConfigKey(key);
   return await state.storage.transaction(async (txn) => {
     const stored = (await txn.get(key)) ?? null;
     if (!Array.isArray(stored)) throw new GroupConfigUserFacingError(isNotAnArrayMessage, 422);
@@ -102,6 +112,7 @@ async function removeRowFromConfig(state, key, payload) {
 }
 
 export async function hasEntries(state, key, entries) {
+  validateConfigKey(key);
   const stored = await getConfig(state, key);
   if (!Array.isArray(stored)) throw new GroupConfigUserFacingError(isNotAnArrayMessage, 422);
   if (entries.length === 0) return true;
@@ -122,7 +133,7 @@ const requestHandlers = {
   "POST": {
     base: async (state, request, pathHandler) => pathHandler(state, await request.json()),
     "/get": async (state, body) => {
-      const key = body?.key;
+      const key = validateConfigKey(body?.key);
       const config = await getConfig(state, key);
       return jsonResponse({ value: config ?? null });
     },
@@ -144,7 +155,7 @@ const requestHandlers = {
       return jsonResponse({ ok: true });
     },
     "/check": async (state, body) => {
-      const key = body?.key;
+      const key = validateConfigKey(body?.key);
       const entries = body?.entries;
       let ok;
       if (entries) {
@@ -159,6 +170,12 @@ const requestHandlers = {
   }
 }
 
+function publicConfigEntries(entries) {
+  return Object.fromEntries(
+    [...entries].filter(([key]) => !RESERVED_CONFIG_KEYS.has(key))
+  );
+}
+
 export class GroupConfig {
   /**
    * Durable Object per group responsible for storing and retrieving group
@@ -167,15 +184,95 @@ export class GroupConfig {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.identityMigrationPromise = null;
+  }
+
+  async exportConfig() {
+    return jsonResponse({
+      entries: publicConfigEntries(await this.state.storage.list())
+    });
+  }
+
+  async migrateFromLegacy(legacyGroupId) {
+    const completed = await this.state.storage.get(IDENTITY_MIGRATION_KEY);
+    if (completed) {
+      if (completed.source !== legacyGroupId) {
+        throw new Error("The group configuration migration identity does not match.");
+      }
+      return;
+    }
+
+    const legacyId = this.env.CONFIG.idFromName(legacyGroupId);
+    const legacyStub = this.env.CONFIG.get(legacyId);
+    const response = await legacyStub.fetch(`https://config${INTERNAL_EXPORT_PATH}`);
+    if (!response.ok) {
+      await response.text();
+      throw new Error("Could not read the legacy group configuration.");
+    }
+    const snapshot = await response.json();
+    const entries = snapshot?.entries;
+    if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+      throw new Error("The legacy group configuration snapshot is invalid.");
+    }
+
+    await this.state.storage.transaction(async (txn) => {
+      const existingMigration = await txn.get(IDENTITY_MIGRATION_KEY);
+      if (existingMigration) {
+        if (existingMigration.source !== legacyGroupId) {
+          throw new Error("The group configuration migration identity does not match.");
+        }
+        return;
+      }
+      const indexedKeys = (await txn.get(CONFIG_KEYS_KEY)) ?? [];
+      if (!Array.isArray(indexedKeys)) {
+        throw new Error("The configuration key index is corrupted.");
+      }
+      const keySet = new Set(indexedKeys);
+      for (const [key, value] of Object.entries(entries)) {
+        if (!key || RESERVED_CONFIG_KEYS.has(key)) continue;
+        if ((await txn.get(key)) === undefined) {
+          await txn.put(key, value);
+        }
+        keySet.add(key);
+      }
+      await txn.put(CONFIG_KEYS_KEY, [...keySet].sort());
+      await txn.put(IDENTITY_MIGRATION_KEY, {
+        source: legacyGroupId,
+        migratedAtMs: Date.now()
+      });
+    });
+  }
+
+  async ensureIdentityMigration(legacyGroupId) {
+    if (!legacyGroupId) return;
+    if (legacyGroupId.length > 128) {
+      throw new Error("The legacy group identity is invalid.");
+    }
+    if (!this.identityMigrationPromise) {
+      this.identityMigrationPromise = this.migrateFromLegacy(legacyGroupId)
+        .finally(() => {
+          this.identityMigrationPromise = null;
+        });
+    }
+    await this.identityMigrationPromise;
+    const completed = await this.state.storage.get(IDENTITY_MIGRATION_KEY);
+    if (completed?.source !== legacyGroupId) {
+      throw new Error("The group configuration migration identity does not match.");
+    }
   }
 
   async fetch(request) {
     const url = new URL(request.url);
 
+    if (request.method === "GET" && url.pathname === INTERNAL_EXPORT_PATH) {
+      return this.exportConfig();
+    }
+
     const pathHandlers = requestHandlers[request.method];
     const pathHandler = pathHandlers && pathHandlers[url.pathname];
     if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
+      await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
       if (e instanceof GroupConfigUserFacingError) {

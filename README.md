@@ -82,7 +82,7 @@ flowchart TD
 | Binding | Class | Identity and responsibility |
 |---|---|---|
 | `SCHEDULER` | `GroupScheduler` | One object per scheduling group; Discord uses `discord:guild:<guildId>` |
-| `CONFIG` | `GroupConfig` | One object per Discord guild for configuration such as allowed roles |
+| `CONFIG` | `GroupConfig` | One object per platform group; Discord uses `discord:guild:<guildId>` |
 | `TWITCH_AUTH` | `TwitchAuth` | Singleton bot OAuth token lifecycle |
 | `TWITCH_CHANNEL_OAUTH` | `TwitchChannelOAuthCoordinator` | Singleton broadcaster OAuth states and hashed invitation records |
 | `TWITCH_CHANNEL_AUTH` | `TwitchChannelAuth` | One object per broadcaster OAuth session |
@@ -136,6 +136,10 @@ receive different results.
   moderators, or members with a configured allowed role.
 - Moderator status is inferred from Discord permission bitfields.
 - Role allowlists are stored in `GroupConfig`.
+- Discord configuration identities are platform-namespaced as
+  `discord:guild:<guildId>`, matching scheduler identities. On first access,
+  existing raw-guild-ID configuration is copied into the namespaced object.
+  The legacy object remains unchanged as a rollback copy.
 
 ### Shared scheduler
 
@@ -504,6 +508,7 @@ src/
       handler.js                            Discord signature and interaction handling
       commands.js                           Slash commands and Discord scheduling adapters
       discord-permissions.js                Discord capability evaluation
+      group-config.js                       Discord GroupConfig identity adapter
       gifs-extension.js                     KLIPY delivery integration
       register-commands.js                  One-off slash-command registration CLI
     twitch/

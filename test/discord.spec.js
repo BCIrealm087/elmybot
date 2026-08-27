@@ -24,6 +24,7 @@ import {
   gifMessageOuterContent,
 } from '../src/platforms/discord/gifs-extension.js';
 import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
+import { discordGroupConfigObjectName } from '../src/platforms/discord/group-config.js';
 
 import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
 
@@ -133,8 +134,12 @@ function schedulerStubFor(guildId) {
 }
 
 function configStubFor(guildId) {
-  const id = env.CONFIG.idFromName(guildId);
+  const id = env.CONFIG.idFromName(discordGroupConfigObjectName(guildId));
   return env.CONFIG.get(id);
+}
+
+function legacyConfigStubFor(guildId) {
+  return env.CONFIG.get(env.CONFIG.idFromName(guildId));
 }
 
 function storedMessageJob({
@@ -840,6 +845,74 @@ describe('Discord platform', () => {
         channelId,
         gif: null,
       },
+    });
+  });
+
+  it('lazily migrates legacy Discord configuration into the namespaced object once', async () => {
+    const guildId = uniqueId('legacy-guild');
+    const roleId = uniqueId('legacy-role');
+    const lateLegacyRoleId = uniqueId('late-legacy-role');
+    const legacyStub = legacyConfigStubFor(guildId);
+
+    const legacyWrite = await legacyStub.fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: roleId }),
+    });
+    expect(legacyWrite.status).toBe(200);
+
+    const permissions = await Promise.all([0, 1].map(() => checkPermissions(
+      buildSlashInteraction({
+        name: 'sayat',
+        guildId,
+        userId: uniqueId('member'),
+        roles: [roleId],
+      }),
+      env,
+      { capability: CAPABILITIES.SCHEDULE_CREATE },
+    )));
+    expect(permissions.map(({ ok }) => ok)).toEqual([true, true]);
+
+    const namespacedStub = configStubFor(guildId);
+    const namespacedState = await namespacedStub.fetch('https://config/get', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles' }),
+    });
+    expect(await namespacedState.json()).toEqual({ value: [roleId] });
+    await runInDurableObject(namespacedStub, async (_instance, state) => {
+      expect(await state.storage.get('__identityMigration')).toMatchObject({
+        source: guildId,
+      });
+    });
+    const listedState = await namespacedStub.fetch('https://config/list');
+    expect(await listedState.json()).toEqual({
+      totalEntries: 1,
+      keys: ['allowedRoles'],
+    });
+
+    await legacyStub.fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: lateLegacyRoleId }),
+    });
+    const unchangedNamespacedState = await configStubFor(guildId).fetch(
+      'https://config/get',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: 'allowedRoles' }),
+      },
+    );
+    expect(await unchangedNamespacedState.json()).toEqual({ value: [roleId] });
+
+    const legacyState = await legacyStub.fetch('https://config/get', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles' }),
+    });
+    expect(await legacyState.json()).toEqual({
+      value: [lateLegacyRoleId, roleId].sort(),
     });
   });
 
