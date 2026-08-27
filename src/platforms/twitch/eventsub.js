@@ -10,6 +10,10 @@ const LIST_QUERY_PARAMETERS = Object.freeze(["status", "type", "user_id", "after
 export const RECOVERABLE_EVENTSUB_STATUS = "notification_failures_exceeded";
 const RECOVERY_KEY = "pendingRecovery";
 const CHANNEL_CONFIG_KEY = "channelConfig";
+export const TWITCH_CHANNEL_AUTHORIZATION_MODES = Object.freeze([
+	"moderator",
+	"broadcaster_oauth"
+]);
 const RECOVERY_INITIAL_DELAY_MS = 1000;
 const RECONCILIATION_INITIAL_DELAY_MS = 60 * 1000;
 const RECONCILIATION_INTERVAL_MS = 55 * 60 * 1000;
@@ -167,10 +171,15 @@ function validateChannelConfig(channel) {
 	if (callback.protocol !== "https:" || callback.pathname !== "/twitch") {
 		throw new TwitchEventSubError("The Twitch channel callback is invalid.");
 	}
+	const authorizationMode = channel.authorizationMode ?? "moderator";
+	if (!TWITCH_CHANNEL_AUTHORIZATION_MODES.includes(authorizationMode)) {
+		throw new TwitchEventSubError("The Twitch channel authorization mode is invalid.");
+	}
 
 	return {
 		broadcasterUserId: channel.broadcasterUserId,
-		callbackUrl: callback.href
+		callbackUrl: callback.href,
+		authorizationMode
 	};
 }
 
@@ -251,6 +260,29 @@ async function deleteTwitchEventSubSubscription(id, clientId, accessToken) {
 			}
 		);
 	}
+}
+
+async function removeTwitchChatSubscriptions(channel, env) {
+	const validated = validateChannelConfig(channel);
+	const {
+		subscriptions,
+		clientId,
+		accessToken
+	} = await matchingTwitchChatSubscriptions(validated, env);
+
+	let removedSubscriptions = 0;
+	for (const subscription of subscriptions) {
+		if (typeof subscription?.id === "string" && subscription.id.length > 0) {
+			await deleteTwitchEventSubSubscription(
+				subscription.id,
+				clientId,
+				accessToken
+			);
+			removedSubscriptions += 1;
+		}
+	}
+
+	return { removedSubscriptions };
 }
 
 export async function ensureTwitchChatSubscription(channel, env) {
@@ -491,12 +523,29 @@ async function configureTwitchChannel(request, env) {
 	const requestUrl = new URL(request.url);
 	const channel = validateChannelConfig({
 		broadcasterUserId: body?.broadcasterUserId,
-		callbackUrl: `${requestUrl.origin}/twitch`
+		callbackUrl: `${requestUrl.origin}/twitch`,
+		authorizationMode: body?.authorizationMode
 	});
 	return managerResponse(env, channel.broadcasterUserId, "/configure", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(channel)
+	});
+}
+
+async function deconfigureTwitchChannel(request, env) {
+	const requestUrl = new URL(request.url);
+	const broadcasterUserId = requestUrl.searchParams.get("broadcasterUserId");
+	if (typeof broadcasterUserId !== "string" || broadcasterUserId.length === 0) {
+		throw new TwitchEventSubError("broadcasterUserId is required.");
+	}
+	return managerResponse(env, broadcasterUserId, "/deconfigure", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			broadcasterUserId,
+			callbackUrl: `${requestUrl.origin}/twitch`
+		})
 	});
 }
 
@@ -515,6 +564,9 @@ export async function handleTwitchChannelConfiguration(request, env) {
 		}
 		if (request.method === "GET") {
 			return await getTwitchChannelConfiguration(request, env);
+		}
+		if (request.method === "DELETE") {
+			return await deconfigureTwitchChannel(request, env);
 		}
 		return new Response("Method Not Allowed", { status: 405 });
 	} catch (error) {
@@ -542,13 +594,43 @@ export class TwitchEventSubManager {
 		const configured = {
 			...existing,
 			...validated,
-			configuredAtMs: existing?.configuredAtMs ?? Date.now(),
-			lastResult: existing?.lastResult ?? "pending",
-			consecutiveFailures: existing?.consecutiveFailures ?? 0
+			enabled: true,
+			configuredAtMs:
+				existing?.enabled === false || !existing?.configuredAtMs
+					? Date.now()
+					: existing.configuredAtMs,
+			lastResult: existing?.enabled === false
+				? "pending"
+				: existing?.lastResult ?? "pending",
+			consecutiveFailures: existing?.enabled === false
+				? 0
+				: existing?.consecutiveFailures ?? 0
 		};
+		delete configured.deconfiguredAtMs;
+		delete configured.removedSubscriptions;
 		await this.state.storage.put(CHANNEL_CONFIG_KEY, configured);
 		await this.state.storage.setAlarm(Date.now() + RECONCILIATION_INITIAL_DELAY_MS);
 		return configured;
+	}
+
+	async deconfigureChannel(channel) {
+		const validated = validateChannelConfig(channel);
+		const existing = await this.state.storage.get(CHANNEL_CONFIG_KEY);
+		const deconfigured = {
+			...existing,
+			...validated,
+			authorizationMode:
+				existing?.authorizationMode ?? validated.authorizationMode,
+			enabled: false,
+			configuredAtMs: existing?.configuredAtMs ?? null,
+			deconfiguredAtMs: Date.now(),
+			lastResult: "deconfiguration_pending",
+			consecutiveFailures: 0
+		};
+		await this.state.storage.put(CHANNEL_CONFIG_KEY, deconfigured);
+		await this.state.storage.delete(RECOVERY_KEY);
+		await this.state.storage.setAlarm(Date.now() + RECOVERY_INITIAL_DELAY_MS);
+		return deconfigured;
 	}
 
 	async queueRecovery(recovery) {
@@ -557,10 +639,14 @@ export class TwitchEventSubManager {
 			this.state.storage.get(RECOVERY_KEY),
 			this.state.storage.get(CHANNEL_CONFIG_KEY)
 		]);
+		if (existingConfig?.enabled === false) return false;
 		await this.state.storage.put(CHANNEL_CONFIG_KEY, {
 			...existingConfig,
 			broadcasterUserId: validated.broadcasterUserId,
 			callbackUrl: validated.callbackUrl,
+			authorizationMode:
+				existingConfig?.authorizationMode ?? validated.authorizationMode,
+			enabled: true,
 			configuredAtMs: existingConfig?.configuredAtMs ?? Date.now(),
 			lastResult: existingConfig?.lastResult ?? "recovery_queued",
 			consecutiveFailures: existingConfig?.consecutiveFailures ?? 0
@@ -569,11 +655,12 @@ export class TwitchEventSubManager {
 			existingRecovery?.sourceSubscriptionId &&
 			existingRecovery.sourceSubscriptionId === validated.sourceSubscriptionId
 		) {
-			return;
+			return true;
 		}
 
 		await this.state.storage.put(RECOVERY_KEY, validated);
 		await this.state.storage.setAlarm(Date.now() + RECOVERY_INITIAL_DELAY_MS);
+		return true;
 	}
 
 	async alarm() {
@@ -585,10 +672,28 @@ export class TwitchEventSubManager {
 		if (!target) return;
 
 		try {
+			if (channel?.enabled === false) {
+				const result = await removeTwitchChatSubscriptions(channel, this.env);
+				const nowMs = Date.now();
+				await this.state.storage.put(CHANNEL_CONFIG_KEY, {
+					...channel,
+					authorizationMode: channel.authorizationMode ?? "moderator",
+					lastReconciledAtMs: nowMs,
+					lastResult: "deconfigured",
+					removedSubscriptions: result.removedSubscriptions,
+					consecutiveFailures: 0
+				});
+				await this.state.storage.delete(RECOVERY_KEY);
+				await this.state.storage.deleteAlarm();
+				return;
+			}
+
 			const result = await ensureTwitchChatSubscription(target, this.env);
 			const nowMs = Date.now();
 			await this.state.storage.put(CHANNEL_CONFIG_KEY, {
 				...target,
+				authorizationMode: target.authorizationMode ?? "moderator",
+				enabled: true,
 				lastReconciledAtMs: nowMs,
 				lastResult: result.result,
 				lastSubscriptionId: result.subscriptionId,
@@ -645,13 +750,19 @@ export class TwitchEventSubManager {
 		const url = new URL(request.url);
 		try {
 			if (request.method === "POST" && url.pathname === "/recover") {
-				await this.queueRecovery(await request.json());
-				return noStoreJson({ queued: true }, 202);
+				const queued = await this.queueRecovery(await request.json());
+				return noStoreJson({ queued }, 202);
 			}
 			if (request.method === "POST" && url.pathname === "/configure") {
 				return noStoreJson({
 					configured: true,
 					channel: await this.configureChannel(await request.json())
+				}, 202);
+			}
+			if (request.method === "POST" && url.pathname === "/deconfigure") {
+				return noStoreJson({
+					configured: false,
+					channel: await this.deconfigureChannel(await request.json())
 				}, 202);
 			}
 			if (request.method === "GET" && url.pathname === "/status") {
@@ -661,8 +772,14 @@ export class TwitchEventSubManager {
 					this.state.storage.getAlarm()
 				]);
 				return noStoreJson({
-					configured: Boolean(channel),
-					channel: channel ?? null,
+					configured: Boolean(channel && channel.enabled !== false),
+					channel: channel
+						? {
+							...channel,
+							authorizationMode: channel.authorizationMode ?? "moderator",
+							enabled: channel.enabled !== false
+						}
+						: null,
 					recovery: recovery
 						? {
 							reason: recovery.reason,

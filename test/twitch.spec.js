@@ -524,6 +524,8 @@ describe("Twitch EventSub management", () => {
 			channel: {
 				broadcasterUserId,
 				callbackUrl: "https://example.com/twitch",
+				authorizationMode: "moderator",
+				enabled: true,
 				lastResult: "pending"
 			}
 		});
@@ -539,7 +541,11 @@ describe("Twitch EventSub management", () => {
 		expect(statusResponse.status).toBe(200);
 		expect(await statusResponse.json()).toMatchObject({
 			configured: true,
-			channel: { broadcasterUserId },
+			channel: {
+				broadcasterUserId,
+				authorizationMode: "moderator",
+				enabled: true
+			},
 			recovery: null
 		});
 		await runInDurableObject(
@@ -548,6 +554,143 @@ describe("Twitch EventSub management", () => {
 				expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 			}
 		);
+	});
+
+	it("reports legacy channel state with the moderator authorization mode", async () => {
+		const broadcasterUserId = "legacy-channel-id";
+		await runInDurableObject(
+			twitchEventSubManagerStub(broadcasterUserId),
+			async (_instance, state) => {
+				await state.storage.put("channelConfig", {
+					broadcasterUserId,
+					callbackUrl: "https://example.com/twitch",
+					configuredAtMs: Date.now(),
+					lastResult: "existing",
+					consecutiveFailures: 0
+				});
+			}
+		);
+
+		const response = await worker.fetch(
+			new Request(
+				`https://example.com/twitch/eventsub/channels?broadcasterUserId=${broadcasterUserId}`,
+				{ headers: { Authorization: "Bearer setup-token" } }
+			),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			configured: true,
+			channel: {
+				authorizationMode: "moderator",
+				enabled: true
+			}
+		});
+	});
+
+	it("deconfigures a channel, removes its subscription, and blocks late recovery", async () => {
+		const broadcasterUserId = "deconfigured-channel-id";
+		const stub = twitchEventSubManagerStub(broadcasterUserId);
+		await stub.fetch("https://twitch-eventsub-manager/configure", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				broadcasterUserId,
+				callbackUrl: "https://example.com/twitch",
+				authorizationMode: "broadcaster_oauth"
+			})
+		});
+
+		const response = await worker.fetch(
+			new Request(
+				`https://example.com/twitch/eventsub/channels?broadcasterUserId=${broadcasterUserId}`,
+				{
+					method: "DELETE",
+					headers: { Authorization: "Bearer setup-token" }
+				}
+			),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		expect(response.status).toBe(202);
+		expect(await response.json()).toMatchObject({
+			configured: false,
+			channel: {
+				broadcasterUserId,
+				authorizationMode: "broadcaster_oauth",
+				enabled: false,
+				lastResult: "deconfiguration_pending"
+			}
+		});
+
+		await runInDurableObject(stub, async (instance) => {
+			instance.env = eventSubEnv;
+		});
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			if (init.method === "GET") {
+				return Response.json({
+					data: [{
+						id: "subscription-to-remove",
+						type: "channel.chat.message",
+						status: "enabled",
+						condition: {
+							broadcaster_user_id: broadcasterUserId,
+							user_id: "bot-user-id"
+						},
+						transport: {
+							method: "webhook",
+							callback: "https://example.com/twitch"
+						}
+					}],
+					pagination: {}
+				});
+			}
+			expect(init.method).toBe("DELETE");
+			expect(input).toBe(
+				"https://api.twitch.tv/helix/eventsub/subscriptions?id=subscription-to-remove"
+			);
+			return new Response(null, { status: 204 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(await state.storage.get("channelConfig")).toMatchObject({
+				broadcasterUserId,
+				authorizationMode: "broadcaster_oauth",
+				enabled: false,
+				lastResult: "deconfigured",
+				removedSubscriptions: 1
+			});
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
+
+		const recoveryResponse = await stub.fetch("https://twitch-eventsub-manager/recover", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				broadcasterUserId,
+				callbackUrl: "https://example.com/twitch",
+				reason: "notification_failures_exceeded",
+				sourceSubscriptionId: "late-revocation-id"
+			})
+		});
+		expect(recoveryResponse.status).toBe(202);
+		expect(await recoveryResponse.json()).toEqual({ queued: false });
+		await runInDurableObject(stub, async (_instance, state) => {
+			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
 	});
 
 	it("recreates a configured channel subscription when reconciliation finds none", async () => {
