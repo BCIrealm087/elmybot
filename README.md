@@ -87,6 +87,7 @@ flowchart TD
 | `TWITCH_CHANNEL_OAUTH` | `TwitchChannelOAuthCoordinator` | Singleton broadcaster OAuth states and hashed invitation records |
 | `TWITCH_CHANNEL_AUTH` | `TwitchChannelAuth` | One object per broadcaster OAuth session |
 | `TWITCH_EVENTSUB_MANAGER` | `TwitchEventSubManager` | One object per broadcaster for EventSub desired state and reconciliation |
+| `TWITCH_CHANNEL_REGISTRY` | `TwitchChannelRegistry` | Singleton channel membership index; stores no OAuth tokens or secrets |
 
 All currently configured Durable Object classes use SQLite-backed namespaces.
 Migration tags in `wrangler.jsonc` are append-only after deployment.
@@ -431,6 +432,7 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 | Method and route | Purpose |
 |---|---|
 | `GET /twitch/configuration` | Inspect the safe deployment, origin, application, and bot identity |
+| `GET /twitch/channels/health` | Page through configured channels with aggregate OAuth and EventSub health |
 | `POST /twitch/oauth/start` | Create the bot-account authorization URL |
 | `POST /twitch/channels/invitations` | Create a one-hour, single-use broadcaster invite |
 | `POST /twitch/channels/oauth/start` | Create a broadcaster OAuth URL without an invitation; operator fallback |
@@ -445,6 +447,18 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 The invitation/OAuth path is preferred for moderator-free onboarding. Direct
 channel configuration remains useful for the legacy moderator-based mode and
 operator diagnostics.
+
+The health endpoint accepts `limit` (default `20`, maximum `25`) and an opaque
+`cursor` returned as `nextCursor`. It reports `healthy`, `pending`, `degraded`,
+`reauthorization_required`, `inactive`, or `unknown` per channel, plus counts for
+the current page. The registry contains only channel membership metadata. OAuth
+tokens remain in each broadcaster's `TwitchChannelAuth` object, while EventSub
+desired state remains in each `TwitchEventSubManager`.
+
+Channels configured after this release are registered immediately. Existing
+channels are backfilled at their next EventSub reconciliation; an operator can
+also re-submit the existing `POST /twitch/eventsub/channels` request to make a
+channel appear immediately without creating a duplicate subscription.
 
 ## Local development
 

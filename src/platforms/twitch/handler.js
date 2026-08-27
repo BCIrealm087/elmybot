@@ -23,6 +23,7 @@ import {
 	TwitchEnvironmentError,
 	twitchPublicUrl
 } from "./environment.js";
+import { handleTwitchChannelHealth } from "./channel-registry.js";
 
 const encoder = new TextEncoder();
 const EVENTSUB_SIGNATURE_PREFIX = "sha256=";
@@ -626,6 +627,15 @@ export async function handleTwitchRequest(request, env, ctx) {
 	}
 	if (url.pathname === "/twitch/channels/oauth") {
 		return handleTwitchChannelAuthorization(request, env);
+	}
+	if (url.pathname === "/twitch/channels/health") {
+		if (!env.TWITCH_OAUTH_SETUP_TOKEN) {
+			return new Response("Twitch setup is not configured.", { status: 503 });
+		}
+		if (!oauthSetupAuthorized(request, env)) {
+			return new Response("Unauthorized", { status: 401 });
+		}
+		return handleTwitchChannelHealth(request, env);
 	}
 	if (
 		url.pathname === "/twitch/eventsub/subscriptions" ||

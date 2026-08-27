@@ -302,6 +302,25 @@ describe("Twitch broadcaster OAuth", () => {
 		expect(statusText).not.toContain("broadcaster-access-token");
 		expect(statusText).not.toContain("broadcaster-refresh-token");
 
+		const healthResponse = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health?limit=25", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const health = await healthResponse.json();
+		expect(healthResponse.status).toBe(200);
+		expect(health.channels.find(
+			(channel) => channel.broadcasterUserId === "broadcaster-id"
+		)).toMatchObject({
+			login: "broadcaster",
+			authorizationMode: "broadcaster_oauth",
+			health: "pending",
+			authorization: { authorized: true },
+			eventSub: { configured: true }
+		});
+
 		const replayResponse = await worker.fetch(
 			new Request(callbackUrl),
 			channelOAuthEnv,
@@ -351,7 +370,24 @@ describe("Twitch broadcaster OAuth", () => {
 	});
 
 	it("requires reauthorization and deconfigures the channel after refresh rejection", async () => {
-		const stub = await storeChannelAuthorization();
+		const broadcasterUserId = "reauthorization-channel-id";
+		const stub = await storeChannelAuthorization({ userId: broadcasterUserId });
+		const configurationResponse = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/channels", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({
+					broadcasterUserId,
+					authorizationMode: "broadcaster_oauth"
+				})
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		expect(configurationResponse.status).toBe(202);
 		const fetchMock = vi.fn(async (input) => {
 			if (input === "https://id.twitch.tv/oauth2/validate") {
 				return new Response("invalid", { status: 401 });
@@ -365,7 +401,7 @@ describe("Twitch broadcaster OAuth", () => {
 			const authorization = await state.storage.get("channelAuthorization");
 			expect(authorization).toMatchObject({
 				status: "reauthorization_required",
-				userId: "broadcaster-id",
+				userId: broadcasterUserId,
 				reason: "twitch_channel_oauth_refresh_rejected",
 				deconfigurationPending: false
 			});
@@ -373,27 +409,52 @@ describe("Twitch broadcaster OAuth", () => {
 			expect(authorization.refreshToken).toBeUndefined();
 			expect(await state.storage.getAlarm()).toBeNull();
 		});
-		await runInDurableObject(eventSubManagerStub(), async (_instance, state) => {
+		await runInDurableObject(eventSubManagerStub(broadcasterUserId), async (_instance, state) => {
 			expect(await state.storage.get("channelConfig")).toMatchObject({
-				broadcasterUserId: "broadcaster-id",
+				broadcasterUserId,
 				enabled: false,
 				lastResult: "deconfiguration_pending"
 			});
+		});
+		const healthResponse = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health?limit=25", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const health = await healthResponse.json();
+		expect(health.channels.find(
+			(channel) => channel.broadcasterUserId === broadcasterUserId
+		)).toMatchObject({
+			health: "reauthorization_required",
+			authorization: {
+				authorized: false,
+				authorization: { status: "reauthorization_required" }
+			},
+			eventSub: { configured: false }
 		});
 	});
 
 	it("disconnects locally, revokes the token, and deconfigures the channel", async () => {
 		await storeChannelAuthorization();
 		const manager = eventSubManagerStub();
-		await manager.fetch("https://twitch-eventsub-manager/configure", {
+		const configurationResponse = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/channels", {
 			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({
-				broadcasterUserId: "broadcaster-id",
-				callbackUrl: "https://example.com/twitch",
-				authorizationMode: "broadcaster_oauth"
-			})
-		});
+			headers: {
+				Authorization: "Bearer setup-token",
+				"content-type": "application/json"
+			},
+				body: JSON.stringify({
+					broadcasterUserId: "broadcaster-id",
+					authorizationMode: "broadcaster_oauth"
+				})
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		expect(configurationResponse.status).toBe(202);
 		const fetchMock = vi.fn(async (input, init) => {
 			expect(input).toBe("https://id.twitch.tv/oauth2/revoke");
 			expect(init.body.get("client_id")).toBe("client-id");
@@ -435,5 +496,16 @@ describe("Twitch broadcaster OAuth", () => {
 				lastResult: "deconfiguration_pending"
 			});
 		});
+		const healthResponse = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health?limit=25", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			channelOAuthEnv,
+			createExecutionContext()
+		);
+		const health = await healthResponse.json();
+		expect(health.channels.some(
+			(channel) => channel.broadcasterUserId === "broadcaster-id"
+		)).toBe(false);
 	});
 });

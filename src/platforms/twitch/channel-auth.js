@@ -162,16 +162,17 @@ async function updateChannelDesiredState(env, authorization) {
 	const response = await putTwitchChannelDesiredState(env, {
 		broadcasterUserId: authorization.userId,
 		callbackUrl: authorization.callbackUrl,
-		authorizationMode: "broadcaster_oauth"
+		authorizationMode: "broadcaster_oauth",
+		login: authorization.login
 	});
 	await checkedJsonResponse(response, "Could not configure the Twitch channel.");
 }
 
-async function disableChannelDesiredState(env, authorization) {
+async function disableChannelDesiredState(env, authorization, options) {
 	const response = await deconfigureTwitchChannelDesiredState(env, {
 		broadcasterUserId: authorization.userId,
 		callbackUrl: authorization.callbackUrl
-	});
+	}, options);
 	await checkedJsonResponse(response, "Could not deconfigure the Twitch channel.");
 }
 
@@ -462,9 +463,9 @@ export class TwitchChannelAuth {
 		}
 	}
 
-	async deconfigure(authorization) {
+	async deconfigure(authorization, options) {
 		try {
-			await disableChannelDesiredState(this.env, authorization);
+			await disableChannelDesiredState(this.env, authorization, options);
 			authorization.deconfigurationPending = false;
 			return true;
 		} catch (error) {
@@ -630,7 +631,7 @@ export class TwitchChannelAuth {
 			deconfigurationPending: true
 		};
 		await revokeTwitchToken(authorization.clientId, authorization.accessToken);
-		const deconfigured = await this.deconfigure(disconnected);
+		const deconfigured = await this.deconfigure(disconnected, { unregister: true });
 		await this.state.storage.put(CHANNEL_AUTH_KEY, disconnected);
 		if (deconfigured) await this.state.storage.deleteAlarm();
 		else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);
@@ -643,7 +644,12 @@ export class TwitchChannelAuth {
 
 		if (authorization.status !== "authorized") {
 			if (authorization.deconfigurationPending) {
-				const deconfigured = await this.deconfigure(authorization);
+				const deconfigured = await this.deconfigure(
+					authorization,
+					authorization.status === "disconnected"
+						? { unregister: true }
+						: undefined
+				);
 				await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
 				if (deconfigured) await this.state.storage.deleteAlarm();
 				else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);

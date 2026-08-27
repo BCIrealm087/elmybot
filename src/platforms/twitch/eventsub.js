@@ -4,6 +4,10 @@ import {
 	withExternalRequestTimeout
 } from "../../common.js";
 import { twitchPublicUrl } from "./environment.js";
+import {
+	registerTwitchChannel,
+	unregisterTwitchChannel
+} from "./channel-registry.js";
 
 const APP_TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
@@ -607,20 +611,35 @@ async function managerResponse(env, broadcasterUserId, path, init) {
 
 export async function putTwitchChannelDesiredState(env, channel) {
 	const validated = validateChannelConfig(channel);
-	return managerResponse(env, validated.broadcasterUserId, "/configure", {
+	const response = await managerResponse(env, validated.broadcasterUserId, "/configure", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(validated)
 	});
+	if (response.ok) {
+		await registerTwitchChannel(env, {
+			...validated,
+			login: channel.login
+		});
+	}
+	return response;
 }
 
-export async function deconfigureTwitchChannelDesiredState(env, channel) {
+export async function deconfigureTwitchChannelDesiredState(
+	env,
+	channel,
+	{ unregister = false } = {}
+) {
 	const validated = validateChannelConfig(channel);
-	return managerResponse(env, validated.broadcasterUserId, "/deconfigure", {
+	const response = await managerResponse(env, validated.broadcasterUserId, "/deconfigure", {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(validated)
 	});
+	if (response.ok && unregister) {
+		await unregisterTwitchChannel(env, validated.broadcasterUserId);
+	}
+	return response;
 }
 
 async function configureTwitchChannel(request, env) {
@@ -646,7 +665,7 @@ async function deconfigureTwitchChannel(request, env) {
 	return deconfigureTwitchChannelDesiredState(env, {
 		broadcasterUserId,
 		callbackUrl: twitchPublicUrl(env, "/twitch")
-	});
+	}, { unregister: true });
 }
 
 async function getTwitchChannelConfiguration(request, env) {
@@ -821,6 +840,7 @@ export class TwitchEventSubManager {
 			}
 
 			const result = await ensureTwitchChatSubscription(target, this.env);
+			await registerTwitchChannel(this.env, target);
 			const nowMs = Date.now();
 			await this.state.storage.put(CHANNEL_CONFIG_KEY, {
 				...target,

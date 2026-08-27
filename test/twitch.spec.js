@@ -10,6 +10,9 @@ import worker from "../src/index.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
+	TWITCH_CHANNEL_REGISTRY_NAME
+} from "../src/platforms/twitch/channel-registry.js";
+import {
 	ensureTwitchChatSubscription,
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
@@ -38,6 +41,12 @@ function twitchEventSubManagerStub(broadcasterUserId = "broadcaster-id") {
 	const name = twitchEventSubManagerObjectName(broadcasterUserId);
 	return env.TWITCH_EVENTSUB_MANAGER.get(
 		env.TWITCH_EVENTSUB_MANAGER.idFromName(name)
+	);
+}
+
+function twitchChannelRegistryStub() {
+	return env.TWITCH_CHANNEL_REGISTRY.get(
+		env.TWITCH_CHANNEL_REGISTRY.idFromName(TWITCH_CHANNEL_REGISTRY_NAME)
 	);
 }
 
@@ -845,6 +854,119 @@ describe("Twitch EventSub management", () => {
 		);
 	});
 
+	it("registers configured channels and aggregates their health", async () => {
+		const broadcasterUserId = "aggregate-health-channel-id";
+		const configureResponse = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/channels", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({ broadcasterUserId })
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		expect(configureResponse.status).toBe(202);
+
+		await runInDurableObject(
+			twitchEventSubManagerStub(broadcasterUserId),
+			async (_instance, state) => {
+				const channel = await state.storage.get("channelConfig");
+				await state.storage.put("channelConfig", {
+					...channel,
+					lastResult: "existing",
+					lastSubscriptionStatus: "enabled",
+					lastReconciledAtMs: Date.now()
+				});
+			}
+		);
+
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health?limit=25", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		const result = await response.json();
+		const channel = result.channels.find(
+			(entry) => entry.broadcasterUserId === broadcasterUserId
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("cache-control")).toBe("no-store");
+		expect(result.total).toBeGreaterThanOrEqual(1);
+		expect(result.summary.healthy).toBeGreaterThanOrEqual(1);
+		expect(channel).toMatchObject({
+			broadcasterUserId,
+			authorizationMode: "moderator",
+			health: "healthy",
+			authorization: { required: false, status: "not_required" },
+			eventSub: {
+				configured: true,
+				channel: {
+					lastResult: "existing",
+					lastSubscriptionStatus: "enabled"
+				}
+			}
+		});
+	});
+
+	it("protects channel health and rejects unbounded pages", async () => {
+		const unauthorized = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health"),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		expect(unauthorized.status).toBe(401);
+
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/channels/health?limit=26", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+		expect(response.status).toBe(400);
+		expect(await response.json()).toMatchObject({
+			code: "twitch_channel_registry_error"
+		});
+	});
+
+	it("paginates the central channel registry with opaque membership metadata", async () => {
+		const stub = twitchChannelRegistryStub();
+		for (const broadcasterUserId of [
+			"zz-registry-a",
+			"zz-registry-b",
+			"zz-registry-c"
+		]) {
+			const response = await stub.fetch("https://twitch-channel-registry/channels", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({
+					broadcasterUserId,
+					authorizationMode: "broadcaster_oauth",
+					login: broadcasterUserId
+				})
+			});
+			expect(response.status).toBe(201);
+		}
+
+		const response = await stub.fetch(
+			"https://twitch-channel-registry/channels?cursor=zz-registry-0&limit=2"
+		);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			channels: [
+				{ broadcasterUserId: "zz-registry-a", login: "zz-registry-a" },
+				{ broadcasterUserId: "zz-registry-b", login: "zz-registry-b" }
+			],
+			nextCursor: "zz-registry-b"
+		});
+	});
+
 	it("reports legacy channel state with the moderator authorization mode", async () => {
 		const broadcasterUserId = "legacy-channel-id";
 		await runInDurableObject(
@@ -1035,6 +1157,14 @@ describe("Twitch EventSub management", () => {
 			});
 			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
+		const registryResponse = await twitchChannelRegistryStub().fetch(
+			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=25"
+		);
+		const registryPage = await registryResponse.json();
+		expect(registryPage.channels).toContainEqual(expect.objectContaining({
+			broadcasterUserId,
+			authorizationMode: "moderator"
+		}));
 	});
 });
 
