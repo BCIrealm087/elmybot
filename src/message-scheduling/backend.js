@@ -15,6 +15,9 @@ const MAX_EXTRA_DATA_BYTES = 32 * 1024;
 const MAX_JOB_BYTES = 64 * 1024;
 
 export function createJobHandlerRegistry(...handlerSets) {
+  // Registries are immutable snapshots by contract. Scheduler instances may
+  // safely retain one for their lifetime without adapters replacing handlers
+  // after validation or while an alarm is running.
   const registry = Object.create(null);
 
   for (const handlerSet of handlerSets) {
@@ -330,7 +333,8 @@ const requestHandlers = {
         subject: job.subject,
         repeats: job.repeats,
         extraData: job.extraData,
-        kind: job.kind
+        kind: job.kind,
+        delivery: job.delivery
       }));
 
       return jsonResponse({ totalJobs, jobsPreview });

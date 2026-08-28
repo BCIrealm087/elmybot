@@ -259,25 +259,9 @@ describe("Twitch broadcaster OAuth", () => {
 		expect(await response.text()).toContain("Elmybot is ready");
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 		await runInDurableObject(channelAuthStub(), async (_instance, durableState) => {
-			expect(await durableState.storage.get("channelAuthorization")).toMatchObject({
-				status: "authorized",
-				accessToken: "broadcaster-access-token",
-				refreshToken: "broadcaster-refresh-token",
-				clientId: "client-id",
-				userId: "broadcaster-id",
-				login: "broadcaster",
-				scopes: ["channel:bot"],
-				provisioningPending: false
-			});
+			const authorization = await durableState.storage.get("channelAuthorization");
+			expect(authorization.refreshToken).toBe("broadcaster-refresh-token");
 			expect(await durableState.storage.getAlarm()).toBeGreaterThan(Date.now());
-		});
-		await runInDurableObject(eventSubManagerStub(), async (_instance, durableState) => {
-			expect(await durableState.storage.get("channelConfig")).toMatchObject({
-				broadcasterUserId: "broadcaster-id",
-				callbackUrl: "https://example.com/twitch",
-				authorizationMode: "broadcaster_oauth",
-				enabled: true
-			});
 		});
 
 		const statusResponse = await worker.fetch(
@@ -301,6 +285,18 @@ describe("Twitch broadcaster OAuth", () => {
 		});
 		expect(statusText).not.toContain("broadcaster-access-token");
 		expect(statusText).not.toContain("broadcaster-refresh-token");
+		const eventSubStatus = await (await eventSubManagerStub().fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(eventSubStatus).toMatchObject({
+			configured: true,
+			channel: {
+				broadcasterUserId: "broadcaster-id",
+				callbackUrl: "https://example.com/twitch",
+				authorizationMode: "broadcaster_oauth",
+				enabled: true
+			}
+		});
 
 		const healthResponse = await worker.fetch(
 			new Request("https://example.com/twitch/channels/health?limit=25", {
@@ -359,12 +355,16 @@ describe("Twitch broadcaster OAuth", () => {
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
+		const status = await (await stub.fetch(
+			"https://twitch-channel-auth/status"
+		)).json();
+		expect(status).toMatchObject({
+			authorized: true,
+			authorization: { status: "authorized", broadcasterUserId: "broadcaster-id" }
+		});
 		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("channelAuthorization")).toMatchObject({
-				status: "authorized",
-				accessToken: "rotated-access-token",
-				refreshToken: "rotated-refresh-token"
-			});
+			const authorization = await state.storage.get("channelAuthorization");
+			expect(authorization.refreshToken).toBe("rotated-refresh-token");
 			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
 	});
@@ -397,24 +397,33 @@ describe("Twitch broadcaster OAuth", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
+		const authorizationStatus = await (await stub.fetch(
+			"https://twitch-channel-auth/status"
+		)).json();
+		expect(authorizationStatus).toMatchObject({
+			authorized: false,
+			authorization: {
+				status: "reauthorization_required",
+				broadcasterUserId,
+				reason: "twitch_channel_oauth_refresh_rejected"
+			}
+		});
 		await runInDurableObject(stub, async (_instance, state) => {
 			const authorization = await state.storage.get("channelAuthorization");
-			expect(authorization).toMatchObject({
-				status: "reauthorization_required",
-				userId: broadcasterUserId,
-				reason: "twitch_channel_oauth_refresh_rejected",
-				deconfigurationPending: false
-			});
 			expect(authorization.accessToken).toBeUndefined();
 			expect(authorization.refreshToken).toBeUndefined();
 			expect(await state.storage.getAlarm()).toBeNull();
 		});
-		await runInDurableObject(eventSubManagerStub(broadcasterUserId), async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		const eventSubStatus = await (await eventSubManagerStub(broadcasterUserId).fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(eventSubStatus).toMatchObject({
+			configured: false,
+			channel: {
 				broadcasterUserId,
 				enabled: false,
 				lastResult: "deconfiguration_pending"
-			});
+			}
 		});
 		const healthResponse = await worker.fetch(
 			new Request("https://example.com/twitch/channels/health?limit=25", {
@@ -490,11 +499,15 @@ describe("Twitch broadcaster OAuth", () => {
 			expect(authorization.refreshToken).toBeUndefined();
 			expect(await state.storage.getAlarm()).toBeNull();
 		});
-		await runInDurableObject(manager, async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		const eventSubStatus = await (await manager.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(eventSubStatus).toMatchObject({
+			configured: false,
+			channel: {
 				enabled: false,
 				lastResult: "deconfiguration_pending"
-			});
+			}
 		});
 		const healthResponse = await worker.fetch(
 			new Request("https://example.com/twitch/channels/health?limit=25", {

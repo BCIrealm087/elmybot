@@ -1325,15 +1325,19 @@ describe("Twitch EventSub management", () => {
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		let status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			configured: false,
+			channel: {
 				broadcasterUserId,
 				authorizationMode: "broadcaster_oauth",
 				enabled: false,
 				lastResult: "deconfigured",
 				removedSubscriptions: 1
-			});
-			expect(await state.storage.getAlarm()).toBeNull();
+			},
+			alarmAtMs: null
 		});
 
 		const recoveryResponse = await stub.fetch("https://twitch-eventsub-manager/recover", {
@@ -1348,9 +1352,12 @@ describe("Twitch EventSub management", () => {
 		});
 		expect(recoveryResponse.status).toBe(202);
 		expect(await recoveryResponse.json()).toEqual({ queued: false });
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-			expect(await state.storage.getAlarm()).toBeNull();
+		status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: null,
+			alarmAtMs: null
 		});
 	});
 
@@ -1398,15 +1405,19 @@ describe("Twitch EventSub management", () => {
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		const status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			configured: true,
+			channel: {
 				broadcasterUserId,
 				lastResult: "created",
 				lastSubscriptionId: "recreated-subscription-id",
 				consecutiveFailures: 0
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 		const registryResponse = await twitchChannelRegistryStub().fetch(
 			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=25"
 		);
@@ -1464,16 +1475,19 @@ describe("Twitch EventSub recovery", () => {
 		expect(duplicateResponse.status).toBe(204);
 		expect(warnSpy).toHaveBeenCalledOnce();
 		const stub = twitchEventSubManagerStub();
-		await runInDurableObject(stub, async (instance, state) => {
+		await runInDurableObject(stub, async (instance) => {
 			instance.env = eventSubEnv;
-			expect(await state.storage.get("pendingRecovery")).toMatchObject({
-				broadcasterUserId: "broadcaster-id",
-				reason: "notification_failures_exceeded",
-				sourceSubscriptionId: "revoked-subscription-id",
-				attempts: 0
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
+		let status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: {
+				reason: "notification_failures_exceeded",
+				attempts: 0
+			}
+		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 
 		const fetchMock = vi.fn(async (input, init) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
@@ -1499,15 +1513,18 @@ describe("Twitch EventSub recovery", () => {
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: null,
+			channel: {
 				broadcasterUserId: "broadcaster-id",
 				lastResult: "created",
 				lastSubscriptionId: "replacement-subscription-id"
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 	});
 
 	it("retries EventSub recovery with an alarm after a temporary failure", async () => {
@@ -1539,12 +1556,15 @@ describe("Twitch EventSub recovery", () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toMatchObject({
+		const status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: {
 				attempts: 1
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 	});
 
 	it("does not recreate subscriptions that require reauthorization", async () => {
@@ -1597,27 +1617,34 @@ describe("Twitch EventSub recovery", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+		const authorizationStatus = await (await channelAuthStub.fetch(
+			"https://twitch-channel-auth/status"
+		)).json();
+		expect(authorizationStatus).toMatchObject({
+			authorized: false,
+			authorization: {
+				status: "reauthorization_required",
+				broadcasterUserId,
+				reason: "eventsub_authorization_revoked"
+			}
+		});
 		await runInDurableObject(channelAuthStub, async (_instance, state) => {
 			const authorization = await state.storage.get("channelAuthorization");
-			expect(authorization).toMatchObject({
-				status: "reauthorization_required",
-				userId: broadcasterUserId,
-				reason: "eventsub_authorization_revoked"
-			});
 			expect(authorization.accessToken).toBeUndefined();
 			expect(authorization.refreshToken).toBeUndefined();
 		});
-		await runInDurableObject(
-			twitchEventSubManagerStub(broadcasterUserId),
-			async (_instance, state) => {
-				expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-				expect(await state.storage.get("channelConfig")).toMatchObject({
-					broadcasterUserId,
-					enabled: false,
-					lastResult: "deconfiguration_pending"
-				});
+		const eventSubStatus = await (await twitchEventSubManagerStub(
+			broadcasterUserId
+		).fetch("https://twitch-eventsub-manager/status")).json();
+		expect(eventSubStatus).toMatchObject({
+			recovery: null,
+			configured: false,
+			channel: {
+				broadcasterUserId,
+				enabled: false,
+				lastResult: "deconfiguration_pending"
 			}
-		);
+		});
 	});
 
 });

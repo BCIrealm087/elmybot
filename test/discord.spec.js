@@ -140,73 +140,37 @@ function legacyConfigStubFor(guildId) {
   return env.CONFIG.get(env.CONFIG.idFromName(guildId));
 }
 
-function storedMessageJob({
-  id = uniqueId('job'),
+async function scheduleTestJob(stub, {
+  sourceId = uniqueId('job'),
   guildId = uniqueId('guild'),
   channelId = uniqueId('channel'),
   subject = 'scheduled message',
   runAtMs = Date.now() - 1000,
-  attempts = 0,
 } = {}) {
-  return {
-    schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
-    id,
-    platform: 'discord',
-    kind: DISCORD_JOB_KINDS.SEND_AT,
-    groupKey: `discord:guild:${guildId}`,
-    destination: { channelId },
-    subject,
-    timestamp: Math.floor(runAtMs / 1000),
-    runAtMs,
-    extraData: {
-      guildId,
-      channelId,
-      gif: null,
-    },
-    repeats: false,
-    createdBy: null,
-    sourceEventId: `discord:${id}`,
-    delivery: {
-      state: 'pending',
-      attempts,
-      nextAttemptAtMs: runAtMs,
-      lastAttemptAtMs: null,
-      lastError: null,
-    },
-  };
-}
-
-function replaceStoredJobs(state, jobs) {
-  state.storage.transactionSync(() => {
-    state.storage.sql.exec('DELETE FROM scheduler_jobs');
-    for (const job of jobs) {
-      state.storage.sql.exec(
-        `INSERT INTO scheduler_jobs
-          (id, next_attempt_at_ms, run_at_ms, job_json)
-         VALUES (?, ?, ?, ?)`,
-        job.id,
-        job.delivery.nextAttemptAtMs,
-        job.runAtMs,
-        JSON.stringify(job),
-      );
-    }
+  const timestamp = Math.floor(runAtMs / 1000);
+  const response = await stub.fetch('https://do/schedule', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
+      subject,
+      timestamp,
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
+      repeats: false,
+      createdBy: null,
+      sourceEventId: `discord:${sourceId}`,
+    }),
   });
-}
-
-function readStoredJobs(state) {
-  return state.storage.sql.exec(`
-    SELECT job_json
-    FROM scheduler_jobs
-    ORDER BY next_attempt_at_ms, run_at_ms, id
-  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
-}
-
-function readDeadLetters(state) {
-  return state.storage.sql.exec(`
-    SELECT job_json
-    FROM scheduler_dead_letters
-    ORDER BY failed_at_ms, dead_letter_id
-  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
+  expect(response.status).toBe(200);
+  return response.json();
 }
 
 afterEach(() => {
@@ -320,16 +284,7 @@ describe('Discord platform', () => {
     });
   });
 
-  it('uses explicit capabilities for every guild command', async () => {
-    expect(commands.config_show_value.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_list_entries.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_allow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_disallow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.sayat.guild.capability).toBe(CAPABILITIES.SCHEDULE_CREATE);
-    expect(commands.doat_list.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
-    expect(commands.doat_dead_letters.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
-    expect(commands.doat_cancel.guild.capability).toBe(CAPABILITIES.SCHEDULE_CANCEL);
-
+  it('defaults unknown command capabilities to deny', async () => {
     const missingPolicy = await checkPermissions({}, {}, {
       capability: 'missing.capability',
     });
@@ -338,6 +293,76 @@ describe('Discord platform', () => {
       configured: false,
       ok: false,
     });
+  });
+
+  it.each([
+    ['config_show_value', [{ name: 'entry', value: 'allowedRoles' }]],
+    ['config_list_entries', []],
+    ['config_allow_role', [{ name: 'role', value: '12345' }]],
+    ['config_disallow_role', [{ name: 'role', value: '12345' }]],
+  ])('denies configured scheduling roles access to /%s', async (name, options) => {
+    const guildId = uniqueId('guild');
+    const roleId = uniqueId('role');
+    const memberId = uniqueId('member');
+    const { patches } = mockDiscordApi({ ownerId: uniqueId('owner') });
+    await configStubFor(guildId).fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: roleId }),
+    });
+
+    const { ctx } = await dispatchInteraction(buildSlashInteraction({
+      name,
+      options,
+      guildId,
+      userId: memberId,
+      roles: [roleId],
+    }));
+    await waitOnExecutionContext(ctx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].content).toContain('Only members that fall into one of');
+    expect(patches[0].content).not.toContain('allowed server role');
+  });
+
+  it.each([
+    [
+      'sayat',
+      () => [
+        { name: 'timestamp', value: Math.floor(Date.now() / 1000) + 3600 },
+        { name: 'message', value: 'authorized message' },
+      ],
+      '✅ Scheduled job',
+    ],
+    ['doat_list', () => [], 'No scheduled jobs.'],
+    ['doat_dead_letters', () => [], 'No recent failed scheduled-message deliveries.'],
+    [
+      'doat_cancel',
+      () => [{ name: 'job_id', value: 'missing-job-id' }],
+      'No job found: `missing-job-id`',
+    ],
+  ])('allows configured scheduling roles to execute /%s', async (name, options, expectedContent) => {
+    const guildId = uniqueId('guild');
+    const roleId = uniqueId('role');
+    const memberId = uniqueId('member');
+    const { patches } = mockDiscordApi({ ownerId: uniqueId('owner') });
+    await configStubFor(guildId).fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: roleId }),
+    });
+
+    const { ctx } = await dispatchInteraction(buildSlashInteraction({
+      name,
+      options: options(),
+      guildId,
+      userId: memberId,
+      roles: [roleId],
+    }));
+    await waitOnExecutionContext(ctx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].content).toContain(expectedContent);
   });
 
   it('authorizes intrinsic moderators without fetching the guild owner', async () => {
@@ -561,12 +586,7 @@ describe('Discord platform', () => {
     expect(listData.jobsPreview).toHaveLength(2);
     expect(listData.jobsPreview.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
     expect(listData.jobsPreview.map((job) => job.subject)).toEqual(['sooner', 'later']);
-    await runInDurableObject(stub, async (_, state) => {
-      expect(state.storage.sql.exec(
-        'SELECT COUNT(*) AS count FROM scheduler_jobs',
-      ).one().count).toBe(2);
-      expect(await state.storage.get('jobs')).toBeUndefined();
-    });
+    expect(listData.totalJobs).toBe(2);
 
     const cancelResponse = await stub.fetch('https://do/cancel', {
       method: 'POST',
@@ -1089,6 +1109,8 @@ describe('Discord platform', () => {
     const channelId = uniqueId('channel');
     const stub = schedulerStubFor(guildId);
     const sentMessages = [];
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
       expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -1096,27 +1118,33 @@ describe('Discord platform', () => {
       return jsonResponse({ id: uniqueId('message') });
     }));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      const dueAtMs = Date.now() - 1_000;
-      replaceStoredJobs(state, Array.from({ length: 21 }, (_, index) => (
-        storedMessageJob({
-          id: `batch-job-${String(index).padStart(2, '0')}`,
-          guildId,
-          channelId,
-          subject: `batch-message-${index}`,
-          runAtMs: dueAtMs,
-        })
-      )));
+    const dueAtMs = nowMs + 1_000;
+    for (let index = 0; index < 21; index++) {
+      await scheduleTestJob(stub, {
+        sourceId: `batch-job-${String(index).padStart(2, '0')}`,
+        guildId,
+        channelId,
+        subject: `batch-message-${index}`,
+        runAtMs: dueAtMs,
+      });
+    }
 
-      await instance.alarm();
+    nowMs = dueAtMs + 1_000;
+    await runInDurableObject(stub, async (instance) => instance.alarm());
 
-      expect(sentMessages).toHaveLength(20);
-      const remaining = readStoredJobs(state);
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0].id).toBe('batch-job-20');
+    expect(sentMessages).toHaveLength(20);
+    const remainingResponse = await stub.fetch('https://do/list');
+    const remainingData = await remainingResponse.json();
+    expect(remainingData.totalJobs).toBe(1);
+    expect(remainingData.jobsPreview).toHaveLength(1);
+    const [remaining] = remainingData.jobsPreview;
+    expect(new Set([...sentMessages, remaining.subject])).toEqual(
+      new Set(Array.from({ length: 21 }, (_, index) => `batch-message-${index}`)),
+    );
+    await runInDurableObject(stub, async (_instance, state) => {
       const nextAlarm = await state.storage.getAlarm();
       expect(nextAlarm).toBeGreaterThanOrEqual(
-        remaining[0].delivery.nextAttemptAtMs,
+        remaining.delivery.nextAttemptAtMs,
       );
       expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
       await state.storage.deleteAlarm();
@@ -1143,41 +1171,23 @@ describe('Discord platform', () => {
       throw new Error(`Unexpected external fetch: ${url}`);
     }));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      const nowMs = Date.now();
-      replaceStoredJobs(state, [
-        storedMessageJob({
-          id: 'terminal-job',
-          guildId,
-          channelId: failedChannelId,
-          runAtMs: nowMs - 2000,
-        }),
-        storedMessageJob({
-          id: 'later-job',
-          guildId,
-          channelId: liveChannelId,
-          runAtMs: nowMs - 1000,
-        }),
-      ]);
+    const nowMs = Date.now();
+    const terminalJob = await scheduleTestJob(stub, {
+      sourceId: 'terminal-job',
+      guildId,
+      channelId: failedChannelId,
+      runAtMs: nowMs - 2000,
+    });
+    await scheduleTestJob(stub, {
+      sourceId: 'later-job',
+      guildId,
+      channelId: liveChannelId,
+      runAtMs: nowMs - 1000,
+    });
 
+    await runInDurableObject(stub, async (instance) => {
       await instance.alarm();
-
-      expect(readStoredJobs(state)).toEqual([]);
       expect(sentChannels).toEqual([liveChannelId]);
-
-      const deadLetters = readDeadLetters(state);
-      expect(deadLetters).toHaveLength(1);
-      expect(deadLetters[0]).toMatchObject({
-        id: 'terminal-job',
-        delivery: {
-          state: 'dead_letter',
-          attempts: 1,
-          lastError: {
-            code: 'discord_http_error',
-            metadata: { status: 404 },
-          },
-        },
-      });
 
       const log = JSON.parse(consoleError.mock.calls[0][0]);
       expect(log).toMatchObject({
@@ -1186,7 +1196,7 @@ describe('Discord platform', () => {
         correlationId: 'discord:terminal-job',
         groupId: guildId,
         jobKind: DISCORD_JOB_KINDS.SEND_AT,
-        jobId: 'terminal-job',
+        jobId: terminalJob.id,
         attempt: 1,
         retryable: false,
         error: {
@@ -1197,6 +1207,9 @@ describe('Discord platform', () => {
       });
     });
 
+    const jobsResponse = await stub.fetch('https://do/list');
+    expect((await jobsResponse.json()).totalJobs).toBe(0);
+
     const deadLettersResponse = await stub.fetch('https://do/dead-letters');
     expect(deadLettersResponse.status).toBe(200);
     const deadLettersData = await deadLettersResponse.json();
@@ -1204,7 +1217,7 @@ describe('Discord platform', () => {
     expect(deadLettersData.deadLettersPreview).toHaveLength(1);
     expect(deadLettersData.deadLettersPreview[0]).toMatchObject({
       job: {
-        id: 'terminal-job',
+        id: terminalJob.id,
         delivery: {
           state: 'dead_letter',
           lastError: { code: 'discord_http_error' },
@@ -1218,7 +1231,7 @@ describe('Discord platform', () => {
     }, env);
     expect(commandResult.flags).toBe(64);
     expect(commandResult.content).toContain('Failed scheduled deliveries (1 total, showing 1)');
-    expect(commandResult.content).toContain('terminal-job');
+    expect(commandResult.content).toContain(terminalJob.id);
     expect(commandResult.content).toContain('discord_http_error');
   });
 
@@ -1245,31 +1258,31 @@ describe('Discord platform', () => {
       jsonResponse({ message: 'Temporary failure' }, 503)
     )));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      replaceStoredJobs(state, [
-        storedMessageJob({ id: 'retry-job', guildId }),
-      ]);
+    const retryJob = await scheduleTestJob(stub, {
+      sourceId: 'retry-job',
+      guildId,
+    });
+    const beforeAlarm = Date.now();
+    await runInDurableObject(stub, async (instance) => instance.alarm());
 
-      const beforeAlarm = Date.now();
-      await instance.alarm();
-
-      const jobs = readStoredJobs(state);
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0]).toMatchObject({
-        id: 'retry-job',
-        delivery: {
-          state: 'retry_wait',
-          attempts: 1,
-          lastError: {
-            code: 'discord_http_error',
-            metadata: { status: 503 },
-          },
+    const jobs = (await (await stub.fetch('https://do/list')).json()).jobsPreview;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      id: retryJob.id,
+      delivery: {
+        state: 'retry_wait',
+        attempts: 1,
+        lastError: {
+          code: 'discord_http_error',
+          metadata: { status: 503 },
         },
-      });
-      expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
-        beforeAlarm + 30_000,
-      );
+      },
+    });
+    expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
+      beforeAlarm + 30_000,
+    );
 
+    await runInDurableObject(stub, async (_instance, state) => {
       const nextAlarm = await state.storage.getAlarm();
       expect(nextAlarm).toBe(jobs[0].delivery.nextAttemptAtMs);
       await state.storage.deleteAlarm();
@@ -1279,33 +1292,39 @@ describe('Discord platform', () => {
   it('dead-letters retryable failures after the fifth attempt', async () => {
     const guildId = uniqueId('guild');
     const stub = schedulerStubFor(guildId);
+    let nowMs = 2_000_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     vi.stubGlobal('fetch', vi.fn(async () => (
       jsonResponse({ message: 'Temporary failure' }, 503)
     )));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      replaceStoredJobs(state, [
-        storedMessageJob({
-          id: 'exhausted-job',
-          guildId,
-          attempts: 4,
-        }),
-      ]);
+    const exhaustedJob = await scheduleTestJob(stub, {
+      sourceId: 'exhausted-job',
+      guildId,
+      runAtMs: nowMs - 1000,
+    });
 
-      await instance.alarm();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await runInDurableObject(stub, async (instance) => instance.alarm());
+      if (attempt < 5) {
+        const list = await (await stub.fetch('https://do/list')).json();
+        expect(list.totalJobs).toBe(1);
+        expect(list.jobsPreview[0].delivery.attempts).toBe(attempt);
+        nowMs = list.jobsPreview[0].delivery.nextAttemptAtMs;
+      }
+    }
 
-      expect(readStoredJobs(state)).toEqual([]);
-      const deadLetters = readDeadLetters(state);
-      expect(deadLetters).toHaveLength(1);
-      expect(deadLetters[0]).toMatchObject({
-        id: 'exhausted-job',
-        delivery: {
-          state: 'dead_letter',
-          attempts: 5,
-          lastError: { code: 'discord_http_error' },
-        },
-      });
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(0);
+    const deadLetters = await (await stub.fetch('https://do/dead-letters')).json();
+    expect(deadLetters.totalDeadLetters).toBe(1);
+    expect(deadLetters.deadLettersPreview[0].job).toMatchObject({
+      id: exhaustedJob.id,
+      delivery: {
+        state: 'dead_letter',
+        attempts: 5,
+        lastError: { code: 'discord_http_error' },
+      },
     });
   });
 

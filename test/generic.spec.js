@@ -101,9 +101,15 @@ describe('Platform-independent worker behavior', () => {
     const kind = 'test.message.send.v1';
     const registry = createJobHandlerRegistry({ [kind]: handler });
 
-    expect(Object.isFrozen(registry)).toBe(true);
-    expect(Object.isFrozen(registry[kind])).toBe(true);
     expect(registry[kind]).toMatchObject(handler);
+    expect(() => {
+      registry[kind].deliver = async () => 'replacement';
+    }).toThrow(TypeError);
+    expect(() => {
+      registry['test.other.v1'] = handler;
+    }).toThrow(TypeError);
+    expect(registry[kind].deliver).toBe(handler.deliver);
+    expect(registry['test.other.v1']).toBeUndefined();
     expect(() => createJobHandlerRegistry(
       { [kind]: handler },
       { [kind]: handler },
