@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - codex-twitch-integration
+      - codex-ironing
   pull_request:
   workflow_dispatch:
 
