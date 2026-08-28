@@ -781,7 +781,7 @@ describe("Twitch EventSub management", () => {
 				},
 				body: JSON.stringify({
 					broadcasterUserId: "broadcaster-id",
-					kind: "twitch.stream.online.v1"
+					kind: "twitch.stream.offline.v1"
 				})
 			}),
 			eventSubEnv,
@@ -1441,7 +1441,7 @@ describe("Twitch EventSub management", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 		const status = await (await stub.fetch(
 			"https://twitch-eventsub-manager/status"
 		)).json();
@@ -1451,11 +1451,18 @@ describe("Twitch EventSub management", () => {
 				broadcasterUserId,
 				lastResult: "created",
 				lastSubscriptionId: "recreated-subscription-id",
-				lastSubscriptions: [{
-					kind: "twitch.chat.message.v1",
-					result: "created",
-					subscriptionId: "recreated-subscription-id"
-				}],
+				lastSubscriptions: [
+					{
+						kind: "twitch.chat.message.v1",
+						result: "created",
+						subscriptionId: "recreated-subscription-id"
+					},
+					{
+						kind: "twitch.stream.online.v1",
+						result: "created",
+						subscriptionId: "recreated-subscription-id"
+					}
+				],
 				consecutiveFailures: 0
 			}
 		});
@@ -1554,7 +1561,7 @@ describe("Twitch EventSub recovery", () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 		status = await (await stub.fetch(
 			"https://twitch-eventsub-manager/status"
 		)).json();

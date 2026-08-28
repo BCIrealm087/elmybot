@@ -5,12 +5,13 @@ Elmybot behavior. Discord and Twitch still authenticate, parse, acknowledge,
 and render their own requests. They pass only a normalized `CommandInvocation`
 to the registry.
 
-The first extracted action is deliberately small:
+The registry currently demonstrates both a local action and a routed action:
 
 | Native command | Shared action | Semantic output |
 | --- | --- | --- |
 | Discord `/alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
 | Twitch `!alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
+| Twitch `!announce <message>` | `integration.announcement.publish.v1` | Acknowledgement plus one Discord effect per configured route |
 
 This proves that one action can be exposed through different native command
 systems without making either platform conform to the other's transport.
@@ -45,8 +46,10 @@ A capability-protected action fails closed unless the caller supplies an
 invocation, including the authenticated actor and platform claims. Returning
 anything other than `true` denies execution.
 
-The registry does not treat claims as capabilities. The policy layer added for
-later protected cross-platform commands will make that mapping explicitly.
+The registry does not treat claims as capabilities. The Twitch adapter's
+explicit policy permits `integration.announcement.publish` only when the
+authenticated EventSub actor has a `twitch.broadcaster` or
+`twitch.moderator` claim. Display names and message text never grant authority.
 
 ## Action results
 
@@ -66,8 +69,9 @@ sends it through the existing chat transport.
 
 `effects` contains normalized effect envelopes when an action requests durable
 external work. Alive has no effects and does not require an integration or the
-outbox. Future cross-platform actions can group their effects by integration and
-submit them to the coordinator established in step 3.
+outbox. Announce resolves every enabled `twitch.announce-to-discord.v1` route,
+creates a `discord.message.send.v1` effect for each, groups the results by
+integration, and submits them to the corresponding durable coordinator.
 
 ## Platform adapters
 

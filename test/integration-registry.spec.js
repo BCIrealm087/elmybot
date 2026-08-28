@@ -141,9 +141,11 @@ describe("Cross-platform integration linking", () => {
   it("creates a hashed, short-lived invitation and reserves it once", async () => {
     const group = discordGroup();
     const actor = discordActor();
+    const channelId = uniqueId("discord-channel");
     const result = await commands.integration_link_twitch.exec({
       id: uniqueId("interaction"),
       guild_id: group.id,
+      channel_id: channelId,
       member: { user: { id: actor.id } }
     }, integrationEnv);
     const invitationUrl = result.content.match(/<(https:[^>]+)>/u)?.[1];
@@ -166,6 +168,16 @@ describe("Cross-platform integration linking", () => {
         expect(rows[0].expires_at_ms).toBeGreaterThan(
           Date.now() + INTEGRATION_INVITATION_TTL_MS - 10_000
         );
+        const routes = state.storage.sql.exec(
+          `SELECT route_kind, source_platform, target_platform, destination_json
+           FROM integration_invitation_routes ORDER BY route_kind`
+        ).toArray();
+        expect(routes).toHaveLength(2);
+        expect(routes.every((route) =>
+          route.source_platform === "twitch" &&
+          route.target_platform === "discord" &&
+          JSON.parse(route.destination_json).channelId === channelId
+        )).toBe(true);
       }
     );
 

@@ -64,8 +64,8 @@ by that platform adapter:
 }
 ```
 
-Claims are evidence, not Elmybot capabilities. For example, the future policy
-layer may allow `twitch.broadcaster` to satisfy
+Claims are evidence, not Elmybot capabilities. The Twitch announce policy, for
+example, explicitly allows `twitch.broadcaster` or `twitch.moderator` to satisfy
 `integration.announcement.publish`. Cross-platform user identity must never be
 inferred from IDs or display names.
 
@@ -133,9 +133,9 @@ runtime to deliver:
 ```
 
 The result is an immutable JSON-safe value. Platform adapters own rendering of
-`output`; later routed actions can submit `effects` through the durable
-per-integration coordinator. A local action such as alive needs neither a link
-nor an outbox execution.
+`output`; routed actions submit `effects` through the durable per-integration
+coordinator. A local action such as alive needs neither a link nor an outbox
+execution.
 
 ### `CommandInvocation`
 

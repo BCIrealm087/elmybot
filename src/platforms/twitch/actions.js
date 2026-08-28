@@ -1,5 +1,13 @@
-import { actionRegistry, executeAction } from "../../actions/index.js";
+import {
+  actionRegistry,
+  executeAction,
+  INTEGRATION_ACTION_CAPABILITIES
+} from "../../actions/index.js";
 import { createCommandInvocation } from "../../integrations/contracts.js";
+import {
+  resolveRoutes,
+  submitRoutedEffects
+} from "../../integrations/index.js";
 
 function twitchActorClaims(event) {
   const badgeClaims = new Set(
@@ -52,6 +60,37 @@ export async function executeTwitchAction(
     createTwitchActionInvocation(event, messageId, kind, args),
     context
   );
+}
+
+function authorizeTwitchAction({ capability, invocation }) {
+  if (capability !== INTEGRATION_ACTION_CAPABILITIES.PUBLISH_ANNOUNCEMENT) {
+    return false;
+  }
+  const claims = new Set(invocation.origin.actor.claims);
+  return claims.has("twitch.broadcaster") || claims.has("twitch.moderator");
+}
+
+export async function executeTwitchRoutedAction(
+  event,
+  messageId,
+  kind,
+  args,
+  { env, routeKind }
+) {
+  const invocation = createTwitchActionInvocation(event, messageId, kind, args);
+  const routes = await resolveRoutes(env, invocation.origin.group, routeKind);
+  const result = await executeAction(actionRegistry, invocation, {
+    env,
+    routes,
+    authorize: authorizeTwitchAction
+  });
+  await submitRoutedEffects(env, {
+    source: invocation.origin,
+    sourceEventId: invocation.sourceEventId,
+    correlationId: invocation.correlationId,
+    effects: result.effects
+  });
+  return result;
 }
 
 export function twitchTextActionResponse(result) {

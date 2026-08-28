@@ -10,6 +10,7 @@ import { sendDiscordChannelMessage } from "./delivery.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import {
   createIntegrationInvitation,
+  defaultTwitchToDiscordRoutes,
   IntegrationRegistryError,
   listIntegrationsForGroup,
   revokeIntegration
@@ -362,7 +363,8 @@ export const commands = {
         createIntegrationInvitation(env, {
           group: discordIntegrationGroup(interaction),
           actor: discordIntegrationActor(interaction),
-          connectUrl: twitchPublicUrl(env, "/twitch/integrations/connect")
+          connectUrl: twitchPublicUrl(env, "/twitch/integrations/connect"),
+          routes: defaultTwitchToDiscordRoutes(interaction.channel_id)
         })
       );
       if (userFacingError) return ephemeralData(userFacingError);
@@ -370,7 +372,8 @@ export const commands = {
       return ephemeralData(
         `Open this one-use invitation to link a Twitch channel to this server:\n` +
         `<${result.invitationUrl}>\n` +
-        `It expires <t:${expiresAt}:R>. Only the Twitch broadcaster can complete it.`
+        `It expires <t:${expiresAt}:R>. Only the Twitch broadcaster can complete it. ` +
+        `Stream notices and Twitch announcements will be sent to this channel.`
       );
     }
   },

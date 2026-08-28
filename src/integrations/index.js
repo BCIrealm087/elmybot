@@ -24,7 +24,8 @@ export {
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
   revokeIntegration,
-  revokeIntegrationsForGroup
+  revokeIntegrationsForGroup,
+  resolveIntegrationRoutes
 } from "./registry.js";
 
 export {
@@ -39,3 +40,14 @@ export {
   retryIntegrationEffect,
   submitIntegrationExecution
 } from "./coordinator.js";
+
+export {
+  createDiscordMessageEffects,
+  resolveRoutes,
+  submitRoutedEffects
+} from "./routing.js";
+
+export {
+  defaultTwitchToDiscordRoutes,
+  INTEGRATION_ROUTE_KINDS
+} from "./routes.js";

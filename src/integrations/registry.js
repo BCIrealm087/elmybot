@@ -13,6 +13,12 @@ const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 25;
 const INVITATION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const OPAQUE_ID_PATTERN = /^[^\s:]{1,200}$/;
+const VERSIONED_KIND_PATTERN =
+  /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
+const PLATFORM_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const MAX_INVITATION_ROUTES = 25;
+const MAX_ROUTE_FANOUT = 25;
+const MAX_ROUTE_DESTINATION_BYTES = 8 * 1024;
 
 export class IntegrationRegistryError extends Error {
   constructor(message, {
@@ -54,6 +60,15 @@ function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_invitations_expiry
       ON integration_invitations(status, expires_at_ms, reservation_expires_at_ms);
 
+    CREATE TABLE IF NOT EXISTS integration_invitation_routes (
+      invitation_id TEXT NOT NULL,
+      route_kind TEXT NOT NULL,
+      source_platform TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      destination_json TEXT NOT NULL,
+      PRIMARY KEY (invitation_id, route_kind)
+    );
+
     CREATE TABLE IF NOT EXISTS integrations (
       integration_id TEXT PRIMARY KEY,
       status TEXT NOT NULL,
@@ -81,6 +96,21 @@ function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS integration_members_group
       ON integration_members(group_key, integration_id);
+
+    CREATE TABLE IF NOT EXISTS integration_routes (
+      integration_id TEXT NOT NULL,
+      route_kind TEXT NOT NULL,
+      source_group_key TEXT NOT NULL,
+      target_group_key TEXT NOT NULL,
+      destination_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (integration_id, route_kind)
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_routes_source
+      ON integration_routes(source_group_key, route_kind, enabled, integration_id);
 
     CREATE TABLE IF NOT EXISTS integration_audit (
       audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +180,84 @@ function validatedOpaqueId(value, subject) {
     throw new IntegrationRegistryError(`${subject} is invalid.`);
   }
   return value;
+}
+
+function validatedRouteKind(value) {
+  if (
+    typeof value !== "string" ||
+    value.length > 200 ||
+    !VERSIONED_KIND_PATTERN.test(value)
+  ) {
+    throw new IntegrationRegistryError("Integration route kind is invalid.");
+  }
+  return value;
+}
+
+function validatedRoutePlatform(value) {
+  if (typeof value !== "string" || !PLATFORM_PATTERN.test(value)) {
+    throw new IntegrationRegistryError("Integration route platform is invalid.");
+  }
+  return value;
+}
+
+function validatedRouteDestination(value) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new IntegrationRegistryError("Integration route destination is invalid.");
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new IntegrationRegistryError("Integration route destination is invalid.");
+  }
+  if (
+    serialized === undefined ||
+    new TextEncoder().encode(serialized).byteLength > MAX_ROUTE_DESTINATION_BYTES
+  ) {
+    throw new IntegrationRegistryError("Integration route destination is invalid.");
+  }
+  const destination = JSON.parse(serialized);
+  if (typeof destination !== "object" || destination === null || Array.isArray(destination)) {
+    throw new IntegrationRegistryError("Integration route destination is invalid.");
+  }
+  return { destination, serialized };
+}
+
+function validatedInvitationRoutes(value) {
+  const routes = value ?? [];
+  if (!Array.isArray(routes) || routes.length > MAX_INVITATION_ROUTES) {
+    throw new IntegrationRegistryError(
+      `Integration invitations may contain at most ${MAX_INVITATION_ROUTES} routes.`
+    );
+  }
+  const normalized = routes.map((route) => {
+    const kind = validatedRouteKind(route?.kind);
+    const sourcePlatform = validatedRoutePlatform(route?.sourcePlatform);
+    const targetPlatform = validatedRoutePlatform(route?.targetPlatform);
+    if (
+      sourcePlatform !== "twitch" ||
+      targetPlatform !== "discord" ||
+      !kind.startsWith(`${sourcePlatform}.`)
+    ) {
+      throw new IntegrationRegistryError(
+        "This invitation only supports Twitch-to-Discord routes."
+      );
+    }
+    const { destination, serialized } = validatedRouteDestination(route?.destination);
+    if (
+      typeof destination.channelId !== "string" ||
+      !OPAQUE_ID_PATTERN.test(destination.channelId)
+    ) {
+      throw new IntegrationRegistryError(
+        "Discord integration routes require a valid destination channel."
+      );
+    }
+    return { kind, sourcePlatform, targetPlatform, destination, serialized };
+  });
+  if (new Set(normalized.map(({ kind }) => kind)).size !== normalized.length) {
+    throw new IntegrationRegistryError("Integration invitation route kinds must be unique.");
+  }
+  return normalized;
 }
 
 function boundedLabel(value) {
@@ -349,6 +457,17 @@ export async function revokeIntegrationsForGroup(env, input) {
   ));
 }
 
+export async function resolveIntegrationRoutes(env, input) {
+  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
+    "https://integration-registry/routes/resolve",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  ));
+}
+
 export class IntegrationRegistry {
   constructor(state) {
     this.state = state;
@@ -378,6 +497,7 @@ export class IntegrationRegistry {
     });
     const actor = validatedActor(input?.actor, "discord", "Discord integration actor");
     const connectUrl = validatedConnectUrl(input?.connectUrl);
+    const routes = validatedInvitationRoutes(input?.routes);
     const invitationId = crypto.randomUUID();
     const token = randomInvitationToken();
     const tokenHash = await invitationTokenHash(token);
@@ -400,6 +520,19 @@ export class IntegrationRegistry {
         nowMs,
         expiresAtMs
       );
+      for (const route of routes) {
+        this.state.storage.sql.exec(
+          `INSERT INTO integration_invitation_routes
+            (invitation_id, route_kind, source_platform, target_platform,
+             destination_json)
+           VALUES (?, ?, ?, ?, ?)`,
+          invitationId,
+          route.kind,
+          route.sourcePlatform,
+          route.targetPlatform,
+          route.serialized
+        );
+      }
       audit(this.state.storage.sql, {
         invitationId,
         event: "integration.invitation.created.v1",
@@ -633,6 +766,38 @@ export class IntegrationRegistry {
         });
       }
 
+      const routes = this.state.storage.sql.exec(
+        `SELECT route_kind, source_platform, target_platform, destination_json
+         FROM integration_invitation_routes
+         WHERE invitation_id = ?
+         ORDER BY route_kind`,
+        invitationId
+      ).toArray();
+      for (const route of routes) {
+        if (route.source_platform !== "twitch" || route.target_platform !== "discord") {
+          throw new IntegrationRegistryError("The invitation route is invalid.");
+        }
+        this.state.storage.sql.exec(
+          `INSERT INTO integration_routes
+            (integration_id, route_kind, source_group_key, target_group_key,
+             destination_json, enabled, created_at_ms, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+           ON CONFLICT(integration_id, route_kind) DO UPDATE SET
+             source_group_key = excluded.source_group_key,
+             target_group_key = excluded.target_group_key,
+             destination_json = excluded.destination_json,
+             enabled = 1,
+             updated_at_ms = excluded.updated_at_ms`,
+          integrationId,
+          route.route_kind,
+          twitchGroup.key,
+          invitation.discord_group_key,
+          route.destination_json,
+          nowMs,
+          nowMs
+        );
+      }
+
       this.state.storage.sql.exec(
         `UPDATE integration_invitations
          SET status = 'completed', completed_at_ms = ?,
@@ -694,6 +859,47 @@ export class IntegrationRegistry {
     return {
       total,
       integrations: rows.map((row) => this.getIntegration(row.integration_id))
+    };
+  }
+
+  resolveRoutes(input) {
+    const sourceGroup = validatedGroup(input?.sourceGroup);
+    const routeKind = validatedRouteKind(input?.routeKind);
+    const rows = this.state.storage.sql.exec(
+      `SELECT route.integration_id, route.route_kind, route.source_group_key,
+              route.target_group_key, route.destination_json
+       FROM integration_routes route
+       JOIN integrations integration
+         ON integration.integration_id = route.integration_id
+       WHERE route.source_group_key = ?
+         AND route.route_kind = ?
+         AND route.enabled = 1
+         AND integration.status = 'active'
+       ORDER BY route.integration_id
+       LIMIT ?`,
+      sourceGroup.key,
+      routeKind,
+      MAX_ROUTE_FANOUT + 1
+    ).toArray();
+    if (rows.length > MAX_ROUTE_FANOUT) {
+      throw new IntegrationRegistryError(
+        `A single event may target at most ${MAX_ROUTE_FANOUT} integration routes.`,
+        { status: 409, code: "integration_route_fanout_exceeded" }
+      );
+    }
+    return {
+      routes: rows.map((row) => ({
+        kind: row.route_kind,
+        integration: {
+          id: row.integration_id,
+          key: `integration:${row.integration_id}`
+        },
+        sourceGroup: parseGroupKey(row.source_group_key),
+        targetGroup: parseGroupKey(row.target_group_key),
+        destination: validatedRouteDestination(
+          JSON.parse(row.destination_json)
+        ).destination
+      }))
     };
   }
 
@@ -838,6 +1044,9 @@ export class IntegrationRegistry {
       }
       if (request.method === "GET" && url.pathname === "/integrations") {
         return noStoreJson(this.listIntegrations(url));
+      }
+      if (request.method === "POST" && url.pathname === "/routes/resolve") {
+        return noStoreJson(this.resolveRoutes(await request.json()));
       }
       if (request.method === "GET" && url.pathname.startsWith("/integrations/")) {
         const integrationId = decodeURIComponent(

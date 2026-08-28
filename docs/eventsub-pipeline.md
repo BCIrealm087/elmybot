@@ -28,11 +28,13 @@ Duplicate semantic kinds and duplicate Twitch type/version pairs fail during
 Worker startup. Subscription lifecycle and ingress dispatch therefore use the
 same definition rather than maintaining separate type switches.
 
-The only registered definition in this step is `twitch.chat.message.v1`, which
-preserves `!alive` and the existing channel-authorization/recovery behavior.
-`twitch.stream.online.v1` is reserved but is not registered until its domain
-event route is implemented in step 6. This avoids subscribing to and completing
-events that have no useful handler yet.
+Two definitions are registered:
+
+- `twitch.chat.message.v1` preserves Twitch-native commands and now exposes the
+  authorized `!announce` cross-platform action.
+- `twitch.stream.online.v1` creates a platform-neutral domain event and routes a
+  Discord stream notice through every enabled
+  `twitch.stream-online-to-discord.v1` link route.
 
 To add an EventSub type:
 
@@ -92,9 +94,9 @@ convert events into stable `IntegrationExecution` values and rely on the
 integration coordinator's source-event and effect idempotency keys wherever
 possible.
 
-This step does not yet convert chat messages or stream notifications into
-cross-platform actions or domain events. It establishes the durable ingress and
-extension point those step 6 vertical slices will use.
+The `!announce` and stream-online handlers use the inbox message ID as their
+source event ID. Each integration coordinator therefore deduplicates EventSub
+replays before its Discord effect reaches the external API.
 
 ## Deployment notes
 
