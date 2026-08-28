@@ -4,6 +4,7 @@
  */
 
 import { withExternalRequestTimeout } from "../../common.js";
+import { discordGroupConfigFetch } from "./group-config.js";
 
 export const PERMS = {
   MEMBERS: 3,
@@ -98,11 +99,8 @@ async function fetchGuildOwnerId(env, guildId) {
 async function hasConfiguredRole(interaction, env) {
   const memberRoles = interaction.member?.roles ?? [];
   if (memberRoles.length === 0) return false;
-  const id = env.CONFIG.idFromName(interaction.guild_id);
-  const stub = env.CONFIG.get(id);
-
   // Guild-specific allowlisted roles live in the GroupConfig Durable Object.
-  const r = await stub.fetch("https://config/get", {
+  const r = await discordGroupConfigFetch(env, interaction.guild_id, "https://config/get", {
     method: "POST",
     headers: {
       "content-type": "application/json",

@@ -10,45 +10,91 @@
 	"observability": {
 		"enabled": true
 	},
+	"vars": {
+		"TWITCH_DEPLOYMENT_ENVIRONMENT": "production",
+		"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev"
+	},
 
 	"durable_objects": {
 		"bindings": [
 			{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
-      { "name": "CONFIG", "class_name": "GroupConfig" }
+			{ "name": "CONFIG", "class_name": "GroupConfig" },
+			{ "name": "TWITCH_APP_AUTH", "class_name": "TwitchAppAuth" },
+			{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
+			{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
+			{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
+			{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
+			{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
+			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
 		]
-  },
+	},
 
 	"migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["GuildScheduler"]
-    },
-    {
-      "tag": "v2",
-      "new_sqlite_classes": ["GuildConfig"]
-    },
-    {
-      "tag": "v3",
-      "renamed_classes": [
-        { "from": "GuildConfig", "to": "GroupConfig" }
-      ]
-    },
-    {
-      "tag": "v4",
-      "renamed_classes": [
-        { "from": "GuildScheduler", "to": "GroupScheduler" }
-      ]
-    }
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["GuildScheduler"]
+		},
+		{
+			"tag": "v2",
+			"new_sqlite_classes": ["GuildConfig"]
+		},
+		{
+			"tag": "v3",
+			"renamed_classes": [
+				{ "from": "GuildConfig", "to": "GroupConfig" }
+			]
+		},
+		{
+			"tag": "v4",
+			"renamed_classes": [
+				{ "from": "GuildScheduler", "to": "GroupScheduler" }
+			]
+		},
+		{
+			"tag": "v5",
+			"new_sqlite_classes": ["TwitchAuth"]
+		},
+		{
+			"tag": "v6",
+			"new_sqlite_classes": ["TwitchEventSubManager"]
+		},
+		{
+			"tag": "v7",
+			"new_sqlite_classes": ["TwitchChannelOAuthCoordinator", "TwitchChannelAuth"]
+		},
+		{
+			"tag": "v8",
+			"new_sqlite_classes": ["TwitchChannelRegistry"]
+		},
+		{
+			"tag": "v9",
+			"new_sqlite_classes": ["TwitchEventSubService"]
+		},
+		{
+			"tag": "v10",
+			"new_sqlite_classes": ["TwitchAppAuth"]
+		}
 	],
 
-  "env": {
-    "test": {
-      "durable_objects": {
-        "bindings": [
-          { "name": "SCHEDULER", "class_name": "GroupScheduler" },
-          { "name": "CONFIG", "class_name": "GroupConfig" }
-        ]
-      }
-    }
-  }
+	"env": {
+		"test": {
+			"vars": {
+				"TWITCH_DEPLOYMENT_ENVIRONMENT": "test",
+				"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev"
+			},
+			"durable_objects": {
+				"bindings": [
+					{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
+					{ "name": "CONFIG", "class_name": "GroupConfig" },
+					{ "name": "TWITCH_APP_AUTH", "class_name": "TwitchAppAuth" },
+					{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
+					{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
+					{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
+					{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
+					{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
+					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
+				]
+			}
+		}
+	}
 }
