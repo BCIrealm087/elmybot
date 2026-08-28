@@ -1,4 +1,5 @@
 import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
+import { handleTwitchAppAuthStatus } from "./app-auth.js";
 import {
 	getTwitchEventSubServiceStatus,
 	handleTwitchChannelConfiguration,
@@ -278,6 +279,14 @@ export async function handleTwitchManagementRoute(
 		const rejection = requireSetupAuthorization(request, env);
 		if (rejection) return rejection;
 		return handleTwitchChannelHealth(request, env);
+	}
+	if (url.pathname === "/twitch/app-auth") {
+		const rejection = requireSetupAuthorization(request, env);
+		if (rejection) return rejection;
+		if (request.method !== "GET") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		return handleTwitchAppAuthStatus(env);
 	}
 	if (
 		url.pathname === "/twitch/eventsub/subscriptions" ||

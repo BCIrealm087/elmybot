@@ -3,13 +3,14 @@ import {
 	logError,
 	withExternalRequestTimeout
 } from "../../common.js";
+import {
+	getTwitchAppAccessToken,
+	handleTwitchAppAuthStatus
+} from "./app-auth.js";
 
 export const TWITCH_EVENTSUB_SERVICE_NAME = "twitch:eventsub-service";
 
-const APP_TOKEN_KEY = "appAccessToken";
-const APP_TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
-const APP_TOKEN_REFRESH_BUFFER_MS = 60 * 1000;
 const MAX_LIST_PAGES = 100;
 const LIST_FILTER_NAMES = Object.freeze([
 	"status",
@@ -101,65 +102,6 @@ function validateChannel(input) {
 	};
 }
 
-async function requestAppAccessToken(credentials) {
-	let response;
-	try {
-		response = await fetch(
-			APP_TOKEN_URL,
-			withExternalRequestTimeout({
-				method: "POST",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body: new URLSearchParams({
-					client_id: credentials.clientId,
-					client_secret: credentials.clientSecret,
-					grant_type: "client_credentials"
-				})
-			})
-		);
-	} catch (cause) {
-		throw new TwitchEventSubServiceError("Twitch app authentication was unavailable.", {
-			status: 502,
-			code: "twitch_eventsub_auth_network_error",
-			cause
-		});
-	}
-	if (!response.ok) {
-		await response.text();
-		throw new TwitchEventSubServiceError("Twitch rejected the application credentials.", {
-			status: 502,
-			code: "twitch_eventsub_auth_rejected"
-		});
-	}
-	let token;
-	try {
-		token = await response.json();
-	} catch (cause) {
-		throw new TwitchEventSubServiceError("Twitch returned an invalid app-token response.", {
-			status: 502,
-			code: "twitch_eventsub_invalid_auth_response",
-			cause
-		});
-	}
-	if (
-		typeof token.access_token !== "string" ||
-		token.access_token.length === 0 ||
-		!Number.isFinite(token.expires_in) ||
-		token.expires_in <= 0
-	) {
-		throw new TwitchEventSubServiceError("Twitch returned an invalid app-token response.", {
-			status: 502,
-			code: "twitch_eventsub_invalid_auth_response"
-		});
-	}
-	const nowMs = Date.now();
-	return {
-		accessToken: token.access_token,
-		clientId: credentials.clientId,
-		obtainedAtMs: nowMs,
-		expiresAtMs: nowMs + token.expires_in * 1000
-	};
-}
-
 async function rawEventSubRequest({ method, url, clientId, accessToken, body }) {
 	try {
 		return await fetch(
@@ -211,49 +153,29 @@ function createSubscriptionBody(channel, credentials) {
 }
 
 export class TwitchEventSubService {
-	constructor(state) {
-		this.state = state;
-		this.tokenPromise = null;
+	constructor(_state, env) {
+		this.env = env;
 		this.channelOperations = new Map();
 	}
 
-	async getAppAccessToken(credentials, rejectedToken = null) {
-		for (;;) {
-			const cached = await this.state.storage.get(APP_TOKEN_KEY);
-			if (
-				cached?.clientId === credentials.clientId &&
-				cached.accessToken !== rejectedToken &&
-				Number.isFinite(cached.expiresAtMs) &&
-				cached.expiresAtMs - Date.now() > APP_TOKEN_REFRESH_BUFFER_MS
-			) {
-				return cached.accessToken;
-			}
-			if (this.tokenPromise) {
-				await this.tokenPromise;
-				continue;
-			}
-			this.tokenPromise = (async () => {
-				const token = await requestAppAccessToken(credentials);
-				await this.state.storage.put(APP_TOKEN_KEY, token);
-				return token.accessToken;
-			})();
-			try {
-				return await this.tokenPromise;
-			} finally {
-				this.tokenPromise = null;
-			}
-		}
-	}
-
-	async invalidateAppAccessToken(accessToken) {
-		const cached = await this.state.storage.get(APP_TOKEN_KEY);
-		if (cached?.accessToken === accessToken) {
-			await this.state.storage.delete(APP_TOKEN_KEY);
+	async appAccessToken(credentials, rejectedAccessToken = null) {
+		try {
+			return await getTwitchAppAccessToken({
+				...this.env,
+				TWITCH_CLIENT_ID: credentials.clientId,
+				TWITCH_CLIENT_SECRET: credentials.clientSecret
+			}, rejectedAccessToken);
+		} catch (cause) {
+			throw new TwitchEventSubServiceError(cause.message, {
+				status: cause.status ?? 502,
+				code: cause.code ?? "twitch_eventsub_auth_failed",
+				cause
+			});
 		}
 	}
 
 	async eventSubRequest(credentials, request) {
-		let accessToken = await this.getAppAccessToken(credentials);
+		let accessToken = await this.appAccessToken(credentials);
 		let response = await rawEventSubRequest({
 			...request,
 			clientId: credentials.clientId,
@@ -261,8 +183,7 @@ export class TwitchEventSubService {
 		});
 		if (response.status === 401) {
 			await response.text();
-			await this.invalidateAppAccessToken(accessToken);
-			accessToken = await this.getAppAccessToken(credentials, accessToken);
+			accessToken = await this.appAccessToken(credentials, accessToken);
 			response = await rawEventSubRequest({
 				...request,
 				clientId: credentials.clientId,
@@ -440,26 +361,11 @@ export class TwitchEventSubService {
 		});
 	}
 
-	async status() {
-		const token = await this.state.storage.get(APP_TOKEN_KEY);
-		return {
-			cached: Boolean(token),
-			usable: Boolean(
-				token &&
-				Number.isFinite(token.expiresAtMs) &&
-				token.expiresAtMs - Date.now() > APP_TOKEN_REFRESH_BUFFER_MS
-			),
-			clientId: token?.clientId ?? null,
-			obtainedAtMs: token?.obtainedAtMs ?? null,
-			expiresAtMs: token?.expiresAtMs ?? null
-		};
-	}
-
 	async fetch(request) {
 		const url = new URL(request.url);
 		try {
 			if (request.method === "GET" && url.pathname === "/status") {
-				return noStoreJson(await this.status());
+				return handleTwitchAppAuthStatus(this.env);
 			}
 			if (request.method !== "POST") {
 				return new Response("Method Not Allowed", { status: 405 });

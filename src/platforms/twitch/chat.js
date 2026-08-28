@@ -1,39 +1,13 @@
 import { logError, withExternalRequestTimeout } from "../../common.js";
-import { TWITCH_AUTH_OBJECT_NAME } from "./auth.js";
+import { getTwitchAppAccessToken } from "./app-auth.js";
 import { commands } from "./commands.js";
 
 const TWITCH_CHAT_METADATA_STRING_MAX_LENGTH = 500;
-
-function twitchAuthStub(env) {
-	const id = env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME);
-	return env.TWITCH_AUTH.get(id);
-}
 
 function commandFromMessage(messageText) {
 	const match = messageText.trim().match(/^!([^\s]+)(?:\s|$)/);
 	if (!match) return null;
 	return commands[match[1].toLowerCase()] ?? null;
-}
-
-async function getTwitchAccessToken(env, rejectedAccessToken) {
-	const response = await twitchAuthStub(env).fetch("https://twitch-auth/oauth/access-token", {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({
-			clientId: env.TWITCH_CLIENT_ID,
-			clientSecret: env.TWITCH_CLIENT_SECRET,
-			botUserId: env.TWITCH_BOT_USER_ID,
-			rejectedAccessToken
-		})
-	});
-	const result = await response.json();
-	if (!response.ok || typeof result.accessToken !== "string") {
-		const error = new Error(result.error || "Could not obtain a Twitch access token.");
-		error.status = response.status;
-		error.code = result.code;
-		throw error;
-	}
-	return result.accessToken;
 }
 
 class TwitchChatDeliveryError extends Error {
@@ -199,11 +173,11 @@ async function sendTwitchChatMessage(env, event, message) {
 		throw new Error("Twitch chat event is missing its broadcaster ID.");
 	}
 
-	let accessToken = await getTwitchAccessToken(env);
+	let accessToken = await getTwitchAppAccessToken(env);
 	let response = await postTwitchChatMessage(env, event, message, accessToken);
 	if (response.status === 401) {
 		await response.text();
-		accessToken = await getTwitchAccessToken(env, accessToken);
+		accessToken = await getTwitchAppAccessToken(env, accessToken);
 		response = await postTwitchChatMessage(env, event, message, accessToken);
 	}
 

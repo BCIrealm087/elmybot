@@ -36,7 +36,7 @@ WebSocket connection is required.
 - Signed EventSub webhook handling at `/twitch`
 - Durable message-ID deduplication for EventSub retries
 - `!alive` chat command
-- Chat replies through the Twitch Send Chat Message API
+- Chat replies through the Twitch Send Chat Message API with an app access token
 - Validation and structured classification of Twitch chat delivery results
 - Durable bot OAuth authorization, refresh-token rotation, and hourly validation
 - Moderator-free channel authorization through the `channel:bot` scope
@@ -60,6 +60,7 @@ flowchart TD
     DH --> GS[GroupScheduler]
     DH --> GC[GroupConfig]
     TH --> TA[TwitchAuth]
+    TH --> AA[TwitchAppAuth]
     TH --> CO[TwitchChannelOAuthCoordinator]
     CO --> CA[TwitchChannelAuth]
     CA --> EM[TwitchEventSubManager]
@@ -83,11 +84,12 @@ flowchart TD
 |---|---|---|
 | `SCHEDULER` | `GroupScheduler` | One object per scheduling group; Discord uses `discord:guild:<guildId>` |
 | `CONFIG` | `GroupConfig` | One object per platform group; Discord uses `discord:guild:<guildId>` |
+| `TWITCH_APP_AUTH` | `TwitchAppAuth` | Singleton Twitch app-access-token lifecycle shared by chat and EventSub |
 | `TWITCH_AUTH` | `TwitchAuth` | Singleton bot OAuth token lifecycle |
 | `TWITCH_CHANNEL_OAUTH` | `TwitchChannelOAuthCoordinator` | Singleton broadcaster OAuth states and hashed invitation records |
 | `TWITCH_CHANNEL_AUTH` | `TwitchChannelAuth` | One object per broadcaster OAuth session |
 | `TWITCH_EVENTSUB_MANAGER` | `TwitchEventSubManager` | One object per broadcaster for EventSub desired state and reconciliation |
-| `TWITCH_EVENTSUB_SERVICE` | `TwitchEventSubService` | Singleton app-token cache and coordinated EventSub API access |
+| `TWITCH_EVENTSUB_SERVICE` | `TwitchEventSubService` | Singleton coordinated EventSub API access and per-broadcaster mutation serialization |
 | `TWITCH_CHANNEL_REGISTRY` | `TwitchChannelRegistry` | Singleton channel membership index; stores no OAuth tokens or secrets |
 
 All currently configured Durable Object classes use SQLite-backed namespaces.
@@ -197,9 +199,16 @@ responses, and Twitch service failures receive separate stable classifications
 and retryability metadata. Elmybot does not automatically retry ambiguous chat
 delivery failures because a lost response could otherwise produce a duplicate.
 
+Chat delivery uses a Twitch app access token, which is the cloud-chatbot path
+required for Twitch's Chat Bot badge. `TwitchAppAuth` obtains that token with the
+client-credentials flow, caches it until shortly before expiry, and replaces it
+once when Twitch rejects it with a `401`. EventSub uses the same token authority,
+so chat and subscription operations cannot maintain conflicting app-token
+caches.
+
 ### OAuth ownership
 
-Elmybot maintains two different Twitch authorization types:
+Elmybot maintains two different user authorization types:
 
 1. **Bot authorization** grants `user:read:chat`, `user:write:chat`, and
    `user:bot` to the bot account. `TwitchAuth` stores and refreshes this session.
@@ -209,6 +218,9 @@ Elmybot maintains two different Twitch authorization types:
 Access and refresh tokens are never returned by status endpoints. Twitch may
 rotate refresh tokens, so each successful refresh replaces both stored tokens.
 Sessions are validated when loaded or used and approximately every 55 minutes.
+These user grants establish that the bot may send and that each broadcaster
+allows it in their channel. Actual chat API requests use the shared app access
+token rather than exposing either stored user token to the delivery path.
 
 If a broadcaster session becomes irrecoverably invalid, Elmybot marks it
 `reauthorization_required` and disables that channel's EventSub desired state.
@@ -237,11 +249,12 @@ Each configured broadcaster has persistent desired state. Its manager:
 - deconfigures subscriptions after broadcaster authorization loss.
 
 The singleton `TwitchEventSubService` performs the external subscription work
-for those managers. It caches the Twitch app access token until shortly before
-expiry, refreshes and retries once after a `401`, and serializes mutations for
-the same broadcaster. Reconciliation lists only subscriptions matching that
-broadcaster through Twitch's `user_id` filter instead of scanning the
-application's complete subscription inventory for every channel.
+for those managers and serializes mutations for the same broadcaster. It uses
+the shared `TwitchAppAuth` token authority, which refreshes shortly before
+expiry and replaces a rejected token once after a `401`. Reconciliation lists
+only subscriptions matching that broadcaster through Twitch's `user_id` filter
+instead of scanning the application's complete subscription inventory for every
+channel.
 
 `notification_failures_exceeded` revocations are recoverable automatically.
 Statuses such as `authorization_revoked`, `user_removed`, and `version_removed`
@@ -450,9 +463,10 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 | `POST /twitch/channels/oauth/start` | Create a broadcaster OAuth URL without an invitation; operator fallback |
 | `GET /twitch/channels/oauth?broadcasterUserId=<id>` | Inspect safe broadcaster authorization metadata |
 | `DELETE /twitch/channels/oauth?broadcasterUserId=<id>` | Revoke stored broadcaster authorization and deconfigure its subscription |
+| `GET /twitch/app-auth` | Inspect safe shared app-token cache metadata; never returns the token |
 | `GET /twitch/eventsub/subscriptions` | List the Twitch application's subscriptions |
 | `POST /twitch/eventsub/subscriptions` | Manually create a `channel.chat.message` subscription |
-| `GET /twitch/eventsub/service` | Inspect safe app-token cache metadata; never returns the token |
+| `GET /twitch/eventsub/service` | Compatibility alias for `GET /twitch/app-auth` |
 | `GET /twitch/eventsub/channels?broadcasterUserId=<id>` | Inspect desired state, recovery state, and next alarm |
 | `POST /twitch/eventsub/channels` | Manually configure desired state for a broadcaster |
 | `DELETE /twitch/eventsub/channels?broadcasterUserId=<id>` | Disable desired state and remove matching subscriptions |
@@ -531,13 +545,14 @@ src/
       routes.js                             OAuth, onboarding, and operator HTTP routes
       chat.js                               Command parsing and Twitch chat delivery
       commands.js                           Twitch chat commands
+      app-auth.js                           Shared app-token lifecycle Durable Object
       auth.js                               Bot OAuth lifecycle
       channel-auth.js                       Broadcaster invitations and OAuth lifecycle
       environment.js                        Deployment identity and canonical-origin validation
       eventsub.js                           Subscription and desired-state API façade
       eventsub-common.js                    Shared EventSub validation and errors
       eventsub-manager.js                   Per-channel reconciliation Durable Object
-      eventsub-service.js                   App-token cache and coordinated EventSub API access
+      eventsub-service.js                   Coordinated EventSub API access
       onboarding.js                         Public broadcaster connection pages
 test/
   generic.spec.js                           Shared Worker and GroupConfig tests
@@ -569,12 +584,12 @@ browser Work environment cannot execute a deploy-shaped command.
 ## Operational limitations
 
 - EventSub desired state and alarms remain isolated per broadcaster, while the
-  singleton service coordinates credentials and external subscription API
-  mutations. This keeps channel failures isolated but makes the service a
-  deliberate application-level coordination point.
-- Chat messages currently use the bot's user access token. This is valid for the
-  API, but Twitch's formal cloud-chatbot/Chat Bot badge path requires app-access-
-  token delivery.
+  singleton EventSub service coordinates external subscription API mutations.
+  This keeps channel failures isolated but makes the service a deliberate
+  application-level coordination point.
+- App access-token acquisition is centralized in one application-level Durable
+  Object. This avoids duplicate refreshes and inconsistent credentials, but chat
+  and EventSub both depend on that small shared coordination point.
 - Irrecoverably revoked Twitch grants require the bot operator or broadcaster to
   complete OAuth again.
 

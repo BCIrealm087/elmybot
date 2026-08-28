@@ -19,6 +19,7 @@ export class GroupScheduler extends GroupSchedulerBackend {
   }
 }
 export { GroupConfig } from "./group-configuration.js";
+export { TwitchAppAuth } from "./platforms/twitch/app-auth.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
 export {
   TwitchChannelAuth,

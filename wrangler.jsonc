@@ -19,6 +19,7 @@
 		"bindings": [
 			{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
 			{ "name": "CONFIG", "class_name": "GroupConfig" },
+			{ "name": "TWITCH_APP_AUTH", "class_name": "TwitchAppAuth" },
 			{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
 			{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
 			{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
@@ -68,6 +69,10 @@
 		{
 			"tag": "v9",
 			"new_sqlite_classes": ["TwitchEventSubService"]
+		},
+		{
+			"tag": "v10",
+			"new_sqlite_classes": ["TwitchAppAuth"]
 		}
 	],
 
@@ -81,6 +86,7 @@
 				"bindings": [
 					{ "name": "SCHEDULER", "class_name": "GroupScheduler" },
 					{ "name": "CONFIG", "class_name": "GroupConfig" },
+					{ "name": "TWITCH_APP_AUTH", "class_name": "TwitchAppAuth" },
 					{ "name": "TWITCH_AUTH", "class_name": "TwitchAuth" },
 					{ "name": "TWITCH_CHANNEL_OAUTH", "class_name": "TwitchChannelOAuthCoordinator" },
 					{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },

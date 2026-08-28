@@ -7,6 +7,7 @@ import {
 	waitOnExecutionContext
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
@@ -16,9 +17,6 @@ import {
 	ensureTwitchChatSubscription,
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
-import {
-	TWITCH_EVENTSUB_SERVICE_NAME
-} from "../src/platforms/twitch/eventsub-service.js";
 
 const encoder = new TextEncoder();
 let twitchMessageIdCounter = 0;
@@ -40,16 +38,16 @@ function twitchAuthStub() {
 	return env.TWITCH_AUTH.get(env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME));
 }
 
+function twitchAppAuthStub() {
+	return env.TWITCH_APP_AUTH.get(
+		env.TWITCH_APP_AUTH.idFromName(TWITCH_APP_AUTH_OBJECT_NAME)
+	);
+}
+
 function twitchEventSubManagerStub(broadcasterUserId = "broadcaster-id") {
 	const name = twitchEventSubManagerObjectName(broadcasterUserId);
 	return env.TWITCH_EVENTSUB_MANAGER.get(
 		env.TWITCH_EVENTSUB_MANAGER.idFromName(name)
-	);
-}
-
-function twitchEventSubServiceStub() {
-	return env.TWITCH_EVENTSUB_SERVICE.get(
-		env.TWITCH_EVENTSUB_SERVICE.idFromName(TWITCH_EVENTSUB_SERVICE_NAME)
 	);
 }
 
@@ -70,6 +68,18 @@ async function storeTwitchTokens(overrides = {}) {
 			userId: "bot-user-id",
 			login: "elmybot",
 			scopes: ["user:bot", "user:read:chat", "user:write:chat"],
+			...overrides
+		});
+	});
+}
+
+async function storeTwitchAppToken(overrides = {}) {
+	await runInDurableObject(twitchAppAuthStub(), async (_instance, state) => {
+		await state.storage.put("appAccessToken", {
+			accessToken: "stored-app-access-token",
+			clientId: "client-id",
+			obtainedAtMs: Date.now(),
+			expiresAtMs: Date.now() + 4 * 60 * 60 * 1000,
 			...overrides
 		});
 	});
@@ -138,7 +148,7 @@ async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) 
 			}
 		})
 	});
-	await storeTwitchTokens();
+	await storeTwitchAppToken();
 	const fetchMock = vi.fn(fetchImplementation);
 	vi.stubGlobal("fetch", fetchMock);
 	const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -156,7 +166,7 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	await runInDurableObject(
-		twitchEventSubServiceStub(),
+		twitchAppAuthStub(),
 		async (_instance, state) => state.storage.deleteAll()
 	);
 });
@@ -252,7 +262,7 @@ describe("Twitch EventSub worker", () => {
 			}),
 			secret
 		});
-		await storeTwitchTokens();
+		await storeTwitchAppToken();
 		const fetchMock = vi.fn(async (_input, init) => {
 			expect(init.signal).toBeInstanceOf(AbortSignal);
 			return successfulTwitchChatResponse();
@@ -275,7 +285,7 @@ describe("Twitch EventSub worker", () => {
 		expect(fetchMock).toHaveBeenCalledOnce();
 		expect(fetchMock.mock.calls[0][0]).toBe("https://api.twitch.tv/helix/chat/messages");
 		expect(fetchMock.mock.calls[0][1].headers).toMatchObject({
-			Authorization: "Bearer stored-access-token",
+			Authorization: "Bearer stored-app-access-token",
 			"Client-Id": "client-id"
 		});
 		expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
@@ -302,7 +312,7 @@ describe("Twitch EventSub worker", () => {
 			messageId: "duplicate-notification-id",
 			timestamp: new Date().toISOString()
 		};
-		await storeTwitchTokens();
+		await storeTwitchAppToken();
 		const fetchMock = vi.fn(async () => successfulTwitchChatResponse());
 		vi.stubGlobal("fetch", fetchMock);
 
@@ -336,7 +346,7 @@ describe("Twitch EventSub worker", () => {
 		);
 	});
 
-	it("refreshes an expiring token before sending a chat message", async () => {
+	it("replaces an expiring app token before sending a chat message", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
 			body: JSON.stringify({
@@ -348,22 +358,21 @@ describe("Twitch EventSub worker", () => {
 			}),
 			secret
 		});
-		await storeTwitchTokens({ expiresAtMs: Date.now() + 30 * 1000 });
+		await storeTwitchAppToken({ expiresAtMs: Date.now() + 30 * 1000 });
 		const fetchMock = vi.fn(async (input, init) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
-				expect(init.body.get("grant_type")).toBe("refresh_token");
-				expect(init.body.get("refresh_token")).toBe("stored-refresh-token");
+				expect(init.body.get("grant_type")).toBe("client_credentials");
+				expect(init.body.get("client_id")).toBe("client-id");
 				expect(init.body.get("client_secret")).toBe("client-secret");
 				return Response.json({
-					access_token: "refreshed-access-token",
-					refresh_token: "rotated-refresh-token",
-					expires_in: 14400,
-					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+					access_token: "refreshed-app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
 				});
 			}
 
 			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
-			expect(init.headers.Authorization).toBe("Bearer refreshed-access-token");
+			expect(init.headers.Authorization).toBe("Bearer refreshed-app-access-token");
 			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -377,17 +386,18 @@ describe("Twitch EventSub worker", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
-		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
+		await runInDurableObject(twitchAppAuthStub(), async (_instance, state) => {
 			const stored = await state.storage.get("oauthTokens");
-			expect(stored).toMatchObject({
-				accessToken: "refreshed-access-token",
-				refreshToken: "rotated-refresh-token",
+			const appToken = await state.storage.get("appAccessToken");
+			expect(stored).toBeUndefined();
+			expect(appToken).toMatchObject({
+				accessToken: "refreshed-app-access-token",
 				clientId: "client-id"
 			});
 		});
 	});
 
-	it("refreshes and retries once when Twitch rejects a stored access token", async () => {
+	it("refreshes and retries once when Twitch rejects a stored app token", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
 			body: JSON.stringify({
@@ -399,25 +409,24 @@ describe("Twitch EventSub worker", () => {
 			}),
 			secret
 		});
-		await storeTwitchTokens();
+		await storeTwitchAppToken();
 		let chatRequests = 0;
 		const fetchMock = vi.fn(async (input, init) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
 				return Response.json({
-					access_token: "replacement-access-token",
-					refresh_token: "replacement-refresh-token",
-					expires_in: 14400,
-					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+					access_token: "replacement-app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
 				});
 			}
 
 			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
 			chatRequests += 1;
 			if (chatRequests === 1) {
-				expect(init.headers.Authorization).toBe("Bearer stored-access-token");
+				expect(init.headers.Authorization).toBe("Bearer stored-app-access-token");
 				return new Response("Unauthorized", { status: 401 });
 			}
-			expect(init.headers.Authorization).toBe("Bearer replacement-access-token");
+			expect(init.headers.Authorization).toBe("Bearer replacement-app-access-token");
 			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -437,7 +446,7 @@ describe("Twitch EventSub worker", () => {
 		]);
 	});
 
-	it("validates a stale OAuth session before sending a chat message", async () => {
+	it("sends with the app token without coupling delivery to bot-token validation", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
 			body: JSON.stringify({
@@ -450,19 +459,10 @@ describe("Twitch EventSub worker", () => {
 			secret
 		});
 		await storeTwitchTokens({ lastValidatedAtMs: Date.now() - 61 * 60 * 1000 });
+		await storeTwitchAppToken();
 		const fetchMock = vi.fn(async (input, init) => {
-			if (input === "https://id.twitch.tv/oauth2/validate") {
-				expect(init.headers.Authorization).toBe("OAuth stored-access-token");
-				return Response.json({
-					client_id: "client-id",
-					login: "elmybot",
-					user_id: "bot-user-id",
-					scopes: ["user:read:chat", "user:write:chat", "user:bot"],
-					expires_in: 10800
-				});
-			}
-
 			expect(input).toBe("https://api.twitch.tv/helix/chat/messages");
+			expect(init.headers.Authorization).toBe("Bearer stored-app-access-token");
 			return successfulTwitchChatResponse();
 		});
 		vi.stubGlobal("fetch", fetchMock);
@@ -475,14 +475,10 @@ describe("Twitch EventSub worker", () => {
 		await waitOnExecutionContext(ctx);
 
 		expect(response.status).toBe(204);
-		expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
-			"https://id.twitch.tv/oauth2/validate",
-			"https://api.twitch.tv/helix/chat/messages"
-		]);
+		expect(fetchMock).toHaveBeenCalledOnce();
 		await runInDurableObject(twitchAuthStub(), async (_instance, state) => {
 			const stored = await state.storage.get("oauthTokens");
-			expect(stored.lastValidatedAtMs).toBeGreaterThan(Date.now() - 5000);
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			expect(stored.lastValidatedAtMs).toBeLessThan(Date.now() - 60 * 60 * 1000);
 		});
 	});
 
@@ -572,10 +568,9 @@ describe("Twitch EventSub worker", () => {
 		const result = await runAliveCommandWithFetch(async (input) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
 				return Response.json({
-					access_token: "replacement-access-token",
-					refresh_token: "replacement-refresh-token",
-					expires_in: 14400,
-					scope: ["user:read:chat", "user:write:chat", "user:bot"]
+					access_token: "replacement-app-access-token",
+					expires_in: 3600,
+					token_type: "bearer"
 				});
 			}
 			chatRequests += 1;
@@ -673,10 +668,15 @@ describe("Twitch EventSub management", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("protects subscription management with the setup bearer token", async () => {
-		const [response, statusResponse] = await Promise.all([
+	it("protects subscription management and app-auth status with the setup bearer token", async () => {
+		const [response, appAuthResponse, compatibilityStatusResponse] = await Promise.all([
 			worker.fetch(
 				new Request("https://example.com/twitch/eventsub/subscriptions"),
+				eventSubEnv,
+				createExecutionContext()
+			),
+			worker.fetch(
+				new Request("https://example.com/twitch/app-auth"),
 				eventSubEnv,
 				createExecutionContext()
 			),
@@ -689,8 +689,10 @@ describe("Twitch EventSub management", () => {
 
 		expect(response.status).toBe(401);
 		expect(await response.text()).toBe("Unauthorized");
-		expect(statusResponse.status).toBe(401);
-		expect(await statusResponse.text()).toBe("Unauthorized");
+		expect(appAuthResponse.status).toBe(401);
+		expect(await appAuthResponse.text()).toBe("Unauthorized");
+		expect(compatibilityStatusResponse.status).toBe(401);
+		expect(await compatibilityStatusResponse.text()).toBe("Unauthorized");
 	});
 
 	it("creates the bot's channel.chat.message webhook subscription", async () => {
@@ -830,7 +832,7 @@ describe("Twitch EventSub management", () => {
 		expect(listRequests).toBe(2);
 
 		const statusResponse = await worker.fetch(
-			new Request("https://example.com/twitch/eventsub/service", {
+			new Request("https://example.com/twitch/app-auth", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			eventSubEnv,
@@ -844,6 +846,58 @@ describe("Twitch EventSub management", () => {
 			clientId: "client-id"
 		});
 		expect(statusText).not.toContain("shared-app-access-token");
+	});
+
+	it("shares one cached app token between chat delivery and EventSub", async () => {
+		let tokenRequests = 0;
+		let chatRequests = 0;
+		let eventSubRequests = 0;
+		const fetchMock = vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				tokenRequests += 1;
+				return Response.json({
+					access_token: "shared-cross-service-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			if (input === "https://api.twitch.tv/helix/chat/messages") {
+				chatRequests += 1;
+				expect(init.headers.Authorization).toBe("Bearer shared-cross-service-token");
+				return successfulTwitchChatResponse();
+			}
+			eventSubRequests += 1;
+			expect(input).toBe("https://api.twitch.tv/helix/eventsub/subscriptions");
+			expect(init.headers.Authorization).toBe("Bearer shared-cross-service-token");
+			return Response.json({ data: [], pagination: {} });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const chatRequest = await makeSignedTwitchRequest({
+			body: JSON.stringify({
+				subscription: { type: "channel.chat.message" },
+				event: {
+					broadcaster_user_id: "shared-token-broadcaster",
+					message: { text: "!alive" }
+				}
+			})
+		});
+		const chatContext = createExecutionContext();
+		const chatResponse = await worker.fetch(chatRequest, eventSubEnv, chatContext);
+		await waitOnExecutionContext(chatContext);
+		const eventSubResponse = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions", {
+				headers: { Authorization: "Bearer setup-token" }
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(chatResponse.status).toBe(204);
+		expect(eventSubResponse.status).toBe(200);
+		expect(tokenRequests).toBe(1);
+		expect(chatRequests).toBe(1);
+		expect(eventSubRequests).toBe(1);
 	});
 
 	it("refreshes the cached app token and retries once after a Twitch 401", async () => {
@@ -883,7 +937,7 @@ describe("Twitch EventSub management", () => {
 
 	it("replaces an app token before using it near expiry", async () => {
 		await runInDurableObject(
-			twitchEventSubServiceStub(),
+			twitchAppAuthStub(),
 			async (_instance, state) => state.storage.put("appAccessToken", {
 				accessToken: "expiring-app-access-token",
 				clientId: "client-id",
