@@ -1,7 +1,7 @@
 import { CAPABILITIES } from "./discord-permissions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
-import { withExternalRequestTimeout } from "../../common.js";
+import { sendDiscordChannelMessage } from "./delivery.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import {
   createIntegrationInvitation,
@@ -38,37 +38,7 @@ function defaultDoAtCompose(c, _, stored) {
 }
 
 async function defaultDoAtSend(env, job, messageData) {
-  let response;
-  try {
-    response = await fetch(
-      `https://discord.com/api/v10/channels/${job.destination.channelId}/messages`,
-      withExternalRequestTimeout({
-        method: "POST",
-        headers: {
-          Authorization: `Bot ${env.DISCORD_TOKEN}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(messageData),
-      })
-    );
-  } catch (cause) {
-    throw new DeliveryError("Discord API request failed.", {
-      retryable: true,
-      code: "discord_network_error",
-      cause
-    });
-  }
-
-  if (!response.ok) {
-    throw new DeliveryError(
-      `Discord API request failed with status ${response.status}.`,
-      {
-        retryable: response.status === 429 || response.status >= 500,
-        code: "discord_http_error",
-        metadata: { status: response.status }
-      }
-    );
-  }
+  await sendDiscordChannelMessage(env, job.destination.channelId, messageData);
 }
 
 function makeDoAt({

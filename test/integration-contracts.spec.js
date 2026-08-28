@@ -4,6 +4,7 @@ import {
   createCommandInvocation,
   createDomainEvent,
   createEffect,
+  createIntegrationExecution,
   createIntegrationRef,
   createPlatformActorRef,
   createPlatformGroupRef,
@@ -140,6 +141,46 @@ describe("Cross-platform interaction contracts", () => {
 
     expect(effect.target.group.platform).toBe("discord");
     expect(effect.integration).toBeNull();
+  });
+
+  it("binds an execution's effects to one source, correlation, and integration", () => {
+    const sourceEventId = "twitch:eventsub:message-3";
+    const integration = createIntegrationRef({ id: "link-1" });
+    const effect = createEffect({
+      kind: "discord.message.send.v1",
+      target: {
+        group: discordGuild,
+        destination: { channelId: "500" }
+      },
+      payload: { content: "Hello" },
+      integration,
+      idempotencyKey: "effect-1",
+      correlationId: sourceEventId,
+      causationId: sourceEventId
+    });
+    const execution = createIntegrationExecution({
+      integration,
+      source: { group: twitchChannel },
+      sourceEventId,
+      effects: [effect]
+    });
+
+    expect(execution).toMatchObject({
+      integration: { id: "link-1" },
+      sourceEventId,
+      correlationId: sourceEventId,
+      effects: [{ idempotencyKey: "effect-1" }]
+    });
+    expect(Object.isFrozen(execution)).toBe(true);
+    expect(() => createIntegrationExecution({
+      integration,
+      source: execution.source,
+      sourceEventId,
+      effects: [createEffect({
+        ...effect,
+        causationId: "twitch:eventsub:different"
+      })]
+    })).toThrow("must match the execution source event ID");
   });
 
   it("rejects mismatched actors, unversioned kinds, and unsafe payloads", () => {

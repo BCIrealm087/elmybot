@@ -15,8 +15,10 @@ const MAX_EVENT_ID_LENGTH = 300;
 const MAX_CORRELATION_ID_LENGTH = 300;
 const MAX_IDEMPOTENCY_KEY_LENGTH = 500;
 const MAX_JSON_BYTES = 64 * 1024;
+const MAX_EXECUTION_BYTES = 256 * 1024;
 const MAX_JSON_DEPTH = 20;
 const MAX_ACTOR_CLAIMS = 64;
+const MAX_EXECUTION_EFFECTS = 25;
 
 export class IntegrationContractError extends TypeError {
   constructor(path, message) {
@@ -340,4 +342,84 @@ export function createEffect({
       maxLength: MAX_EVENT_ID_LENGTH
     })
   });
+}
+
+export function createIntegrationExecution({
+  integration,
+  source,
+  sourceEventId,
+  correlationId = sourceEventId,
+  effects = []
+}) {
+  const normalizedIntegration = normalizeIntegrationRef(
+    integration,
+    "Execution integration"
+  );
+  const normalizedSource = normalizeOrigin(source, "Execution source", {
+    actorRequired: false
+  });
+  const normalizedSourceEventId = requireSourceEventId(
+    sourceEventId,
+    "Execution source event ID",
+    normalizedSource.group.platform
+  );
+  const normalizedCorrelationId = requireCorrelationId(
+    correlationId,
+    "Execution correlation ID"
+  );
+  if (!Array.isArray(effects) || effects.length > MAX_EXECUTION_EFFECTS) {
+    fail(
+      "Execution effects",
+      `must be an array containing at most ${MAX_EXECUTION_EFFECTS} effects.`
+    );
+  }
+
+  const normalizedEffects = effects.map((effect, index) => {
+    let normalized;
+    try {
+      normalized = createEffect(effect);
+    } catch (error) {
+      if (error instanceof IntegrationContractError) {
+        fail(`Execution effects[${index}]`, error.message);
+      }
+      throw error;
+    }
+    if (normalized.integration?.id !== normalizedIntegration.id) {
+      fail(
+        `Execution effects[${index}].integration`,
+        "must match the execution integration."
+      );
+    }
+    if (normalized.causationId !== normalizedSourceEventId) {
+      fail(
+        `Execution effects[${index}].causationId`,
+        "must match the execution source event ID."
+      );
+    }
+    if (normalized.correlationId !== normalizedCorrelationId) {
+      fail(
+        `Execution effects[${index}].correlationId`,
+        "must match the execution correlation ID."
+      );
+    }
+    return normalized;
+  });
+  if (new Set(normalizedEffects.map((effect) => effect.idempotencyKey)).size !==
+      normalizedEffects.length) {
+    fail("Execution effects", "must not contain duplicate idempotency keys.");
+  }
+
+  const execution = Object.freeze({
+    schemaVersion: INTEGRATION_CONTRACT_SCHEMA_VERSION,
+    integration: normalizedIntegration,
+    source: normalizedSource,
+    sourceEventId: normalizedSourceEventId,
+    correlationId: normalizedCorrelationId,
+    effects: Object.freeze(normalizedEffects)
+  });
+  if (new TextEncoder().encode(JSON.stringify(execution)).byteLength >
+      MAX_EXECUTION_BYTES) {
+    fail("Execution", "is too large.");
+  }
+  return execution;
 }

@@ -319,6 +319,13 @@ export async function listIntegrationsForGroup(env, group, { limit } = {}) {
   return checkedRegistryResponse(await integrationRegistryStub(env).fetch(url));
 }
 
+export async function getIntegrationById(env, integrationId) {
+  integrationId = validatedOpaqueId(integrationId, "Integration ID");
+  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
+    `https://integration-registry/integrations/${encodeURIComponent(integrationId)}`
+  ));
+}
+
 export async function revokeIntegration(env, input) {
   return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
     "https://integration-registry/integrations/revoke",
@@ -831,6 +838,19 @@ export class IntegrationRegistry {
       }
       if (request.method === "GET" && url.pathname === "/integrations") {
         return noStoreJson(this.listIntegrations(url));
+      }
+      if (request.method === "GET" && url.pathname.startsWith("/integrations/")) {
+        const integrationId = decodeURIComponent(
+          url.pathname.slice("/integrations/".length)
+        );
+        const integration = this.getIntegration(integrationId);
+        if (!integration) {
+          throw new IntegrationRegistryError("The integration was not found.", {
+            status: 404,
+            code: "integration_not_found"
+          });
+        }
+        return noStoreJson({ integration });
       }
       if (request.method === "POST" && url.pathname === "/integrations/revoke") {
         return noStoreJson(this.revokeIntegration(await request.json()));

@@ -5,9 +5,19 @@ import {
   createJobHandlerRegistry,
   GroupSchedulerBackend
 } from "./message-scheduling/index.js";
+import {
+  createEffectHandlerRegistry,
+  IntegrationCoordinatorBackend
+} from "./integrations/index.js";
+import { discordIntegrationEffectHandlers } from "./platforms/discord/integration-effects.js";
+import { twitchIntegrationEffectHandlers } from "./platforms/twitch/integration-effects.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers
+);
+const integrationEffectHandlers = createEffectHandlerRegistry(
+  discordIntegrationEffectHandlers,
+  twitchIntegrationEffectHandlers
 );
 
 /**
@@ -16,6 +26,11 @@ const schedulerJobHandlers = createJobHandlerRegistry(
 export class GroupScheduler extends GroupSchedulerBackend {
   constructor(state, env) {
     super(state, env, schedulerJobHandlers);
+  }
+}
+export class IntegrationCoordinator extends IntegrationCoordinatorBackend {
+  constructor(state, env) {
+    super(state, env, integrationEffectHandlers);
   }
 }
 export { GroupConfig } from "./group-configuration.js";

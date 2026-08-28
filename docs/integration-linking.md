@@ -5,9 +5,10 @@ Elmybot stores cross-platform relationships in the singleton
 membership, status, invitation state, and lifecycle audit events. Platform-local
 configuration remains in each platform's existing Durable Objects.
 
-This step establishes authenticated links only. It does not route commands or
-events yet; later action, event, and effect processing will resolve destinations
-through this registry.
+This registry establishes authenticated links. Command and event routing is not
+connected yet, but the per-integration execution ledger and effect outbox now
+consume this registry before accepting or delivering cross-platform work. See
+`docs/integration-execution.md`.
 
 ## Discord commands
 
@@ -83,13 +84,14 @@ audit history while excluding the relationship from active routing and listing.
 - A group can revoke only an integration of which it is a member.
 
 Each test and production Worker environment has its own
-`INTEGRATION_REGISTRY` binding and Durable Object namespace, preserving the
-existing test/production isolation rule.
+`INTEGRATION_REGISTRY` and `INTEGRATION_COORDINATOR` bindings and Durable Object
+namespaces, preserving the existing test/production isolation rule.
 
 ## Deployment notes
 
-Wrangler migration `v11` creates `IntegrationRegistry`. After deploying, register
-the Discord command set again so the three integration commands become visible.
-No new secret is required; the flow reuses the existing Discord verification,
-Twitch application credentials, public Twitch origin, and `channel:bot` OAuth
-configuration.
+Wrangler migration `v11` creates `IntegrationRegistry`, and migration `v12`
+creates `IntegrationCoordinator`. After deploying, register the Discord command
+set again if the three integration commands have not already been registered.
+No new secret is required; the flow and effect adapters reuse the existing
+Discord verification and bot credentials, Twitch application credentials,
+public Twitch origin, and `channel:bot` OAuth configuration.

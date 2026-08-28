@@ -77,8 +77,8 @@ An integration is an opaque relationship identity:
 { id: "01J...", key: "integration:01J..." }
 ```
 
-Membership and link lifecycle belong to `IntegrationRegistry`; routing
-configuration will build on that registry in a later step. This reference
+Membership and link lifecycle belong to `IntegrationRegistry`; durable action
+execution uses one `IntegrationCoordinator` per integration. This reference
 intentionally does not impose one-to-one cardinality. See
 `docs/integration-linking.md` for the authenticated Discord–Twitch link flow.
 
@@ -179,6 +179,30 @@ An action or event route produces an effect for a target adapter:
 The shared contract checks the envelope and JSON safety. The effect adapter owns
 platform-specific validation such as Discord channel IDs, allowed mentions, and
 Twitch chat limits.
+
+### `IntegrationExecution`
+
+An action runner submits all effects caused by one source event as a single
+execution. The source event ID is also the stable execution identity:
+
+```js
+{
+  schemaVersion: 1,
+  integration: { id: "01J...", key: "integration:01J..." },
+  source: {
+    group: { platform: "twitch", kind: "channel", id: "123", key: "twitch:channel:123" },
+    actor: null
+  },
+  sourceEventId: "twitch:eventsub:notification-id",
+  correlationId: "twitch:eventsub:notification-id",
+  effects: [/* normalized Effect values */]
+}
+```
+
+Every effect must name the same integration, causation ID, and correlation ID.
+Effect idempotency keys must be unique within the execution. The coordinator
+also verifies link membership and durable uniqueness before accepting it. See
+`docs/integration-execution.md` for ledger and outbox behavior.
 
 ## Extension policy
 
