@@ -5,7 +5,14 @@ import { commands } from "./commands.js";
 function commandFromMessage(messageText) {
 	const match = messageText.trim().match(/^!([^\s]+)(?:\s|$)/);
 	if (!match) return null;
-	return commands[match[1].toLowerCase()] ?? null;
+	const name = match[1].toLowerCase();
+	const definition = commands[name];
+	if (!definition) return null;
+	return {
+		name,
+		definition,
+		argsText: messageText.trim().slice(match[0].length).trim()
+	};
 }
 
 export function handleTwitchChatNotification(payload, env, ctx, messageId) {
@@ -17,11 +24,14 @@ export function handleTwitchChatNotification(payload, env, ctx, messageId) {
 	const command = commandFromMessage(messageText);
 	if (!command) return;
 
-	const reply = command.exec(payload.event, env);
-	if (typeof reply !== "string" || reply.length === 0) return;
-
 	ctx.waitUntil(
-		sendTwitchChatMessage(env, payload.event, reply).catch((error) =>
+		Promise.resolve(command.definition.exec(payload.event, env, {
+			messageId,
+			argsText: command.argsText
+		})).then((reply) => {
+			if (typeof reply !== "string" || reply.length === 0) return;
+			return sendTwitchChatMessage(env, payload.event, reply);
+		}).catch((error) =>
 			logError("twitch.command_failed", {
 				platform: "twitch",
 				correlationId: `twitch:${messageId}`,

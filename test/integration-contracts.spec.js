@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createActionDefinition,
+  createActionResult,
   createCommandInvocation,
   createDomainEvent,
   createEffect,
@@ -71,6 +72,21 @@ describe("Cross-platform interaction contracts", () => {
     expect(shared.supportedOrigins).toEqual(["discord", "twitch"]);
     expect(twitchOnly.supportedOrigins).toEqual(["twitch"]);
     expect(twitchOnly.execute).toBe(execute);
+  });
+
+  it("normalizes immutable action outputs and effects", () => {
+    const result = createActionResult({
+      output: { message: "Hello", metadata: { alive: true } },
+      effects: []
+    });
+
+    expect(result).toEqual({
+      schemaVersion: INTEGRATION_CONTRACT_SCHEMA_VERSION,
+      output: { message: "Hello", metadata: { alive: true } },
+      effects: []
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.output.metadata)).toBe(true);
   });
 
   it("normalizes a Twitch command without coupling its action kind to Twitch", () => {

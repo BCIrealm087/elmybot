@@ -122,6 +122,7 @@ async function handleCommand(interaction, env, command) {
   let commandResult;
   const def = command.definition;
   const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
+  const sourceInteraction = interaction;
   try {
     if (def.guild) {
       // Guild-only commands rely on guild-scoped Durable Objects and
@@ -139,9 +140,14 @@ async function handleCommand(interaction, env, command) {
         `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
       );
     } else {
-      interaction.guild_id = undefined; // commands without explicit guild descriptor should lose access to guild functionality
+      // Commands without an explicit guild descriptor receive a shallow copy
+      // without guild access. The source adapter separately retains the
+      // authenticated origin needed to build a platform-neutral invocation.
+      interaction = { ...interaction, guild_id: undefined };
     }
-    commandResult = await def.exec(interaction, env, command.name);
+    commandResult = await def.exec(interaction, env, command.name, {
+      sourceInteraction
+    });
   } catch (e) {
     if (e instanceof CommandUserFacingError) {
       commandResult = ephemeralData(e.message);

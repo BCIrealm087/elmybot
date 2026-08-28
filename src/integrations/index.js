@@ -1,5 +1,6 @@
 export {
   createActionDefinition,
+  createActionResult,
   createCommandInvocation,
   createDomainEvent,
   createEffect,

@@ -115,6 +115,28 @@ bypass actor authorization or integration routing policy.
 An action may use `capability: null` when it is intentionally public, such as a
 health check. The action executor is runtime behavior and is never serialized.
 
+Definitions are installed in an immutable action registry. The first shared
+action, `core.health.check.v1`, backs both Discord `/alive` and Twitch `!alive`.
+See `docs/action-registry.md` for execution and fail-closed authorization rules.
+
+### `ActionResult`
+
+An action returns semantic output plus any normalized effects it wants the
+runtime to deliver:
+
+```js
+{
+  schemaVersion: 1,
+  output: { message: "I'm here!!1" },
+  effects: []
+}
+```
+
+The result is an immutable JSON-safe value. Platform adapters own rendering of
+`output`; later routed actions can submit `effects` through the durable
+per-integration coordinator. A local action such as alive needs neither a link
+nor an outbox execution.
+
 ### `CommandInvocation`
 
 An ingress adapter parses a platform command into an invocation:

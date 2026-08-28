@@ -144,6 +144,7 @@ async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) 
 			},
 			event: {
 				broadcaster_user_id: broadcasterUserId,
+				chatter_user_id: "chatter-id",
 				message: { text: "!alive" }
 			}
 		})
@@ -257,6 +258,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -304,6 +306,7 @@ describe("Twitch EventSub worker", () => {
 			},
 			event: {
 				broadcaster_user_id: broadcasterUserId,
+				chatter_user_id: "chatter-id",
 				message: { text: "!alive" }
 			}
 		});
@@ -353,6 +356,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -404,6 +408,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -453,6 +458,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -878,6 +884,7 @@ describe("Twitch EventSub management", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "shared-token-broadcaster",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			})

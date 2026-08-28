@@ -250,6 +250,35 @@ export function createActionDefinition({
   });
 }
 
+export function createActionResult({ output = {}, effects = [] } = {}) {
+  if (!Array.isArray(effects) || effects.length > MAX_EXECUTION_EFFECTS) {
+    fail(
+      "Action result effects",
+      `must be an array containing at most ${MAX_EXECUTION_EFFECTS} effects.`
+    );
+  }
+  const normalizedEffects = effects.map((effect, index) => {
+    try {
+      return createEffect(effect);
+    } catch (error) {
+      if (error instanceof IntegrationContractError) {
+        fail(`Action result effects[${index}]`, error.message);
+      }
+      throw error;
+    }
+  });
+  const result = Object.freeze({
+    schemaVersion: INTEGRATION_CONTRACT_SCHEMA_VERSION,
+    output: copyJsonObject(output, "Action result output"),
+    effects: Object.freeze(normalizedEffects)
+  });
+  if (new TextEncoder().encode(JSON.stringify(result)).byteLength >
+      MAX_EXECUTION_BYTES) {
+    fail("Action result", "is too large.");
+  }
+  return result;
+}
+
 export function createCommandInvocation({
   kind,
   origin,

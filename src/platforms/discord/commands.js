@@ -1,4 +1,9 @@
 import { CAPABILITIES } from "./discord-permissions.js";
+import { CORE_ACTION_KINDS } from "../../actions/index.js";
+import {
+  discordTextActionResponse,
+  executeDiscordAction
+} from "./actions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
 import { sendDiscordChannelMessage } from "./delivery.js";
@@ -336,7 +341,14 @@ function twitchMemberDescription(integration) {
 export const commands = {
   "alive": {
     description: "Replies if alive.",
-    exec: () => ({ content: "I'm here!!1" })
+    actionKind: CORE_ACTION_KINDS.ALIVE,
+    exec: async (_interaction, env, _name, context) =>
+      discordTextActionResponse(await executeDiscordAction(
+        context.sourceInteraction,
+        CORE_ACTION_KINDS.ALIVE,
+        {},
+        { env }
+      ))
   },
 
   "integration_link_twitch": {

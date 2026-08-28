@@ -266,10 +266,14 @@ describe('Discord platform', () => {
   it('routes /alive and returns immediate interaction response', async () => {
     const kp = nacl.sign.keyPair();
     const body = JSON.stringify({
+      id: 'alive-interaction',
       type: 2,
       data: { name: 'alive' },
       token: 't',
       application_id: 'a',
+      guild_id: 'alive-guild',
+      channel_id: 'alive-channel',
+      member: { user: { id: 'alive-user' } },
     });
     const request = makeSignedDiscordRequest({ body, secretKey: kp.secretKey });
 
