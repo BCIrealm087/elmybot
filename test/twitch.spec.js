@@ -17,6 +17,7 @@ import {
 	ensureTwitchChatSubscription,
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
+import { twitchEventSubInboxStub } from "../src/platforms/twitch/eventsub-inbox.js";
 
 const encoder = new TextEncoder();
 let twitchMessageIdCounter = 0;
@@ -339,12 +340,15 @@ describe("Twitch EventSub worker", () => {
 		expect(secondResponse.status).toBe(204);
 		expect(fetchMock).toHaveBeenCalledOnce();
 		await runInDurableObject(
-			twitchEventSubManagerStub(broadcasterUserId),
+			twitchEventSubInboxStub(env, broadcasterUserId),
 			async (_instance, state) => {
 				const rows = state.storage.sql.exec(
-					"SELECT message_id FROM eventsub_seen_messages"
+					"SELECT message_id, status FROM eventsub_inbox"
 				).toArray();
-				expect(rows).toEqual([{ message_id: "duplicate-notification-id" }]);
+				expect(rows).toEqual([{
+					message_id: "duplicate-notification-id",
+					status: "completed"
+				}]);
 			}
 		);
 	});
@@ -763,6 +767,32 @@ describe("Twitch EventSub management", () => {
 			data: [{ id: "subscription-id", status: "webhook_callback_verification_pending" }]
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("rejects EventSub kinds that are not installed in this deployment", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({
+					broadcasterUserId: "broadcaster-id",
+					kind: "twitch.stream.online.v1"
+				})
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(422);
+		expect(await response.json()).toMatchObject({
+			code: "twitch_eventsub_definition_unsupported"
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("lists EventSub subscriptions and preserves supported filters", async () => {
@@ -1421,6 +1451,11 @@ describe("Twitch EventSub management", () => {
 				broadcasterUserId,
 				lastResult: "created",
 				lastSubscriptionId: "recreated-subscription-id",
+				lastSubscriptions: [{
+					kind: "twitch.chat.message.v1",
+					result: "created",
+					subscriptionId: "recreated-subscription-id"
+				}],
 				consecutiveFailures: 0
 			}
 		});

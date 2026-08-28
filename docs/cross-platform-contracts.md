@@ -178,6 +178,12 @@ need no actor:
 }
 ```
 
+Verified Twitch notifications are persisted in the per-channel durable inbox
+before they are acknowledged or converted to this contract. The EventSub
+registry binds a Twitch subscription type and version to its handler; that
+handler may then create a `DomainEvent` without leaking the raw webhook
+transport into shared routing. See `docs/eventsub-pipeline.md`.
+
 ### `Effect`
 
 An action or event route produces an effect for a target adapter:

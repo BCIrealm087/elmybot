@@ -5,11 +5,11 @@ import {
 	unregisterTwitchChannel
 } from "./channel-registry.js";
 import { TWITCH_EVENTSUB_SERVICE_NAME } from "./eventsub-service.js";
+import { TWITCH_EVENTSUB_KINDS } from "./eventsub-kinds.js";
 import {
 	noStoreJson,
 	TwitchEventSubError,
-	validateChannelConfig,
-	validateEventSubMessageId
+	validateChannelConfig
 } from "./eventsub-common.js";
 
 export {
@@ -118,30 +118,48 @@ async function checkedEventSubServiceJson(response, fallbackMessage) {
 	return result;
 }
 
-export async function removeTwitchChatSubscriptions(channel, env) {
+export async function removeTwitchEventSubSubscriptions(channel, env, kinds) {
 	const validated = validateChannelConfig(channel);
 	assertEnvironmentCallback(validated.callbackUrl, env);
 	return checkedEventSubServiceJson(
-		await eventSubServiceRequest(env, "/subscriptions/chat/remove", {
+		await eventSubServiceRequest(env, "/subscriptions/remove", {
 			channel: validated,
-			credentials: eventSubCredentials(env, { needsBot: true })
+			credentials: eventSubCredentials(env, { needsBot: true }),
+			kinds
 		}),
-		"Could not remove Twitch chat subscriptions."
+		"Could not remove Twitch EventSub subscriptions."
 	);
 }
 
-export async function ensureTwitchChatSubscription(channel, env) {
+export async function removeTwitchChatSubscriptions(channel, env) {
+	return removeTwitchEventSubSubscriptions(
+		channel,
+		env,
+		[TWITCH_EVENTSUB_KINDS.CHAT_MESSAGE]
+	);
+}
+
+export async function ensureTwitchEventSubSubscriptions(channel, env, kinds) {
 	const validated = validateChannelConfig(channel);
 	assertEnvironmentCallback(validated.callbackUrl, env);
 	return checkedEventSubServiceJson(
-		await eventSubServiceRequest(env, "/subscriptions/chat/ensure", {
+		await eventSubServiceRequest(env, "/subscriptions/ensure", {
 			channel: validated,
 			credentials: eventSubCredentials(env, {
 				needsBot: true,
 				needsWebhookSecret: true
-			})
+			}),
+			kinds
 		}),
-		"Could not reconcile the Twitch chat subscription."
+		"Could not reconcile Twitch EventSub subscriptions."
+	);
+}
+
+export async function ensureTwitchChatSubscription(channel, env) {
+	return await ensureTwitchEventSubSubscriptions(
+		channel,
+		env,
+		[TWITCH_EVENTSUB_KINDS.CHAT_MESSAGE]
 	);
 }
 
@@ -153,15 +171,17 @@ async function createChatSubscription(request, env) {
 		throw new TwitchEventSubError("The request body must be valid JSON.");
 	}
 
-	return await createTwitchChatSubscription({
+	return await createTwitchEventSubSubscription({
 		broadcasterUserId: requestBody?.broadcasterUserId,
-		callbackUrl: twitchPublicUrl(env, "/twitch")
+		callbackUrl: twitchPublicUrl(env, "/twitch"),
+		kind: requestBody?.kind ?? TWITCH_EVENTSUB_KINDS.CHAT_MESSAGE
 	}, env);
 }
 
-export async function createTwitchChatSubscription({
+export async function createTwitchEventSubSubscription({
 	broadcasterUserId,
-	callbackUrl
+	callbackUrl,
+	kind
 }, env) {
 	if (typeof broadcasterUserId !== "string" || broadcasterUserId.length === 0) {
 		throw new TwitchEventSubError("broadcasterUserId is required.");
@@ -183,7 +203,7 @@ export async function createTwitchChatSubscription({
 		});
 	}
 	assertEnvironmentCallback(parsedCallback.href, env);
-	return eventSubServiceRequest(env, "/subscriptions/chat/create", {
+	return eventSubServiceRequest(env, "/subscriptions/create", {
 		channel: {
 			broadcasterUserId,
 			callbackUrl: parsedCallback.href
@@ -191,8 +211,16 @@ export async function createTwitchChatSubscription({
 		credentials: eventSubCredentials(env, {
 			needsBot: true,
 			needsWebhookSecret: true
-		})
+		}),
+		kinds: [kind]
 	});
+}
+
+export async function createTwitchChatSubscription(input, env) {
+	return createTwitchEventSubSubscription({
+		...input,
+		kind: TWITCH_EVENTSUB_KINDS.CHAT_MESSAGE
+	}, env);
 }
 
 async function listTwitchEventSubSubscriptions(request, env) {
@@ -281,56 +309,6 @@ export async function queueTwitchEventSubRecovery(env, recovery) {
 			code: result.code || "twitch_eventsub_recovery_queue_failed"
 		});
 	}
-}
-
-export async function claimTwitchEventSubMessage(
-	env,
-	{ broadcasterUserId, messageId }
-) {
-	if (
-		typeof broadcasterUserId !== "string" ||
-		broadcasterUserId.length === 0
-	) {
-		throw new TwitchEventSubError("The EventSub broadcaster ID is invalid.", {
-			status: 400,
-			code: "twitch_eventsub_invalid_broadcaster_id"
-		});
-	}
-	validateEventSubMessageId(messageId);
-
-	const response = await managerResponse(
-		env,
-		broadcasterUserId,
-		"/events/claim",
-		{
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ messageId })
-		}
-	);
-	let result;
-	try {
-		result = await response.json();
-	} catch (cause) {
-		throw new TwitchEventSubError(
-			"The EventSub message claim returned an invalid response.",
-			{
-				status: 502,
-				code: "twitch_eventsub_message_claim_invalid_response",
-				cause
-			}
-		);
-	}
-	if (!response.ok || typeof result.claimed !== "boolean") {
-		throw new TwitchEventSubError(
-			result.error || "Could not claim the EventSub message.",
-			{
-				status: response.ok ? 502 : response.status,
-				code: result.code || "twitch_eventsub_message_claim_failed"
-			}
-		);
-	}
-	return result.claimed;
 }
 
 async function managerResponse(env, broadcasterUserId, path, init) {

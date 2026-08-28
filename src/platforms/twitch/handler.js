@@ -1,15 +1,12 @@
 import { logError } from "../../common.js";
-import { handleTwitchChatNotification } from "./chat.js";
 import {
-	claimTwitchEventSubMessage,
-	queueTwitchEventSubRecovery,
-	RECOVERABLE_EVENTSUB_STATUS
-} from "./eventsub.js";
-import { markTwitchChannelAuthorizationRevoked } from "./channel-auth.js";
+	drainTwitchEventSubInbox,
+	enqueueTwitchEventSubMessage,
+	TWITCH_EVENTSUB_INBOX_SCHEMA_VERSION
+} from "./eventsub-inbox.js";
 import {
 	assertTwitchRequestOrigin,
-	TwitchEnvironmentError,
-	twitchPublicUrl
+	TwitchEnvironmentError
 } from "./environment.js";
 import { handleTwitchManagementRoute } from "./routes.js";
 
@@ -63,67 +60,6 @@ async function verifyTwitchRequest({ secret, messageId, timestamp, signature, bo
 	} catch {
 		return false;
 	}
-}
-
-function handleEventSubRevocation(payload, env, ctx, messageId, callbackUrl) {
-	const subscription = payload.subscription;
-	const status = subscription?.status;
-	const broadcasterUserId = subscription?.condition?.broadcaster_user_id;
-
-	console.warn(JSON.stringify({
-		level: "warn",
-		event: "twitch.eventsub_revoked",
-		platform: "twitch",
-		correlationId: `twitch:${messageId}`,
-		groupId: broadcasterUserId ?? null,
-		subscriptionId: subscription?.id ?? null,
-		subscriptionType: subscription?.type ?? null,
-		status: status ?? null,
-		recoverable: status === RECOVERABLE_EVENTSUB_STATUS
-	}));
-
-	if (
-		subscription?.type === "channel.chat.message" &&
-		status === "authorization_revoked" &&
-		typeof broadcasterUserId === "string" &&
-		broadcasterUserId.length > 0
-	) {
-		ctx.waitUntil(
-			markTwitchChannelAuthorizationRevoked(env, broadcasterUserId).catch((error) =>
-				logError("twitch.channel_oauth_revocation_failed", {
-					platform: "twitch",
-					correlationId: `twitch:${messageId}`,
-					groupId: broadcasterUserId,
-					subscriptionId: subscription.id ?? null
-				}, error)
-			)
-		);
-	}
-
-	if (
-		subscription?.type !== "channel.chat.message" ||
-		status !== RECOVERABLE_EVENTSUB_STATUS ||
-		typeof broadcasterUserId !== "string" ||
-		broadcasterUserId.length === 0
-	) {
-		return;
-	}
-
-	ctx.waitUntil(
-		queueTwitchEventSubRecovery(env, {
-			broadcasterUserId,
-			callbackUrl,
-			reason: status,
-			sourceSubscriptionId: subscription.id
-		}).catch((error) =>
-			logError("twitch.eventsub_recovery_queue_failed", {
-				platform: "twitch",
-				correlationId: `twitch:${messageId}`,
-				groupId: broadcasterUserId,
-				subscriptionId: subscription.id
-			}, error)
-		)
-	);
 }
 
 /**
@@ -196,13 +132,38 @@ export async function handleTwitchRequest(request, env, ctx) {
 			payload.subscription?.condition?.broadcaster_user_id ??
 			payload.event?.broadcaster_user_id;
 		try {
-			const claimed = await claimTwitchEventSubMessage(env, {
+			await enqueueTwitchEventSubMessage(env, broadcasterUserId, {
+				schemaVersion: TWITCH_EVENTSUB_INBOX_SCHEMA_VERSION,
 				broadcasterUserId,
-				messageId
+				messageId,
+				messageType,
+				messageTimestamp: timestamp,
+				payload
 			});
-			if (!claimed) return new Response(null, { status: 204 });
+			ctx.waitUntil(
+				drainTwitchEventSubInbox(env, broadcasterUserId).catch((error) =>
+					logError("twitch.eventsub_inbox_drain_failed", {
+						platform: "twitch",
+						correlationId: `twitch:${messageId}`,
+						groupId: broadcasterUserId,
+						messageType
+					}, error)
+				)
+			);
 		} catch (error) {
-			logError("twitch.eventsub_message_claim_failed", {
+			if (error?.code === "twitch_eventsub_subscription_unsupported") {
+				console.warn(JSON.stringify({
+					level: "warn",
+					event: "twitch.eventsub_subscription_unsupported",
+					platform: "twitch",
+					correlationId: `twitch:${messageId}`,
+					groupId: broadcasterUserId ?? null,
+					subscriptionType: payload.subscription?.type ?? null,
+					subscriptionVersion: payload.subscription?.version ?? null
+				}));
+				return new Response(null, { status: 204 });
+			}
+			logError("twitch.eventsub_inbox_enqueue_failed", {
 				platform: "twitch",
 				correlationId: `twitch:${messageId}`,
 				groupId: broadcasterUserId ?? null,
@@ -213,22 +174,12 @@ export async function handleTwitchRequest(request, env, ctx) {
 					? error.status
 					: 503;
 			return new Response(
-				status === 400 ? "Bad Request" : "Service Unavailable",
+				status >= 400 && status < 500
+					? "Bad Request"
+					: "Service Unavailable",
 				{ status }
 			);
 		}
-	}
-
-	if (messageType === "revocation") {
-		handleEventSubRevocation(
-			payload,
-			env,
-			ctx,
-			messageId,
-			twitchPublicUrl(env, "/twitch")
-		);
-	} else if (messageType === "notification") {
-		handleTwitchChatNotification(payload, env, ctx, messageId);
 	}
 
 	return new Response(null, { status: 204 });

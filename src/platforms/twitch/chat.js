@@ -15,7 +15,7 @@ function commandFromMessage(messageText) {
 	};
 }
 
-export function handleTwitchChatNotification(payload, env, ctx, messageId) {
+export async function processTwitchChatNotification(payload, env, messageId) {
 	if (payload.subscription?.type !== "channel.chat.message") return;
 
 	const messageText = payload.event?.message?.text;
@@ -24,20 +24,27 @@ export function handleTwitchChatNotification(payload, env, ctx, messageId) {
 	const command = commandFromMessage(messageText);
 	if (!command) return;
 
-	ctx.waitUntil(
-		Promise.resolve(command.definition.exec(payload.event, env, {
+	try {
+		const reply = await Promise.resolve(command.definition.exec(payload.event, env, {
 			messageId,
 			argsText: command.argsText
-		})).then((reply) => {
-			if (typeof reply !== "string" || reply.length === 0) return;
-			return sendTwitchChatMessage(env, payload.event, reply);
-		}).catch((error) =>
-			logError("twitch.command_failed", {
-				platform: "twitch",
-				correlationId: `twitch:${messageId}`,
-				groupId: payload.event.broadcaster_user_id,
-				command: messageText.trim().split(/\s+/, 1)[0]
-			}, error)
-		)
-	);
+		}));
+		if (typeof reply !== "string" || reply.length === 0) return;
+		await sendTwitchChatMessage(env, payload.event, reply);
+	} catch (error) {
+		logError("twitch.command_failed", {
+			platform: "twitch",
+			correlationId: `twitch:${messageId}`,
+			groupId: payload.event.broadcaster_user_id,
+			command: messageText.trim().split(/\s+/, 1)[0]
+		}, error);
+		if ((typeof error === "object" && error !== null) || typeof error === "function") {
+			Object.defineProperty(error, "eventSubLogged", { value: true });
+		}
+		throw error;
+	}
+}
+
+export function handleTwitchChatNotification(payload, env, ctx, messageId) {
+	ctx.waitUntil(processTwitchChatNotification(payload, env, messageId));
 }

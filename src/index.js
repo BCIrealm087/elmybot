@@ -11,6 +11,11 @@ import {
 } from "./integrations/index.js";
 import { discordIntegrationEffectHandlers } from "./platforms/discord/integration-effects.js";
 import { twitchIntegrationEffectHandlers } from "./platforms/twitch/integration-effects.js";
+import { twitchEventSubDefinitions } from "./platforms/twitch/eventsub-definitions.js";
+import { TwitchEventSubInboxBackend } from "./platforms/twitch/eventsub-inbox.js";
+import { TwitchEventSubManagerBackend } from "./platforms/twitch/eventsub-manager.js";
+import { createTwitchEventSubRegistry } from "./platforms/twitch/eventsub-registry.js";
+import { TwitchEventSubServiceBackend } from "./platforms/twitch/eventsub-service.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers
@@ -18,6 +23,9 @@ const schedulerJobHandlers = createJobHandlerRegistry(
 const integrationEffectHandlers = createEffectHandlerRegistry(
   discordIntegrationEffectHandlers,
   twitchIntegrationEffectHandlers
+);
+const twitchEventSubRegistry = createTwitchEventSubRegistry(
+  twitchEventSubDefinitions
 );
 
 /**
@@ -33,6 +41,21 @@ export class IntegrationCoordinator extends IntegrationCoordinatorBackend {
     super(state, env, integrationEffectHandlers);
   }
 }
+export class TwitchEventSubManager extends TwitchEventSubManagerBackend {
+  constructor(state, env) {
+    super(state, env, twitchEventSubRegistry);
+  }
+}
+export class TwitchEventSubService extends TwitchEventSubServiceBackend {
+  constructor(state, env) {
+    super(state, env, twitchEventSubRegistry);
+  }
+}
+export class TwitchEventSubInbox extends TwitchEventSubInboxBackend {
+  constructor(state, env) {
+    super(state, env, twitchEventSubRegistry);
+  }
+}
 export { GroupConfig } from "./group-configuration.js";
 export { TwitchAppAuth } from "./platforms/twitch/app-auth.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
@@ -40,8 +63,6 @@ export {
   TwitchChannelAuth,
   TwitchChannelOAuthCoordinator
 } from "./platforms/twitch/channel-auth.js";
-export { TwitchEventSubManager } from "./platforms/twitch/eventsub-manager.js";
-export { TwitchEventSubService } from "./platforms/twitch/eventsub-service.js";
 export { TwitchChannelRegistry } from "./platforms/twitch/channel-registry.js";
 export { IntegrationRegistry } from "./integrations/index.js";
 
