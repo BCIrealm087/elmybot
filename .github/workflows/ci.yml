@@ -36,6 +36,9 @@ jobs:
       - name: Run test suite
         run: npm test -- --run
 
+      - name: Run linter
+        run: npm run lint
+
       - name: Check JavaScript syntax
         run: git ls-files -z '*.js' '*.mjs' | xargs -0 -n1 node --check
 

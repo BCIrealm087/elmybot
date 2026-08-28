@@ -26,8 +26,6 @@ import {
 import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
 import { discordGroupConfigObjectName } from '../src/platforms/discord/group-config.js';
 
-import { putDiscordCommands } from '../src/platforms/discord/register-commands-request.js';
-
 function toHex(bytes) {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, '0'))

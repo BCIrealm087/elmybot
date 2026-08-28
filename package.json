@@ -2,16 +2,21 @@
 	"name": "elmybot-worker",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"scripts": {
 		"discord-register": "node src/platforms/discord/register-commands.js",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
+		"lint": "eslint .",
 		"start": "wrangler dev",
 		"test": "vitest"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.1.0",
+		"@eslint/js": "^10.0.1",
 		"dotenv": "^17.2.3",
+		"eslint": "^10.9.1",
+		"globals": "^17.11.0",
 		"tweetnacl": "^1.0.3",
 		"vitest": "^4.1.0",
 		"wrangler": "^4.126.0"

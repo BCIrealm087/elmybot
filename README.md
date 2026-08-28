@@ -493,6 +493,12 @@ Run the complete test suite once:
 npm test -- --run
 ```
 
+Run the correctness-focused ESLint rules:
+
+```powershell
+npm run lint
+```
+
 Register Discord commands:
 
 ```powershell
@@ -521,12 +527,16 @@ src/
       gifs-extension.js                     KLIPY delivery integration
       register-commands.js                  One-off slash-command registration CLI
     twitch/
-      handler.js                            Twitch routing, EventSub verification, and chat delivery
+      handler.js                            EventSub webhook verification and dispatch
+      routes.js                             OAuth, onboarding, and operator HTTP routes
+      chat.js                               Command parsing and Twitch chat delivery
       commands.js                           Twitch chat commands
       auth.js                               Bot OAuth lifecycle
       channel-auth.js                       Broadcaster invitations and OAuth lifecycle
       environment.js                        Deployment identity and canonical-origin validation
-      eventsub.js                           Subscription management and reconciliation
+      eventsub.js                           Subscription and desired-state API façade
+      eventsub-common.js                    Shared EventSub validation and errors
+      eventsub-manager.js                   Per-channel reconciliation Durable Object
       eventsub-service.js                   App-token cache and coordinated EventSub API access
       onboarding.js                         Public broadcaster connection pages
 test/
@@ -549,8 +559,9 @@ The workflow:
 
 1. installs locked dependencies with `npm ci`;
 2. runs the complete Vitest suite;
-3. checks all tracked JavaScript and MJS syntax;
-4. runs a non-deploying Wrangler dry run.
+3. runs ESLint's recommended correctness rules;
+4. checks all tracked JavaScript and MJS syntax;
+5. runs a non-deploying Wrangler dry run.
 
 The CI Wrangler dry run is the authoritative build/configuration check when the
 browser Work environment cannot execute a deploy-shaped command.
