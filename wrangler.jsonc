@@ -25,7 +25,8 @@
 			{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 			{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
 			{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
-			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
+			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
+			{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" }
 		]
 	},
 
@@ -73,6 +74,10 @@
 		{
 			"tag": "v10",
 			"new_sqlite_classes": ["TwitchAppAuth"]
+		},
+		{
+			"tag": "v11",
+			"new_sqlite_classes": ["IntegrationRegistry"]
 		}
 	],
 
@@ -92,7 +97,8 @@
 					{ "name": "TWITCH_CHANNEL_AUTH", "class_name": "TwitchChannelAuth" },
 					{ "name": "TWITCH_EVENTSUB_MANAGER", "class_name": "TwitchEventSubManager" },
 					{ "name": "TWITCH_EVENTSUB_SERVICE", "class_name": "TwitchEventSubService" },
-					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" }
+					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
+					{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" }
 				]
 			}
 		}

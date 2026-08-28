@@ -7,6 +7,7 @@ import { withExternalRequestTimeout } from "../../common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 
 export const PERMS = {
+  GUILD_MANAGERS: 4,
   MEMBERS: 3,
   GUILD_ALLOWED_ROLES: 2,
   MODERATORS: 1,
@@ -15,6 +16,7 @@ export const PERMS = {
 }
 
 export const PERM_STRINGS = {
+  [PERMS.GUILD_MANAGERS]: "server manager",
   [PERMS.MEMBERS]: "member", 
   [PERMS.GUILD_ALLOWED_ROLES]: "allowed server role", 
   [PERMS.MODERATORS]: "moderator", 
@@ -23,12 +25,17 @@ export const PERM_STRINGS = {
 
 export const CAPABILITIES = Object.freeze({
   CONFIG_MANAGE: "config.manage",
+  INTEGRATION_MANAGE: "integration.manage",
   SCHEDULE_CREATE: "schedule.create",
   SCHEDULE_VIEW: "schedule.view",
   SCHEDULE_CANCEL: "schedule.cancel"
 });
 
 const CAPABILITY_POLICIES = Object.freeze({
+  [CAPABILITIES.INTEGRATION_MANAGE]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.GUILD_MANAGERS
+  ]),
   [CAPABILITIES.CONFIG_MANAGE]: Object.freeze([
     PERMS.OWNER,
     PERMS.MODERATORS
@@ -71,6 +78,11 @@ const MODERATOR_ANY_OF = [
   DISCORD_PERMS.KICK_MEMBERS,
   DISCORD_PERMS.BAN_MEMBERS,
   DISCORD_PERMS.MANAGE_ROLES,
+];
+
+const GUILD_MANAGER_ANY_OF = [
+  DISCORD_PERMS.ADMINISTRATOR,
+  DISCORD_PERMS.MANAGE_GUILD,
 ];
 
 /**
@@ -134,6 +146,13 @@ export async function checkPermissions(interaction, env, commandInfo) {
   }
   if (!interaction.guild_id || !interaction.member) {
     return { allowedGroups, configured: true, ok: false };
+  }
+
+  if (
+    allowedGroups.includes(PERMS.GUILD_MANAGERS) &&
+    hasAnyIntrinsicPerm(interaction.member.permissions, GUILD_MANAGER_ANY_OF)
+  ) {
+    return { allowedGroups, configured: true, ok: true };
   }
 
   if (

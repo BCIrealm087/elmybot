@@ -77,9 +77,10 @@ An integration is an opaque relationship identity:
 { id: "01J...", key: "integration:01J..." }
 ```
 
-The membership, link lifecycle, and routing configuration belong to the future
-integration registry. This reference intentionally does not impose one-to-one
-cardinality.
+Membership and link lifecycle belong to `IntegrationRegistry`; routing
+configuration will build on that registry in a later step. This reference
+intentionally does not impose one-to-one cardinality. See
+`docs/integration-linking.md` for the authenticated Discord–Twitch link flow.
 
 ## Behavior contracts
 

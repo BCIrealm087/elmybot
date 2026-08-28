@@ -4,6 +4,13 @@ import { DeliveryError } from "../../message-scheduling/index.js";
 import { withExternalRequestTimeout } from "../../common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import {
+  createIntegrationInvitation,
+  IntegrationRegistryError,
+  listIntegrationsForGroup,
+  revokeIntegration
+} from "../../integrations/index.js";
+import { twitchPublicUrl } from "../twitch/environment.js";
+import {
   scheduleMessage, getStandardOptions, evalStandardTimestamp,
   evalMessage, getDailyTimeFromTimestamp, getRandomTimeFromInterval
 } from "./message-scheduling/index.js";
@@ -317,6 +324,42 @@ export const discordSchedulingHandlers = Object.freeze(Object.fromEntries(
   ])
 ));
 
+function discordIntegrationGroup(interaction) {
+  return {
+    platform: "discord",
+    kind: "guild",
+    id: interaction.guild_id
+  };
+}
+
+function discordIntegrationActor(interaction) {
+  return {
+    platform: "discord",
+    id: interaction.member?.user?.id ?? interaction.user?.id,
+    claims: []
+  };
+}
+
+async function integrationCommandRequest(operation) {
+  try {
+    return { result: await operation(), userFacingError: null };
+  } catch (error) {
+    if (error instanceof IntegrationRegistryError && error.status < 500) {
+      return { result: null, userFacingError: error.message };
+    }
+    throw error;
+  }
+}
+
+function twitchMemberDescription(integration) {
+  const member = integration.members.find(({ group }) => group.platform === "twitch");
+  if (!member) return "unknown Twitch channel";
+  const label = compactDiagnosticText(member.label, 64);
+  return member.label
+    ? `Twitch channel \`${label}\` (\`${member.group.id}\`)`
+    : `Twitch channel \`${member.group.id}\``;
+}
+
 // `exec` return values are Discord interaction `data` payloads, not full
 // `Response` instances.
 // Commands without a guild descriptor will not receive a guild_id on execution.
@@ -324,6 +367,79 @@ export const commands = {
   "alive": {
     description: "Replies if alive.",
     exec: () => ({ content: "I'm here!!1" })
+  },
+
+  "integration_link_twitch": {
+    description: "Create a secure invitation to link a Twitch channel to this server.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    exec: async (interaction, env) => {
+      const { result, userFacingError } = await integrationCommandRequest(() =>
+        createIntegrationInvitation(env, {
+          group: discordIntegrationGroup(interaction),
+          actor: discordIntegrationActor(interaction),
+          connectUrl: twitchPublicUrl(env, "/twitch/integrations/connect")
+        })
+      );
+      if (userFacingError) return ephemeralData(userFacingError);
+      const expiresAt = Math.floor(result.expiresAtMs / 1000);
+      return ephemeralData(
+        `Open this one-use invitation to link a Twitch channel to this server:\n` +
+        `<${result.invitationUrl}>\n` +
+        `It expires <t:${expiresAt}:R>. Only the Twitch broadcaster can complete it.`
+      );
+    }
+  },
+
+  "integration_list": {
+    description: "List active cross-platform integrations for this server.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    exec: async (interaction, env) => {
+      const { result, userFacingError } = await integrationCommandRequest(() =>
+        listIntegrationsForGroup(env, discordIntegrationGroup(interaction), { limit: 10 })
+      );
+      if (userFacingError) return ephemeralData(userFacingError);
+      if (result.total === 0) return ephemeralData("No active integrations.");
+      const shown = result.integrations.map((integration) =>
+        `• ${twitchMemberDescription(integration)} — id: \`${integration.id}\``
+      ).join("\n");
+      return ephemeralData(
+        `Active integrations (${result.total} total, showing ${result.integrations.length}):\n${shown}`
+      );
+    }
+  },
+
+  "integration_unlink": {
+    description: "Unlink an integration from this server by integration ID.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [
+      { name: "integration_id", description: "Integration ID from /integration_list", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const { result, userFacingError } = await integrationCommandRequest(() =>
+        revokeIntegration(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction),
+          actor: discordIntegrationActor(interaction),
+          reason: "discord_unlinked"
+        })
+      );
+      if (userFacingError) return ephemeralData(userFacingError);
+      return ephemeralData(
+        result.alreadyRevoked
+          ? `Integration \`${integrationId}\` was already unlinked.`
+          : `Unlinked integration \`${integrationId}\`.`
+      );
+    }
   },
 
   ...doAtSchedulingCommands,

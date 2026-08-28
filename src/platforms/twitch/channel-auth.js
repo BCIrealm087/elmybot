@@ -9,6 +9,12 @@ import {
 	putTwitchChannelDesiredState
 } from "./eventsub.js";
 import { jsonResponse, logError, withExternalRequestTimeout } from "../../common.js";
+import {
+	completeIntegrationInvitation,
+	IntegrationRegistryError,
+	reserveIntegrationInvitation,
+	revokeIntegrationsForGroup
+} from "../../integrations/index.js";
 
 export const TWITCH_CHANNEL_OAUTH_COORDINATOR_NAME = "twitch:channel-oauth";
 
@@ -158,6 +164,30 @@ async function checkedJsonResponse(response, fallbackMessage) {
 	return result;
 }
 
+function integrationInvitationOAuthError(error) {
+	if (!(error instanceof IntegrationRegistryError)) throw error;
+	throw channelOAuthError(
+		error.status >= 500
+			? "Integration linking is temporarily unavailable."
+			: "The integration invitation is invalid, expired, or has already been used.",
+		{
+			status: error.status >= 500 ? 503 : 400,
+			code: error.code
+		}
+	);
+}
+
+function validatedIntegrationReservation(value) {
+	if (value === null || value === undefined) return null;
+	if (typeof value !== "object" || Array.isArray(value)) {
+		throw channelOAuthError("The integration OAuth reservation is invalid.");
+	}
+	return {
+		invitationId: requiredString(value.invitationId, "Integration invitation ID"),
+		reservationId: requiredString(value.reservationId, "Integration reservation ID")
+	};
+}
+
 async function updateChannelDesiredState(env, authorization) {
 	const response = await putTwitchChannelDesiredState(env, {
 		broadcasterUserId: authorization.userId,
@@ -190,7 +220,9 @@ function publicAuthorization(authorization) {
 		disconnectedAtMs: authorization.disconnectedAtMs ?? null,
 		reason: authorization.reason ?? null,
 		provisioningPending: Boolean(authorization.provisioningPending),
-		deconfigurationPending: Boolean(authorization.deconfigurationPending)
+		deconfigurationPending: Boolean(authorization.deconfigurationPending),
+		integrationCompletionPending: Boolean(authorization.integrationCompletionPending),
+		integrationDeactivationPending: Boolean(authorization.integrationDeactivationPending)
 	};
 }
 
@@ -274,7 +306,8 @@ export class TwitchChannelOAuthCoordinator {
 		callbackUrl,
 		clientId,
 		clientSecret,
-		invitationToken
+		invitationToken,
+		integrationInvitationToken
 	}) {
 		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
 		requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
@@ -289,7 +322,26 @@ export class TwitchChannelOAuthCoordinator {
 			expiresAtMs: Date.now() + OAUTH_STATE_TTL_MS
 		};
 		const stateKey = `${OAUTH_STATE_PREFIX}${state}`;
-		if (invitationToken === undefined) {
+		if (invitationToken !== undefined && integrationInvitationToken !== undefined) {
+			throw channelOAuthError("Only one channel invitation can be used at a time.");
+		}
+		if (integrationInvitationToken !== undefined) {
+			let reservation;
+			try {
+				reservation = await reserveIntegrationInvitation(this.env, {
+					token: integrationInvitationToken,
+					reservationId: state,
+					reservationExpiresAtMs: pending.expiresAtMs
+				});
+			} catch (error) {
+				integrationInvitationOAuthError(error);
+			}
+			pending.integrationReservation = {
+				invitationId: reservation.invitationId,
+				reservationId: reservation.reservationId
+			};
+			await this.state.storage.put(stateKey, pending);
+		} else if (invitationToken === undefined) {
 			await this.state.storage.put(stateKey, pending);
 		} else {
 			const invitationKey = await invitationStorageKey(invitationToken);
@@ -370,7 +422,8 @@ export class TwitchChannelOAuthCoordinator {
 					userId: validation.user_id,
 					login: validation.login ?? null,
 					scopes,
-					callbackUrl: pending.callbackUrl
+					callbackUrl: pending.callbackUrl,
+					integrationReservation: pending.integrationReservation ?? null
 				})
 			}
 		);
@@ -435,10 +488,12 @@ export class TwitchChannelAuth {
 			]);
 			if (
 				authorization &&
-				(
-					authorization.status === "authorized" ||
-					authorization.provisioningPending ||
-					authorization.deconfigurationPending
+					(
+						authorization.status === "authorized" ||
+						authorization.provisioningPending ||
+						authorization.deconfigurationPending ||
+						authorization.integrationCompletionPending ||
+						authorization.integrationDeactivationPending
 				) &&
 				alarmAtMs === null
 			) {
@@ -479,6 +534,69 @@ export class TwitchChannelAuth {
 		}
 	}
 
+	async completePendingIntegration(authorization) {
+		const pending = authorization.integrationCompletionPending;
+		if (!pending) return { result: null, error: null };
+		try {
+			const result = await completeIntegrationInvitation(this.env, {
+				invitationId: pending.invitationId,
+				reservationId: pending.reservationId,
+				group: {
+					platform: "twitch",
+					kind: "channel",
+					id: authorization.userId
+				},
+				actor: {
+					platform: "twitch",
+					id: authorization.userId,
+					claims: ["twitch.broadcaster"]
+				},
+				groupLabel: authorization.login
+			});
+			authorization.integrationCompletionPending = null;
+			return { result, error: null };
+		} catch (error) {
+			logError("twitch.channel_integration_completion_failed", {
+				platform: "twitch",
+				correlationId: `twitch-integration-completion:${crypto.randomUUID()}`,
+				groupId: authorization.userId
+			}, error);
+			if (error instanceof IntegrationRegistryError && error.status < 500) {
+				authorization.integrationCompletionPending = null;
+				return { result: null, error: error.code };
+			}
+			return { result: null, error: null };
+		}
+	}
+
+	async deactivateLinkedIntegrations(authorization, reason) {
+		try {
+			await revokeIntegrationsForGroup(this.env, {
+				group: {
+					platform: "twitch",
+					kind: "channel",
+					id: authorization.userId
+				},
+				actor: {
+					platform: "twitch",
+					id: authorization.userId,
+					claims: ["twitch.broadcaster"]
+				},
+				reason
+			});
+			authorization.integrationDeactivationPending = false;
+			return true;
+		} catch (error) {
+			authorization.integrationDeactivationPending = true;
+			logError("twitch.channel_integration_deactivation_failed", {
+				platform: "twitch",
+				correlationId: `twitch-integration-deactivation:${crypto.randomUUID()}`,
+				groupId: authorization.userId
+			}, error);
+			return false;
+		}
+	}
+
 	async authorize(input) {
 		const clientId = requiredString(input.clientId, "TWITCH_CLIENT_ID");
 		requiredString(input.clientSecret, "TWITCH_CLIENT_SECRET");
@@ -510,14 +628,31 @@ export class TwitchChannelAuth {
 			scopes: [...input.scopes].sort(),
 			callbackUrl,
 			provisioningPending: false,
-			deconfigurationPending: false
+			deconfigurationPending: false,
+			integrationCompletionPending: validatedIntegrationReservation(
+				input.integrationReservation
+			),
+			integrationDeactivationPending: false
 		};
 		const configured = await this.configure(authorization);
+		const integrationCompletion = await this.completePendingIntegration(authorization);
 		await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
 		await this.state.storage.setAlarm(
-			Date.now() + (configured ? nextValidationDelay(authorization.expiresAtMs) : VALIDATION_RETRY_MS)
+			Date.now() + (
+				configured && !authorization.integrationCompletionPending
+					? nextValidationDelay(authorization.expiresAtMs)
+					: VALIDATION_RETRY_MS
+			)
 		);
-		return { authorized: true, configured, authorization: publicAuthorization(authorization) };
+		return {
+			authorized: true,
+			configured,
+			authorization: publicAuthorization(authorization),
+			integration: integrationCompletion.result?.integration ?? null,
+			integrationAlreadyLinked: integrationCompletion.result?.alreadyLinked ?? false,
+			integrationPending: Boolean(authorization.integrationCompletionPending),
+			integrationError: integrationCompletion.error
+		};
 	}
 
 	async refresh(authorization, clientSecret) {
@@ -603,11 +738,17 @@ export class TwitchChannelAuth {
 			invalidatedAtMs: Date.now(),
 			reason,
 			provisioningPending: false,
-			deconfigurationPending: true
+			deconfigurationPending: true,
+			integrationCompletionPending: null,
+			integrationDeactivationPending: true
 		};
 		const deconfigured = await this.deconfigure(invalidated);
+		const integrationsDeactivated = await this.deactivateLinkedIntegrations(
+			invalidated,
+			reason
+		);
 		await this.state.storage.put(CHANNEL_AUTH_KEY, invalidated);
-		if (deconfigured) await this.state.storage.deleteAlarm();
+		if (deconfigured && integrationsDeactivated) await this.state.storage.deleteAlarm();
 		else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);
 		return invalidated;
 	}
@@ -628,12 +769,18 @@ export class TwitchChannelAuth {
 			disconnectedAtMs: Date.now(),
 			reason: "disconnected",
 			provisioningPending: false,
-			deconfigurationPending: true
+			deconfigurationPending: true,
+			integrationCompletionPending: null,
+			integrationDeactivationPending: true
 		};
 		await revokeTwitchToken(authorization.clientId, authorization.accessToken);
 		const deconfigured = await this.deconfigure(disconnected, { unregister: true });
+		const integrationsDeactivated = await this.deactivateLinkedIntegrations(
+			disconnected,
+			"twitch_disconnected"
+		);
 		await this.state.storage.put(CHANNEL_AUTH_KEY, disconnected);
-		if (deconfigured) await this.state.storage.deleteAlarm();
+		if (deconfigured && integrationsDeactivated) await this.state.storage.deleteAlarm();
 		else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);
 		return { disconnected: true, authorization: publicAuthorization(disconnected) };
 	}
@@ -644,16 +791,25 @@ export class TwitchChannelAuth {
 
 		if (authorization.status !== "authorized") {
 			if (authorization.deconfigurationPending) {
-				const deconfigured = await this.deconfigure(
+				await this.deconfigure(
 					authorization,
 					authorization.status === "disconnected"
 						? { unregister: true }
 						: undefined
 				);
-				await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
-				if (deconfigured) await this.state.storage.deleteAlarm();
-				else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);
 			}
+			if (authorization.integrationDeactivationPending) {
+				await this.deactivateLinkedIntegrations(
+					authorization,
+					authorization.reason ?? "twitch_authorization_inactive"
+				);
+			}
+			await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
+			if (
+				!authorization.deconfigurationPending &&
+				!authorization.integrationDeactivationPending
+			) await this.state.storage.deleteAlarm();
+			else await this.state.storage.setAlarm(Date.now() + VALIDATION_RETRY_MS);
 			return;
 		}
 
@@ -662,10 +818,14 @@ export class TwitchChannelAuth {
 			if (authorization.provisioningPending) {
 				await this.configure(authorization);
 			}
+			if (authorization.integrationCompletionPending) {
+				await this.completePendingIntegration(authorization);
+			}
 			await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
 			await this.state.storage.setAlarm(
 				Date.now() + (
-					authorization.provisioningPending
+					authorization.provisioningPending ||
+					authorization.integrationCompletionPending
 						? VALIDATION_RETRY_MS
 						: nextValidationDelay(authorization.expiresAtMs)
 				)

@@ -28,6 +28,7 @@ export {
 export { TwitchEventSubManager } from "./platforms/twitch/eventsub-manager.js";
 export { TwitchEventSubService } from "./platforms/twitch/eventsub-service.js";
 export { TwitchChannelRegistry } from "./platforms/twitch/channel-registry.js";
+export { IntegrationRegistry } from "./integrations/index.js";
 
 /**
  * Cloudflare Worker entrypoint for platform requests.
