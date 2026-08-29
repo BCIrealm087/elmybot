@@ -71,7 +71,10 @@ evaluating the capability or contacting the registry.
 
 Invitations expire after 15 minutes. An invitation reserved by OAuth remains
 valid only for that OAuth state's lifetime. Registry alarms expire abandoned
-invitations and reservations.
+invitations and reservations in bounded batches. Completed and expired
+invitation records and their route templates are retained for 30 days so an
+immediate completion replay remains idempotent, then removed in bounded alarm
+work. The separate audit log is retained.
 
 ## Relationship model
 
@@ -90,6 +93,9 @@ a duplicate.
 
 Integration rows are revoked rather than deleted. This preserves membership and
 audit history while excluding the relationship from active routing and listing.
+Large group-wide revocations are processed 50 integrations at a time and leave
+a durable continuation for the registry alarm, keeping each transaction
+bounded without weakening eventual deactivation.
 
 ## Initial routes
 

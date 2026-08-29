@@ -17,6 +17,7 @@ export {
   createIntegrationInvitation,
   getIntegrationById,
   getIntegrationManagementStatus,
+  INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
   INTEGRATION_REGISTRY_NAME,
   IntegrationRegistry,

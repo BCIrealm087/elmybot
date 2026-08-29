@@ -13,6 +13,7 @@ import {
 import {
   completeIntegrationInvitation,
   createIntegrationInvitation,
+  INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
   integrationRegistryStub,
   listIntegrationsForGroup,
@@ -428,5 +429,156 @@ describe("Cross-platform integration linking", () => {
     });
 
     expect((await listIntegrationsForGroup(integrationEnv, active.group)).total).toBe(0);
+  });
+
+  it("expires and continues large maintenance batches through alarms", async () => {
+    const prefix = uniqueId("expiry-batch");
+    const nowMs = Date.now();
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        for (let index = 0; index < 51; index += 1) {
+          state.storage.sql.exec(
+            `INSERT INTO integration_invitations
+              (invitation_id, discord_group_key, discord_group_id,
+               discord_actor_id, status, created_at_ms, expires_at_ms)
+             VALUES (?, 'discord:guild:batch', 'batch', 'actor', 'pending', ?, ?)`,
+            `${prefix}-${index}`,
+            nowMs - 2_000,
+            nowMs - 1_000
+          );
+        }
+
+        expect(await instance.expireInvitations()).toBe(50);
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_invitations
+           WHERE invitation_id LIKE ? AND status = 'pending'`,
+          `${prefix}-%`
+        ).one().total).toBe(1);
+
+        await instance.alarm();
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_invitations
+           WHERE invitation_id LIKE ? AND status = 'expired'`,
+          `${prefix}-%`
+        ).one().total).toBe(51);
+        expect(await state.storage.getAlarm()).toBeGreaterThan(nowMs);
+      }
+    );
+  });
+
+  it("prunes terminal invitation payloads after retention but preserves audit", async () => {
+    const oldInvitationId = uniqueId("old-invitation");
+    const recentInvitationId = uniqueId("recent-invitation");
+    const nowMs = Date.now();
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        for (const [invitationId, completedAtMs] of [
+          [oldInvitationId, nowMs - INTEGRATION_INVITATION_RETENTION_MS - 1],
+          [recentInvitationId, nowMs]
+        ]) {
+          state.storage.sql.exec(
+            `INSERT INTO integration_invitations
+              (invitation_id, discord_group_key, discord_group_id,
+               discord_actor_id, status, created_at_ms, expires_at_ms,
+               completed_at_ms)
+             VALUES (?, 'discord:guild:retention', 'retention', 'actor',
+                     'completed', ?, ?, ?)`,
+            invitationId,
+            completedAtMs,
+            completedAtMs,
+            completedAtMs
+          );
+          state.storage.sql.exec(
+            `INSERT INTO integration_invitation_routes
+              (invitation_id, route_kind, source_platform, target_platform,
+               destination_json)
+             VALUES (?, 'twitch.retention-test.v1', 'twitch', 'discord', '{}')`,
+            invitationId
+          );
+        }
+        state.storage.sql.exec(
+          `INSERT INTO integration_audit
+            (invitation_id, event, occurred_at_ms)
+           VALUES (?, 'integration.invitation.completed.v1', ?)`,
+          oldInvitationId,
+          nowMs - INTEGRATION_INVITATION_RETENTION_MS - 1
+        );
+
+        expect(instance.pruneTerminalInvitations()).toBe(1);
+        expect(state.storage.sql.exec(
+          `SELECT invitation_id FROM integration_invitations
+           WHERE invitation_id IN (?, ?) ORDER BY invitation_id`,
+          oldInvitationId,
+          recentInvitationId
+        ).toArray()).toEqual([{ invitation_id: recentInvitationId }]);
+        expect(state.storage.sql.exec(
+          `SELECT invitation_id FROM integration_invitation_routes
+           WHERE invitation_id IN (?, ?)`,
+          oldInvitationId,
+          recentInvitationId
+        ).toArray()).toEqual([{ invitation_id: recentInvitationId }]);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_audit WHERE invitation_id = ?",
+          oldInvitationId
+        ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("continues oversized group revocations durably in bounded batches", async () => {
+    const group = discordGroup();
+    const groupKey = `discord:guild:${group.id}`;
+    const prefix = uniqueId("revocation-batch");
+    const nowMs = Date.now();
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        for (let index = 0; index < 51; index += 1) {
+          const integrationId = `${prefix}-${index}`;
+          state.storage.sql.exec(
+            `INSERT INTO integrations
+              (integration_id, status, created_at_ms, updated_at_ms,
+               activated_at_ms, created_by_platform, created_by_actor_id,
+               completed_by_platform, completed_by_actor_id)
+             VALUES (?, 'active', ?, ?, ?, 'discord', 'actor', 'twitch', 'actor')`,
+            integrationId,
+            nowMs + index,
+            nowMs + index,
+            nowMs + index
+          );
+          state.storage.sql.exec(
+            `INSERT INTO integration_members
+              (integration_id, group_key, platform, group_kind, group_id,
+               joined_at_ms)
+             VALUES (?, ?, 'discord', 'guild', ?, ?)`,
+            integrationId,
+            groupKey,
+            group.id,
+            nowMs
+          );
+        }
+
+        expect(await instance.revokeForGroup({ group, reason: "test" }))
+          .toEqual({ revoked: 50, pending: true });
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'active'`,
+          `${prefix}-%`
+        ).one().total).toBe(1);
+
+        await instance.alarm();
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'revoked'`,
+          `${prefix}-%`
+        ).one().total).toBe(51);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(0);
+      }
+    );
   });
 });

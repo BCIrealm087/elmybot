@@ -7,8 +7,10 @@ import {
 
 export const INTEGRATION_REGISTRY_NAME = "integration:registry";
 export const INTEGRATION_INVITATION_TTL_MS = 15 * 60 * 1000;
+export const INTEGRATION_INVITATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 const MAX_OAUTH_RESERVATION_TTL_MS = 15 * 60 * 1000;
+const REGISTRY_MAINTENANCE_BATCH_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 25;
 const INVITATION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
@@ -60,6 +62,15 @@ function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_invitations_expiry
       ON integration_invitations(status, expires_at_ms, reservation_expires_at_ms);
 
+    CREATE INDEX IF NOT EXISTS integration_invitations_pending_expiry
+      ON integration_invitations(status, expires_at_ms);
+
+    CREATE INDEX IF NOT EXISTS integration_invitations_reservation_expiry
+      ON integration_invitations(status, reservation_expires_at_ms);
+
+    CREATE INDEX IF NOT EXISTS integration_invitations_completed
+      ON integration_invitations(status, completed_at_ms);
+
     CREATE TABLE IF NOT EXISTS integration_invitation_routes (
       invitation_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,
@@ -97,6 +108,9 @@ function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_members_group
       ON integration_members(group_key, integration_id);
 
+    CREATE INDEX IF NOT EXISTS integrations_status_created
+      ON integrations(status, created_at_ms, integration_id);
+
     CREATE TABLE IF NOT EXISTS integration_routes (
       integration_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,
@@ -125,6 +139,17 @@ function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS integration_audit_integration
       ON integration_audit(integration_id, occurred_at_ms);
+
+    CREATE TABLE IF NOT EXISTS integration_group_revocations (
+      group_key TEXT PRIMARY KEY,
+      actor_platform TEXT,
+      actor_id TEXT,
+      reason TEXT NOT NULL,
+      requested_at_ms INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
+      ON integration_group_revocations(requested_at_ms, group_key);
   `);
 }
 
@@ -342,12 +367,6 @@ function audit(sql, {
   );
 }
 
-function invitationExpiry(row) {
-  return row.status === "reserved"
-    ? row.reservation_expires_at_ms
-    : row.expires_at_ms;
-}
-
 function publicMember(row) {
   return {
     group: {
@@ -530,18 +549,29 @@ export class IntegrationRegistry {
   }
 
   async armNextExpiration() {
-    const rows = this.state.storage.sql.exec(
-      `SELECT status, expires_at_ms, reservation_expires_at_ms
-       FROM integration_invitations
-       WHERE status IN ('pending', 'reserved')`
-    ).toArray();
-    const nextExpiry = rows.reduce((next, row) => {
-      const expiry = invitationExpiry(row);
-      if (!Number.isFinite(expiry)) return next;
-      return next === null || expiry < next ? expiry : next;
-    }, null);
-    if (nextExpiry === null) await this.state.storage.deleteAlarm();
-    else await this.state.storage.setAlarm(Math.max(Date.now(), nextExpiry));
+    const nextMaintenance = this.state.storage.sql.exec(
+      `WITH next_maintenance(next_at_ms) AS (VALUES
+         ((SELECT MIN(expires_at_ms)
+           FROM integration_invitations WHERE status = 'pending')),
+         ((SELECT MIN(reservation_expires_at_ms)
+           FROM integration_invitations WHERE status = 'reserved')),
+         ((SELECT MIN(completed_at_ms) + ?
+           FROM integration_invitations WHERE status = 'completed')),
+         ((SELECT MIN(expires_at_ms) + ?
+           FROM integration_invitations
+           WHERE status = 'expired' AND reservation_expires_at_ms IS NULL)),
+         ((SELECT MIN(reservation_expires_at_ms) + ?
+           FROM integration_invitations
+           WHERE status = 'expired' AND reservation_expires_at_ms IS NOT NULL)),
+         ((SELECT MIN(requested_at_ms) FROM integration_group_revocations))
+       )
+       SELECT MIN(next_at_ms) AS next_at_ms FROM next_maintenance`,
+      INTEGRATION_INVITATION_RETENTION_MS,
+      INTEGRATION_INVITATION_RETENTION_MS,
+      INTEGRATION_INVITATION_RETENTION_MS
+    ).one().next_at_ms;
+    if (nextMaintenance === null) await this.state.storage.deleteAlarm();
+    else await this.state.storage.setAlarm(Math.max(Date.now(), nextMaintenance));
   }
 
   async createInvitation(input) {
@@ -657,24 +687,51 @@ export class IntegrationRegistry {
 
   findExistingIntegration(firstGroupKey, secondGroupKey) {
     return this.state.storage.sql.exec(
-      `SELECT i.integration_id
-       FROM integrations i
-       WHERE i.status = 'active'
-         AND EXISTS (
-           SELECT 1 FROM integration_members first_member
-           WHERE first_member.integration_id = i.integration_id
-             AND first_member.group_key = ?
-         )
-         AND EXISTS (
-           SELECT 1 FROM integration_members second_member
-           WHERE second_member.integration_id = i.integration_id
-             AND second_member.group_key = ?
-         )
+      `SELECT first_member.integration_id
+       FROM integration_members first_member
+       JOIN integration_members second_member
+         ON second_member.integration_id = first_member.integration_id
+        AND second_member.group_key = ?
+       JOIN integrations i
+         ON i.integration_id = first_member.integration_id
+        AND i.status = 'active'
+       WHERE first_member.group_key = ?
        ORDER BY i.created_at_ms ASC
        LIMIT 1`,
-      firstGroupKey,
-      secondGroupKey
+      secondGroupKey,
+      firstGroupKey
     ).toArray()[0]?.integration_id ?? null;
+  }
+
+  integrationsWithMembers(rows) {
+    if (rows.length === 0) return [];
+    const integrationIds = rows.map((row) => row.integration_id);
+    const placeholders = integrationIds.map(() => "?").join(", ");
+    const members = this.state.storage.sql.exec(
+      `SELECT integration_id, group_key, platform, group_kind, group_id, label,
+              joined_at_ms
+       FROM integration_members
+       WHERE integration_id IN (${placeholders})
+       ORDER BY integration_id ASC, platform ASC, group_key ASC`,
+      ...integrationIds
+    ).toArray();
+    const membersByIntegration = new Map();
+    for (const member of members) {
+      const grouped = membersByIntegration.get(member.integration_id) ?? [];
+      grouped.push(publicMember(member));
+      membersByIntegration.set(member.integration_id, grouped);
+    }
+    return rows.map((row) => ({
+      id: row.integration_id,
+      key: `integration:${row.integration_id}`,
+      status: row.status,
+      createdAtMs: row.created_at_ms,
+      updatedAtMs: row.updated_at_ms,
+      activatedAtMs: row.activated_at_ms,
+      revokedAtMs: row.revoked_at_ms,
+      revokedReason: row.revoked_reason,
+      members: membersByIntegration.get(row.integration_id) ?? []
+    }));
   }
 
   getIntegration(integrationId) {
@@ -1059,7 +1116,8 @@ export class IntegrationRegistry {
       );
     }
     const rows = this.state.storage.sql.exec(
-      `SELECT i.integration_id
+      `SELECT i.integration_id, i.status, i.created_at_ms, i.updated_at_ms,
+              i.activated_at_ms, i.revoked_at_ms, i.revoked_reason
        FROM integrations i
        JOIN integration_members member
          ON member.integration_id = i.integration_id
@@ -1079,7 +1137,7 @@ export class IntegrationRegistry {
     ).toArray()[0].total;
     return {
       total,
-      integrations: rows.map((row) => this.getIntegration(row.integration_id))
+      integrations: this.integrationsWithMembers(rows)
     };
   }
 
@@ -1175,7 +1233,70 @@ export class IntegrationRegistry {
     });
   }
 
-  revokeForGroup(input) {
+  processGroupRevocationBatch(groupKey) {
+    const job = this.state.storage.sql.exec(
+      `SELECT group_key, actor_platform, actor_id, reason
+       FROM integration_group_revocations
+       WHERE group_key = ?`,
+      groupKey
+    ).toArray()[0];
+    if (!job) return { revoked: 0, pending: false };
+
+    const nowMs = Date.now();
+    const rows = this.state.storage.sql.exec(
+      `SELECT i.integration_id
+       FROM integration_members member
+       JOIN integrations i
+         ON i.integration_id = member.integration_id
+        AND i.status = 'active'
+       WHERE member.group_key = ?
+       ORDER BY i.created_at_ms ASC
+       LIMIT ?`,
+      groupKey,
+      REGISTRY_MAINTENANCE_BATCH_SIZE
+    ).toArray();
+    const actor = job.actor_platform && job.actor_id
+      ? { platform: job.actor_platform, id: job.actor_id }
+      : null;
+    for (const row of rows) {
+      this.state.storage.sql.exec(
+        `UPDATE integrations
+         SET status = 'revoked', updated_at_ms = ?, revoked_at_ms = ?,
+             revoked_reason = ?
+         WHERE integration_id = ? AND status = 'active'`,
+        nowMs,
+        nowMs,
+        job.reason,
+        row.integration_id
+      );
+      audit(this.state.storage.sql, {
+        integrationId: row.integration_id,
+        event: "integration.revoked.v1",
+        actor,
+        groupKey,
+        occurredAtMs: nowMs
+      });
+    }
+    const pending = Boolean(this.state.storage.sql.exec(
+      `SELECT 1 AS present
+       FROM integration_members member
+       JOIN integrations i
+         ON i.integration_id = member.integration_id
+        AND i.status = 'active'
+       WHERE member.group_key = ?
+       LIMIT 1`,
+      groupKey
+    ).toArray()[0]);
+    if (!pending) {
+      this.state.storage.sql.exec(
+        "DELETE FROM integration_group_revocations WHERE group_key = ?",
+        groupKey
+      );
+    }
+    return { revoked: rows.length, pending };
+  }
+
+  async revokeForGroup(input) {
     const group = validatedGroup(input?.group);
     const actor = input?.actor === null || input?.actor === undefined
       ? null
@@ -1183,50 +1304,43 @@ export class IntegrationRegistry {
     const reason = typeof input?.reason === "string" && input.reason.length > 0
       ? input.reason.slice(0, 100)
       : "group_authorization_revoked";
-    const nowMs = Date.now();
-
-    return this.state.storage.transactionSync(() => {
-      const rows = this.state.storage.sql.exec(
-        `SELECT i.integration_id
-         FROM integrations i
-         JOIN integration_members member
-           ON member.integration_id = i.integration_id
-         WHERE member.group_key = ? AND i.status = 'active'`,
-        group.key
-      ).toArray();
-      for (const row of rows) {
-        this.state.storage.sql.exec(
-          `UPDATE integrations
-           SET status = 'revoked', updated_at_ms = ?, revoked_at_ms = ?,
-               revoked_reason = ?
-           WHERE integration_id = ?`,
-          nowMs,
-          nowMs,
-          reason,
-          row.integration_id
-        );
-        audit(this.state.storage.sql, {
-          integrationId: row.integration_id,
-          event: "integration.revoked.v1",
-          actor,
-          groupKey: group.key,
-          occurredAtMs: nowMs
-        });
-      }
-      return { revoked: rows.length };
+    const result = this.state.storage.transactionSync(() => {
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_group_revocations
+          (group_key, actor_platform, actor_id, reason, requested_at_ms)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(group_key) DO UPDATE SET
+           actor_platform = excluded.actor_platform,
+           actor_id = excluded.actor_id,
+           reason = excluded.reason`,
+        group.key,
+        actor?.platform ?? null,
+        actor?.id ?? null,
+        reason,
+        Date.now()
+      );
+      return this.processGroupRevocationBatch(group.key);
     });
+    await this.armNextExpiration();
+    return result;
   }
 
   async expireInvitations() {
     const nowMs = Date.now();
-    this.state.storage.transactionSync(() => {
+    return this.state.storage.transactionSync(() => {
       const rows = this.state.storage.sql.exec(
         `SELECT invitation_id, status
          FROM integration_invitations
          WHERE (status = 'pending' AND expires_at_ms <= ?)
-            OR (status = 'reserved' AND reservation_expires_at_ms <= ?)`,
+            OR (status = 'reserved' AND reservation_expires_at_ms <= ?)
+         ORDER BY CASE status
+           WHEN 'reserved' THEN reservation_expires_at_ms
+           ELSE expires_at_ms
+         END ASC
+         LIMIT ?`,
         nowMs,
-        nowMs
+        nowMs,
+        REGISTRY_MAINTENANCE_BATCH_SIZE
       ).toArray();
       for (const row of rows) {
         this.state.storage.sql.exec(
@@ -1243,12 +1357,75 @@ export class IntegrationRegistry {
           occurredAtMs: nowMs
         });
       }
+      return rows.length;
     });
-    await this.armNextExpiration();
+  }
+
+  pruneTerminalInvitations() {
+    const cutoffMs = Date.now() - INTEGRATION_INVITATION_RETENTION_MS;
+    return this.state.storage.transactionSync(() => {
+      const rows = this.state.storage.sql.exec(
+        `SELECT invitation_id
+         FROM (
+           SELECT invitation_id, completed_at_ms AS terminal_at_ms
+           FROM integration_invitations
+           WHERE status = 'completed' AND completed_at_ms <= ?
+           UNION ALL
+           SELECT invitation_id, expires_at_ms AS terminal_at_ms
+           FROM integration_invitations
+           WHERE status = 'expired'
+             AND reservation_expires_at_ms IS NULL
+             AND expires_at_ms <= ?
+           UNION ALL
+           SELECT invitation_id, reservation_expires_at_ms AS terminal_at_ms
+           FROM integration_invitations
+           WHERE status = 'expired'
+             AND reservation_expires_at_ms IS NOT NULL
+             AND reservation_expires_at_ms <= ?
+         )
+         ORDER BY terminal_at_ms ASC
+         LIMIT ?`,
+        cutoffMs,
+        cutoffMs,
+        cutoffMs,
+        REGISTRY_MAINTENANCE_BATCH_SIZE
+      ).toArray();
+      if (rows.length === 0) return 0;
+      const invitationIds = rows.map((row) => row.invitation_id);
+      const placeholders = invitationIds.map(() => "?").join(", ");
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_invitation_routes
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_invitations
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
+      return invitationIds.length;
+    });
+  }
+
+  processNextGroupRevocation() {
+    return this.state.storage.transactionSync(() => {
+      const job = this.state.storage.sql.exec(
+        `SELECT group_key
+         FROM integration_group_revocations
+         ORDER BY requested_at_ms ASC, group_key ASC
+         LIMIT 1`
+      ).toArray()[0];
+      return job
+        ? this.processGroupRevocationBatch(job.group_key)
+        : { revoked: 0, pending: false };
+    });
   }
 
   async alarm() {
     await this.expireInvitations();
+    this.pruneTerminalInvitations();
+    this.processNextGroupRevocation();
+    await this.armNextExpiration();
   }
 
   async fetch(request) {
@@ -1295,7 +1472,7 @@ export class IntegrationRegistry {
         return noStoreJson(this.revokeIntegration(await request.json()));
       }
       if (request.method === "POST" && url.pathname === "/groups/revoke") {
-        return noStoreJson(this.revokeForGroup(await request.json()));
+        return noStoreJson(await this.revokeForGroup(await request.json()));
       }
       return new Response("Not found", { status: 404 });
     } catch (error) {
