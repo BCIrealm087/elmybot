@@ -117,6 +117,9 @@ health check. The action executor is runtime behavior and is never serialized.
 
 Definitions are installed in an immutable action registry. The first shared
 action, `core.health.check.v1`, backs both Discord `/alive` and Twitch `!alive`.
+The first bidirectional routed action,
+`integration.announcement.publish.v1`, backs Twitch `!announce` with Discord
+effects and Discord `/integration_announce_twitch` with Twitch effects.
 See `docs/action-registry.md` for execution and fail-closed authorization rules.
 
 ### `ActionResult`

@@ -25,6 +25,7 @@ export const PERM_STRINGS = {
 
 export const CAPABILITIES = Object.freeze({
   CONFIG_MANAGE: "config.manage",
+  INTEGRATION_ANNOUNCEMENT_PUBLISH: "integration.announcement.publish",
   INTEGRATION_MANAGE: "integration.manage",
   SCHEDULE_CREATE: "schedule.create",
   SCHEDULE_VIEW: "schedule.view",
@@ -32,6 +33,11 @@ export const CAPABILITIES = Object.freeze({
 });
 
 const CAPABILITY_POLICIES = Object.freeze({
+  [CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS,
+    PERMS.GUILD_ALLOWED_ROLES
+  ]),
   [CAPABILITIES.INTEGRATION_MANAGE]: Object.freeze([
     PERMS.OWNER,
     PERMS.GUILD_MANAGERS

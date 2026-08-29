@@ -1,14 +1,22 @@
+import nacl from "tweetnacl";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { env, runInDurableObject } from "cloudflare:test";
+import {
+  createExecutionContext,
+  env,
+  runInDurableObject,
+  waitOnExecutionContext
+} from "cloudflare:test";
+import worker from "../src/index.js";
 import {
   completeIntegrationInvitation,
   createIntegrationInvitation,
-  defaultTwitchToDiscordRoutes,
+  defaultDiscordTwitchRoutes,
   getIntegrationExecution,
   integrationCoordinatorStub,
   reserveIntegrationInvitation
 } from "../src/integrations/index.js";
 import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
+import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
 import {
   processTwitchStreamOnlineNotification
 } from "../src/platforms/twitch/eventsub-definitions.js";
@@ -27,6 +35,28 @@ const integrationEnv = {
 let sequence = 0;
 const uniqueId = (prefix) => `${prefix}-${++sequence}`;
 
+function toHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function signedDiscordRequest(interaction, keyPair) {
+  const timestamp = `${Math.floor(Date.now() / 1000)}`;
+  const body = JSON.stringify(interaction);
+  const signature = nacl.sign.detached(
+    new TextEncoder().encode(timestamp + body),
+    keyPair.secretKey
+  );
+  return new Request("https://example.com/discord", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Signature-Ed25519": toHex(signature),
+      "X-Signature-Timestamp": timestamp
+    },
+    body
+  });
+}
+
 function invitationToken(invitation) {
   return new URL(invitation.invitationUrl).hash.slice("#invite=".length);
 }
@@ -40,7 +70,7 @@ async function activateRoutedIntegration({
     group: { platform: "discord", kind: "guild", id: guildId },
     actor: { platform: "discord", id: uniqueId("discord-user"), claims: [] },
     connectUrl: "https://example.com/twitch/integrations/connect",
-    routes: defaultTwitchToDiscordRoutes(channelId)
+    routes: defaultDiscordTwitchRoutes(channelId)
   });
   const reservationId = crypto.randomUUID();
   const reservation = await reserveIntegrationInvitation(integrationEnv, {
@@ -74,9 +104,123 @@ async function deliverIntegrationEffects(linked) {
   );
 }
 
-afterEach(() => {
+function twitchAppAuthStub() {
+  return env.TWITCH_APP_AUTH.get(
+    env.TWITCH_APP_AUTH.idFromName(TWITCH_APP_AUTH_OBJECT_NAME)
+  );
+}
+
+async function storeTwitchAppToken() {
+  await runInDurableObject(twitchAppAuthStub(), async (_instance, state) => {
+    await state.storage.put("appAccessToken", {
+      accessToken: "stored-app-access-token",
+      clientId: "client-id",
+      obtainedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 4 * 60 * 60 * 1000
+    });
+  });
+}
+
+afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  await runInDurableObject(
+    twitchAppAuthStub(),
+    async (_instance, state) => state.storage.deleteAll()
+  );
+});
+
+describe("Discord-to-Twitch vertical slice", () => {
+  it("routes an authorized Discord announcement through the Twitch outbox", async () => {
+    const linked = await activateRoutedIntegration();
+    const interaction = {
+      id: uniqueId("discord-interaction"),
+      type: 2,
+      application_id: "discord-app-id",
+      token: uniqueId("interaction-token"),
+      guild_id: linked.guildId,
+      channel_id: linked.channelId,
+      member: {
+        user: { id: uniqueId("discord-moderator") },
+        permissions: "8192",
+        roles: []
+      },
+      data: {
+        name: "integration_announce_twitch",
+        options: [{ name: "message", value: "Hello linked Twitch chat!" }]
+      }
+    };
+    const keyPair = nacl.sign.keyPair();
+    const patchMock = vi.fn(async (url, init) => {
+      expect(url).toContain(
+        `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`
+      );
+      expect(JSON.parse(init.body).content)
+        .toBe("Announcement queued for 1 Twitch channel.");
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", patchMock);
+    const ctx = createExecutionContext();
+    const response = await worker.fetch(
+      signedDiscordRequest(interaction, keyPair),
+      { ...integrationEnv, PUBLIC_KEY: toHex(keyPair.publicKey) },
+      ctx
+    );
+    expect(await response.json()).toEqual({
+      type: 5,
+      data: { flags: 64, allowed_mentions: { parse: [] } }
+    });
+    await waitOnExecutionContext(ctx);
+    expect(patchMock).toHaveBeenCalledOnce();
+
+    const sourceEventId = `discord:interaction:${interaction.id}`;
+    expect(await getIntegrationExecution(
+      integrationEnv,
+      linked.integration.id,
+      sourceEventId
+    )).toMatchObject({
+      sourceGroupKey: `discord:guild:${linked.guildId}`,
+      state: "pending",
+      effects: [{
+        kind: "twitch.chat.send.v1",
+        state: "pending",
+        targetGroupKey: `twitch:channel:${linked.broadcasterId}`
+      }]
+    });
+
+    await storeTwitchAppToken();
+    const fetchMock = vi.fn(async (url, init) => {
+      expect(url).toBe("https://api.twitch.tv/helix/chat/messages");
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer stored-app-access-token",
+        "Client-Id": "client-id"
+      });
+      expect(JSON.parse(init.body)).toEqual({
+        broadcaster_id: linked.broadcasterId,
+        sender_id: "bot-user-id",
+        message: "Hello linked Twitch chat!"
+      });
+      return Response.json({
+        data: [{ message_id: "twitch-message-id", is_sent: true }]
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await deliverIntegrationEffects(linked);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(await getIntegrationExecution(
+      integrationEnv,
+      linked.integration.id,
+      sourceEventId
+    )).toMatchObject({
+      state: "completed",
+      effects: [{
+        state: "delivered",
+        attempts: 1,
+        result: { messageId: "twitch-message-id" }
+      }]
+    });
+  });
 });
 
 describe("Twitch-to-Discord vertical slices", () => {

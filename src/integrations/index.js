@@ -43,11 +43,12 @@ export {
 
 export {
   createDiscordMessageEffects,
+  createRoutedMessageEffects,
   resolveRoutes,
   submitRoutedEffects
 } from "./routing.js";
 
 export {
-  defaultTwitchToDiscordRoutes,
+  defaultDiscordTwitchRoutes,
   INTEGRATION_ROUTE_KINDS
 } from "./routes.js";

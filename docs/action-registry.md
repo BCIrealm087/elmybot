@@ -12,6 +12,7 @@ The registry currently demonstrates both a local action and a routed action:
 | Discord `/alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
 | Twitch `!alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
 | Twitch `!announce <message>` | `integration.announcement.publish.v1` | Acknowledgement plus one Discord effect per configured route |
+| Discord `/integration_announce_twitch` | `integration.announcement.publish.v1` | Acknowledgement plus one Twitch effect per configured route |
 
 This proves that one action can be exposed through different native command
 systems without making either platform conform to the other's transport.
@@ -49,7 +50,9 @@ anything other than `true` denies execution.
 The registry does not treat claims as capabilities. The Twitch adapter's
 explicit policy permits `integration.announcement.publish` only when the
 authenticated EventSub actor has a `twitch.broadcaster` or
-`twitch.moderator` claim. Display names and message text never grant authority.
+`twitch.moderator` claim. The Discord adapter accepts that capability only after
+the signed interaction passes the command router's owner, moderator, or
+configured-role policy. Display names and message text never grant authority.
 
 ## Action results
 
@@ -72,6 +75,9 @@ external work. Alive has no effects and does not require an integration or the
 outbox. Announce resolves every enabled `twitch.announce-to-discord.v1` route,
 creates a `discord.message.send.v1` effect for each, groups the results by
 integration, and submits them to the corresponding durable coordinator.
+The same action resolves `discord.announce-to-twitch.v1` for Discord ingress
+and emits `twitch.chat.send.v1` effects. Platform limits stay in their adapters:
+Discord content permits 2000 characters, while Twitch chat permits 500.
 
 ## Platform adapters
 

@@ -12,19 +12,29 @@ per-integration execution ledger and effect outbox. See
 
 ## Discord commands
 
-The link lifecycle is exposed through three guild-only deferred commands:
+Linking and its first routed command are exposed through four guild-only
+deferred commands:
 
 - `/integration_link_twitch` creates a one-use Twitch broadcaster invitation
   and uses the command's Discord channel as the initial cross-platform message
   destination.
 - `/integration_list` lists the server's active integrations and their IDs.
+- `/integration_announce_twitch message:<text>` sends an authorized message to
+  every linked Twitch channel.
 - `/integration_unlink integration_id:<id>` revokes one integration without
   disconnecting the Twitch channel from Elmybot generally.
 
-All three require `integration.manage`. This capability is intentionally stricter
-than scheduling and general configuration: only the Discord server owner or a
-member with Administrator or Manage Server can use it. Configured scheduling
-roles and other moderator permissions do not grant link management.
+The three lifecycle commands require `integration.manage`. This capability is
+intentionally stricter than scheduling and general configuration: only the
+Discord server owner or a member with Administrator or Manage Server can use
+it. Configured scheduling roles and other moderator permissions do not grant
+link management.
+
+`/integration_announce_twitch` instead requires
+`integration.announcement.publish`. The server owner, intrinsic Discord
+moderators, and roles already configured for bot commands may publish. The
+action registry still fails closed unless the Discord command router supplies
+that exact authorized capability.
 
 The Discord command router still verifies the interaction signature before
 evaluating the capability or contacting the registry.
@@ -73,10 +83,11 @@ audit history while excluding the relationship from active routing and listing.
 
 ## Initial routes
 
-Each new Discord invitation seeds two independently versioned routes:
+Each new Discord invitation seeds three independently versioned routes:
 
 | Route kind | Source | Outcome |
 | --- | --- | --- |
+| `discord.announce-to-twitch.v1` | Authorized Discord command | Send the announcement to the authenticated Twitch channel's chat |
 | `twitch.stream-online-to-discord.v1` | Twitch channel | Send a stream-online notice to the invitation's Discord channel |
 | `twitch.announce-to-discord.v1` | Authorized Twitch command | Send the announcement to the invitation's Discord channel |
 
@@ -86,7 +97,9 @@ may fan out to several coordinators. The registry caps one event at 25 routes,
 matching the shared action and execution contract limits.
 
 Repeating the link flow for an already active Discord–Twitch pair updates these
-initial route destinations to the channel where the new link command was run.
+initial routes. Discord-bound messages use the channel where the new link
+command was run; Twitch-bound messages target the Twitch channel authenticated
+during OAuth.
 Dedicated route inspection, enable/disable, and destination management remain
 separate management functionality rather than hidden command behavior.
 

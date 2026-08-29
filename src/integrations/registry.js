@@ -235,21 +235,27 @@ function validatedInvitationRoutes(value) {
     const sourcePlatform = validatedRoutePlatform(route?.sourcePlatform);
     const targetPlatform = validatedRoutePlatform(route?.targetPlatform);
     if (
-      sourcePlatform !== "twitch" ||
-      targetPlatform !== "discord" ||
+      sourcePlatform === targetPlatform ||
+      ![sourcePlatform, targetPlatform].includes("twitch") ||
+      ![sourcePlatform, targetPlatform].includes("discord") ||
       !kind.startsWith(`${sourcePlatform}.`)
     ) {
       throw new IntegrationRegistryError(
-        "This invitation only supports Twitch-to-Discord routes."
+        "This invitation only supports routes between Twitch and Discord."
       );
     }
     const { destination, serialized } = validatedRouteDestination(route?.destination);
-    if (
+    if (targetPlatform === "discord" && (
       typeof destination.channelId !== "string" ||
       !OPAQUE_ID_PATTERN.test(destination.channelId)
-    ) {
+    )) {
       throw new IntegrationRegistryError(
         "Discord integration routes require a valid destination channel."
+      );
+    }
+    if (targetPlatform === "twitch" && Object.keys(destination).length !== 0) {
+      throw new IntegrationRegistryError(
+        "Twitch integration routes do not accept a separate destination."
       );
     }
     return { kind, sourcePlatform, targetPlatform, destination, serialized };
@@ -774,9 +780,19 @@ export class IntegrationRegistry {
         invitationId
       ).toArray();
       for (const route of routes) {
-        if (route.source_platform !== "twitch" || route.target_platform !== "discord") {
+        if (
+          route.source_platform === route.target_platform ||
+          ![route.source_platform, route.target_platform].includes("twitch") ||
+          ![route.source_platform, route.target_platform].includes("discord")
+        ) {
           throw new IntegrationRegistryError("The invitation route is invalid.");
         }
+        const sourceGroupKey = route.source_platform === "twitch"
+          ? twitchGroup.key
+          : invitation.discord_group_key;
+        const targetGroupKey = route.target_platform === "twitch"
+          ? twitchGroup.key
+          : invitation.discord_group_key;
         this.state.storage.sql.exec(
           `INSERT INTO integration_routes
             (integration_id, route_kind, source_group_key, target_group_key,
@@ -790,8 +806,8 @@ export class IntegrationRegistry {
              updated_at_ms = excluded.updated_at_ms`,
           integrationId,
           route.route_kind,
-          twitchGroup.key,
-          invitation.discord_group_key,
+          sourceGroupKey,
+          targetGroupKey,
           route.destination_json,
           nowMs,
           nowMs

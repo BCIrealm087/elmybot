@@ -120,6 +120,7 @@ class CommandUserFacingError extends Error {
 
 async function handleCommand(interaction, env, command) {
   let commandResult;
+  let authorizedCapability = null;
   const def = command.definition;
   const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
   const sourceInteraction = interaction;
@@ -139,6 +140,7 @@ async function handleCommand(interaction, env, command) {
       if (!permStatus.ok) throw new CommandUserFacingError(
         `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
       );
+      authorizedCapability = capability;
     } else {
       // Commands without an explicit guild descriptor receive a shallow copy
       // without guild access. The source adapter separately retains the
@@ -146,7 +148,8 @@ async function handleCommand(interaction, env, command) {
       interaction = { ...interaction, guild_id: undefined };
     }
     commandResult = await def.exec(interaction, env, command.name, {
-      sourceInteraction
+      sourceInteraction,
+      authorizedCapability
     });
   } catch (e) {
     if (e instanceof CommandUserFacingError) {

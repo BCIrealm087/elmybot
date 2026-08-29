@@ -5,6 +5,7 @@ import {
 import { submitIntegrationExecution } from "./coordinator.js";
 import { resolveIntegrationRoutes } from "./registry.js";
 import { DISCORD_EFFECT_KINDS } from "../platforms/discord/integration-effects.js";
+import { TWITCH_EFFECT_KINDS } from "../platforms/twitch/integration-effects.js";
 
 export async function resolveRoutes(env, sourceGroup, routeKind) {
   const result = await resolveIntegrationRoutes(env, {
@@ -32,6 +33,41 @@ export function createDiscordMessageEffects(routes, {
     correlationId,
     causationId: sourceEventId
   }));
+}
+
+export function createRoutedMessageEffects(routes, {
+  message,
+  sourceEventId,
+  correlationId
+}) {
+  return routes.map((route) => {
+    let kind;
+    let payload;
+    if (route.targetGroup.platform === "discord") {
+      kind = DISCORD_EFFECT_KINDS.SEND_MESSAGE;
+      payload = { content: message };
+    } else if (route.targetGroup.platform === "twitch") {
+      kind = TWITCH_EFFECT_KINDS.SEND_CHAT_MESSAGE;
+      payload = { message };
+    } else {
+      throw new TypeError(
+        `Unsupported routed message platform: ${route.targetGroup.platform}.`
+      );
+    }
+    return createEffect({
+      kind,
+      target: {
+        group: route.targetGroup,
+        destination: route.destination
+      },
+      payload,
+      integration: route.integration,
+      idempotencyKey:
+        `${sourceEventId}:integration:${route.integration.id}:route:${route.kind}`,
+      correlationId,
+      causationId: sourceEventId
+    });
+  });
 }
 
 export async function submitRoutedEffects(env, {

@@ -107,13 +107,15 @@ afterEach(() => {
 });
 
 describe("Cross-platform integration linking", () => {
-  it("reserves integration management for server owners and managers", async () => {
+  it("keeps link management strict while allowing moderators to publish", async () => {
     expect(commands.integration_link_twitch.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_list.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_unlink.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
+    expect(commands.integration_announce_twitch.guild.capability)
+      .toBe(CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH);
 
     const guildId = uniqueId("guild");
     const manager = await checkPermissions({
@@ -136,6 +138,29 @@ describe("Cross-platform integration linking", () => {
       }
     }, integrationEnv, { capability: CAPABILITIES.INTEGRATION_MANAGE });
     expect(ordinaryModerator.ok).toBe(false);
+    const announcementPublisher = await checkPermissions({
+      guild_id: guildId,
+      member: {
+        permissions: "8192",
+        roles: [],
+        user: { id: uniqueId("moderator") }
+      }
+    }, integrationEnv, {
+      capability: CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH
+    });
+    expect(announcementPublisher.ok).toBe(true);
+
+    const ordinaryMember = await checkPermissions({
+      guild_id: guildId,
+      member: {
+        permissions: "0",
+        roles: [],
+        user: { id: uniqueId("ordinary-member") }
+      }
+    }, integrationEnv, {
+      capability: CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH
+    });
+    expect(ordinaryMember.ok).toBe(false);
   });
 
   it("creates a hashed, short-lived invitation and reserves it once", async () => {
@@ -172,12 +197,26 @@ describe("Cross-platform integration linking", () => {
           `SELECT route_kind, source_platform, target_platform, destination_json
            FROM integration_invitation_routes ORDER BY route_kind`
         ).toArray();
-        expect(routes).toHaveLength(2);
-        expect(routes.every((route) =>
-          route.source_platform === "twitch" &&
-          route.target_platform === "discord" &&
-          JSON.parse(route.destination_json).channelId === channelId
-        )).toBe(true);
+        expect(routes).toEqual([
+          {
+            route_kind: "discord.announce-to-twitch.v1",
+            source_platform: "discord",
+            target_platform: "twitch",
+            destination_json: "{}"
+          },
+          {
+            route_kind: "twitch.announce-to-discord.v1",
+            source_platform: "twitch",
+            target_platform: "discord",
+            destination_json: JSON.stringify({ channelId })
+          },
+          {
+            route_kind: "twitch.stream-online-to-discord.v1",
+            source_platform: "twitch",
+            target_platform: "discord",
+            destination_json: JSON.stringify({ channelId })
+          }
+        ]);
       }
     );
 

@@ -1,8 +1,12 @@
 import { CAPABILITIES } from "./discord-permissions.js";
-import { CORE_ACTION_KINDS } from "../../actions/index.js";
+import {
+  CORE_ACTION_KINDS,
+  INTEGRATION_ACTION_KINDS
+} from "../../actions/index.js";
 import {
   discordTextActionResponse,
-  executeDiscordAction
+  executeDiscordAction,
+  executeDiscordRoutedAction
 } from "./actions.js";
 import { getOption, ephemeralData, formatInterval } from "./common.js";
 import { DeliveryError } from "../../message-scheduling/index.js";
@@ -10,7 +14,8 @@ import { sendDiscordChannelMessage } from "./delivery.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import {
   createIntegrationInvitation,
-  defaultTwitchToDiscordRoutes,
+  defaultDiscordTwitchRoutes,
+  INTEGRATION_ROUTE_KINDS,
   IntegrationRegistryError,
   listIntegrationsForGroup,
   revokeIntegration
@@ -364,7 +369,7 @@ export const commands = {
           group: discordIntegrationGroup(interaction),
           actor: discordIntegrationActor(interaction),
           connectUrl: twitchPublicUrl(env, "/twitch/integrations/connect"),
-          routes: defaultTwitchToDiscordRoutes(interaction.channel_id)
+          routes: defaultDiscordTwitchRoutes(interaction.channel_id)
         })
       );
       if (userFacingError) return ephemeralData(userFacingError);
@@ -373,7 +378,8 @@ export const commands = {
         `Open this one-use invitation to link a Twitch channel to this server:\n` +
         `<${result.invitationUrl}>\n` +
         `It expires <t:${expiresAt}:R>. Only the Twitch broadcaster can complete it. ` +
-        `Stream notices and Twitch announcements will be sent to this channel.`
+        `Stream notices and Twitch announcements will be sent to this channel, ` +
+        `and authorized Discord announcements can be sent to the linked Twitch chat.`
       );
     }
   },
@@ -396,6 +402,42 @@ export const commands = {
       return ephemeralData(
         `Active integrations (${result.total} total, showing ${result.integrations.length}):\n${shown}`
       );
+    }
+  },
+
+  "integration_announce_twitch": {
+    description: "Publish an announcement to linked Twitch channels.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH
+    },
+    deferred: true,
+    options: [
+      {
+        name: "message",
+        description: "Message to send to linked Twitch chats.",
+        type: 3,
+        required: true,
+        max_length: 500
+      }
+    ],
+    exec: async (interaction, env, _name, context) => {
+      const message = String(getOption(interaction, "message") ?? "").trim();
+      if (message.length === 0) {
+        return ephemeralData("Announcement message is required.");
+      }
+      if (message.length > 500) {
+        return ephemeralData("Twitch announcements must not exceed 500 characters.");
+      }
+      return discordTextActionResponse(await executeDiscordRoutedAction(
+        context.sourceInteraction,
+        INTEGRATION_ACTION_KINDS.PUBLISH_ANNOUNCEMENT,
+        { message },
+        {
+          env,
+          routeKind: INTEGRATION_ROUTE_KINDS.DISCORD_ANNOUNCE_TO_TWITCH,
+          authorizedCapability: context.authorizedCapability
+        }
+      ));
     }
   },
 
