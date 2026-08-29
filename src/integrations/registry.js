@@ -1,11 +1,41 @@
 import { jsonResponse, logError } from "../common.js";
+import { initializeRegistryTables } from "./registry-schema.js";
 import {
-  createPlatformActorRef,
-  createPlatformGroupRef,
-  IntegrationContractError
-} from "./contracts.js";
+  audit,
+  boundedLabel,
+  IntegrationRegistryError,
+  invitationTokenHash,
+  isValidOpaqueId,
+  parseGroupKey,
+  publicMember,
+  publicRoute,
+  randomInvitationToken,
+  validatedActor,
+  validatedConnectUrl,
+  validatedGroup,
+  validatedInvitationRoutes,
+  validatedOpaqueId,
+  validatedRouteDestination,
+  validatedRouteKind
+} from "./registry-validation.js";
 
-export const INTEGRATION_REGISTRY_NAME = "integration:registry";
+export {
+  completeIntegrationInvitation,
+  createIntegrationInvitation,
+  getIntegrationById,
+  getIntegrationManagementStatus,
+  INTEGRATION_REGISTRY_NAME,
+  integrationRegistryStub,
+  listIntegrationAudit,
+  listIntegrationsForGroup,
+  reserveIntegrationInvitation,
+  resolveIntegrationRoutes,
+  revokeIntegration,
+  revokeIntegrationsForGroup,
+  updateIntegrationRoute
+} from "./registry-client.js";
+export { IntegrationRegistryError } from "./registry-validation.js";
+
 export const INTEGRATION_INVITATION_TTL_MS = 15 * 60 * 1000;
 export const INTEGRATION_INVITATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -13,533 +43,12 @@ const MAX_OAUTH_RESERVATION_TTL_MS = 15 * 60 * 1000;
 const REGISTRY_MAINTENANCE_BATCH_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 25;
-const INVITATION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
-const OPAQUE_ID_PATTERN = /^[^\s:]{1,200}$/;
-const VERSIONED_KIND_PATTERN =
-  /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
-const PLATFORM_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
-const MAX_INVITATION_ROUTES = 25;
 const MAX_ROUTE_FANOUT = 25;
-const MAX_ROUTE_DESTINATION_BYTES = 8 * 1024;
-
-export class IntegrationRegistryError extends Error {
-  constructor(message, {
-    status = 400,
-    code = "integration_registry_error"
-  } = {}) {
-    super(message);
-    this.name = "IntegrationRegistryError";
-    this.status = status;
-    this.code = code;
-  }
-}
 
 function noStoreJson(value, status = 200) {
   const response = jsonResponse(value, status);
   response.headers.set("cache-control", "no-store");
   return response;
-}
-
-function initializeRegistryTables(state) {
-  state.storage.sql.exec(`
-    CREATE TABLE IF NOT EXISTS integration_invitations (
-      invitation_id TEXT PRIMARY KEY,
-      token_hash TEXT UNIQUE,
-      discord_group_key TEXT NOT NULL,
-      discord_group_id TEXT NOT NULL,
-      discord_group_label TEXT,
-      discord_actor_id TEXT NOT NULL,
-      status TEXT NOT NULL,
-      reservation_id TEXT,
-      created_at_ms INTEGER NOT NULL,
-      expires_at_ms INTEGER NOT NULL,
-      reserved_at_ms INTEGER,
-      reservation_expires_at_ms INTEGER,
-      completed_at_ms INTEGER,
-      completed_integration_id TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS integration_invitations_expiry
-      ON integration_invitations(status, expires_at_ms, reservation_expires_at_ms);
-
-    CREATE INDEX IF NOT EXISTS integration_invitations_pending_expiry
-      ON integration_invitations(status, expires_at_ms);
-
-    CREATE INDEX IF NOT EXISTS integration_invitations_reservation_expiry
-      ON integration_invitations(status, reservation_expires_at_ms);
-
-    CREATE INDEX IF NOT EXISTS integration_invitations_completed
-      ON integration_invitations(status, completed_at_ms);
-
-    CREATE TABLE IF NOT EXISTS integration_invitation_routes (
-      invitation_id TEXT NOT NULL,
-      route_kind TEXT NOT NULL,
-      source_platform TEXT NOT NULL,
-      target_platform TEXT NOT NULL,
-      destination_json TEXT NOT NULL,
-      PRIMARY KEY (invitation_id, route_kind)
-    );
-
-    CREATE TABLE IF NOT EXISTS integrations (
-      integration_id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL,
-      activated_at_ms INTEGER NOT NULL,
-      revoked_at_ms INTEGER,
-      revoked_reason TEXT,
-      created_by_platform TEXT NOT NULL,
-      created_by_actor_id TEXT NOT NULL,
-      completed_by_platform TEXT NOT NULL,
-      completed_by_actor_id TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS integration_members (
-      integration_id TEXT NOT NULL,
-      group_key TEXT NOT NULL,
-      platform TEXT NOT NULL,
-      group_kind TEXT NOT NULL,
-      group_id TEXT NOT NULL,
-      label TEXT,
-      joined_at_ms INTEGER NOT NULL,
-      PRIMARY KEY (integration_id, group_key)
-    );
-
-    CREATE INDEX IF NOT EXISTS integration_members_group
-      ON integration_members(group_key, integration_id);
-
-    CREATE INDEX IF NOT EXISTS integrations_status_created
-      ON integrations(status, created_at_ms, integration_id);
-
-    CREATE TABLE IF NOT EXISTS integration_routes (
-      integration_id TEXT NOT NULL,
-      route_kind TEXT NOT NULL,
-      source_group_key TEXT NOT NULL,
-      target_group_key TEXT NOT NULL,
-      destination_json TEXT NOT NULL,
-      enabled INTEGER NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL,
-      PRIMARY KEY (integration_id, route_kind)
-    );
-
-    CREATE INDEX IF NOT EXISTS integration_routes_source
-      ON integration_routes(source_group_key, route_kind, enabled, integration_id);
-
-    CREATE TABLE IF NOT EXISTS integration_audit (
-      audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      integration_id TEXT,
-      invitation_id TEXT,
-      event TEXT NOT NULL,
-      actor_platform TEXT,
-      actor_id TEXT,
-      group_key TEXT,
-      occurred_at_ms INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS integration_audit_integration
-      ON integration_audit(integration_id, occurred_at_ms);
-
-    CREATE TABLE IF NOT EXISTS integration_group_revocations (
-      group_key TEXT PRIMARY KEY,
-      actor_platform TEXT,
-      actor_id TEXT,
-      reason TEXT NOT NULL,
-      requested_at_ms INTEGER NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
-      ON integration_group_revocations(requested_at_ms, group_key);
-  `);
-}
-
-function registryErrorFromContract(error, subject) {
-  if (error instanceof IntegrationContractError) {
-    throw new IntegrationRegistryError(`${subject} is invalid.`, {
-      code: "integration_identity_invalid"
-    });
-  }
-  throw error;
-}
-
-function validatedGroup(value, {
-  platform = null,
-  kind = null,
-  subject = "Integration group"
-} = {}) {
-  let group;
-  try {
-    group = createPlatformGroupRef(value);
-  } catch (error) {
-    registryErrorFromContract(error, subject);
-  }
-  if (
-    (platform !== null && group.platform !== platform) ||
-    (kind !== null && group.kind !== kind)
-  ) {
-    throw new IntegrationRegistryError(`${subject} is invalid.`, {
-      code: "integration_identity_invalid"
-    });
-  }
-  return group;
-}
-
-function validatedActor(value, platform, subject = "Integration actor") {
-  let actor;
-  try {
-    actor = createPlatformActorRef(value);
-  } catch (error) {
-    registryErrorFromContract(error, subject);
-  }
-  if (actor.platform !== platform) {
-    throw new IntegrationRegistryError(`${subject} does not match its group.`, {
-      status: 403,
-      code: "integration_actor_platform_mismatch"
-    });
-  }
-  return actor;
-}
-
-function validatedOpaqueId(value, subject) {
-  if (typeof value !== "string" || !OPAQUE_ID_PATTERN.test(value)) {
-    throw new IntegrationRegistryError(`${subject} is invalid.`);
-  }
-  return value;
-}
-
-function validatedRouteKind(value) {
-  if (
-    typeof value !== "string" ||
-    value.length > 200 ||
-    !VERSIONED_KIND_PATTERN.test(value)
-  ) {
-    throw new IntegrationRegistryError("Integration route kind is invalid.");
-  }
-  return value;
-}
-
-function validatedRoutePlatform(value) {
-  if (typeof value !== "string" || !PLATFORM_PATTERN.test(value)) {
-    throw new IntegrationRegistryError("Integration route platform is invalid.");
-  }
-  return value;
-}
-
-function validatedRouteDestination(value) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new IntegrationRegistryError("Integration route destination is invalid.");
-  }
-  let serialized;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    throw new IntegrationRegistryError("Integration route destination is invalid.");
-  }
-  if (
-    serialized === undefined ||
-    new TextEncoder().encode(serialized).byteLength > MAX_ROUTE_DESTINATION_BYTES
-  ) {
-    throw new IntegrationRegistryError("Integration route destination is invalid.");
-  }
-  const destination = JSON.parse(serialized);
-  if (typeof destination !== "object" || destination === null || Array.isArray(destination)) {
-    throw new IntegrationRegistryError("Integration route destination is invalid.");
-  }
-  return { destination, serialized };
-}
-
-function validatedInvitationRoutes(value) {
-  const routes = value ?? [];
-  if (!Array.isArray(routes) || routes.length > MAX_INVITATION_ROUTES) {
-    throw new IntegrationRegistryError(
-      `Integration invitations may contain at most ${MAX_INVITATION_ROUTES} routes.`
-    );
-  }
-  const normalized = routes.map((route) => {
-    const kind = validatedRouteKind(route?.kind);
-    const sourcePlatform = validatedRoutePlatform(route?.sourcePlatform);
-    const targetPlatform = validatedRoutePlatform(route?.targetPlatform);
-    if (
-      sourcePlatform === targetPlatform ||
-      ![sourcePlatform, targetPlatform].includes("twitch") ||
-      ![sourcePlatform, targetPlatform].includes("discord") ||
-      !kind.startsWith(`${sourcePlatform}.`)
-    ) {
-      throw new IntegrationRegistryError(
-        "This invitation only supports routes between Twitch and Discord."
-      );
-    }
-    const { destination, serialized } = validatedRouteDestination(route?.destination);
-    if (targetPlatform === "discord" && (
-      typeof destination.channelId !== "string" ||
-      !OPAQUE_ID_PATTERN.test(destination.channelId)
-    )) {
-      throw new IntegrationRegistryError(
-        "Discord integration routes require a valid destination channel."
-      );
-    }
-    if (targetPlatform === "twitch" && Object.keys(destination).length !== 0) {
-      throw new IntegrationRegistryError(
-        "Twitch integration routes do not accept a separate destination."
-      );
-    }
-    return { kind, sourcePlatform, targetPlatform, destination, serialized };
-  });
-  if (new Set(normalized.map(({ kind }) => kind)).size !== normalized.length) {
-    throw new IntegrationRegistryError("Integration invitation route kinds must be unique.");
-  }
-  return normalized;
-}
-
-function boundedLabel(value) {
-  return typeof value === "string" && value.length > 0
-    ? value.slice(0, 128)
-    : null;
-}
-
-function validatedConnectUrl(value) {
-  let url;
-  try {
-    url = new URL(value);
-  } catch {
-    throw new IntegrationRegistryError("The integration invitation URL is invalid.");
-  }
-  if (url.protocol !== "https:" || url.pathname !== "/twitch/integrations/connect") {
-    throw new IntegrationRegistryError("The integration invitation URL is invalid.");
-  }
-  url.search = "";
-  url.hash = "";
-  return url.href;
-}
-
-function randomInvitationToken() {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-async function invitationTokenHash(token) {
-  if (typeof token !== "string" || !INVITATION_TOKEN_PATTERN.test(token)) {
-    throw new IntegrationRegistryError("The integration invitation is invalid or expired.", {
-      code: "integration_invitation_invalid"
-    });
-  }
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(token)
-  );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0")
-  ).join("");
-}
-
-function parseGroupKey(value) {
-  if (typeof value !== "string") {
-    throw new IntegrationRegistryError("Integration group key is invalid.");
-  }
-  const [platform, kind, id, ...extra] = value.split(":");
-  if (extra.length > 0) {
-    throw new IntegrationRegistryError("Integration group key is invalid.");
-  }
-  return validatedGroup({ platform, kind, id });
-}
-
-function audit(sql, {
-  integrationId = null,
-  invitationId = null,
-  event,
-  actor = null,
-  groupKey = null,
-  occurredAtMs = Date.now()
-}) {
-  sql.exec(
-    `INSERT INTO integration_audit
-      (integration_id, invitation_id, event, actor_platform, actor_id,
-       group_key, occurred_at_ms)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    integrationId,
-    invitationId,
-    event,
-    actor?.platform ?? null,
-    actor?.id ?? null,
-    groupKey,
-    occurredAtMs
-  );
-}
-
-function publicMember(row) {
-  return {
-    group: {
-      platform: row.platform,
-      kind: row.group_kind,
-      id: row.group_id,
-      key: row.group_key
-    },
-    label: row.label ?? null,
-    joinedAtMs: row.joined_at_ms
-  };
-}
-
-function publicRoute(row) {
-  return {
-    kind: row.route_kind,
-    integration: {
-      id: row.integration_id,
-      key: `integration:${row.integration_id}`
-    },
-    sourceGroup: parseGroupKey(row.source_group_key),
-    targetGroup: parseGroupKey(row.target_group_key),
-    destination: validatedRouteDestination(JSON.parse(row.destination_json)).destination,
-    enabled: Boolean(row.enabled),
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms
-  };
-}
-
-export function integrationRegistryStub(env) {
-  if (!env.INTEGRATION_REGISTRY) {
-    throw new IntegrationRegistryError("The integration registry is not configured.", {
-      status: 503,
-      code: "integration_registry_not_configured"
-    });
-  }
-  return env.INTEGRATION_REGISTRY.get(
-    env.INTEGRATION_REGISTRY.idFromName(INTEGRATION_REGISTRY_NAME)
-  );
-}
-
-async function checkedRegistryResponse(response) {
-  let result;
-  try {
-    result = await response.json();
-  } catch {
-    result = null;
-  }
-  if (!response.ok) {
-    throw new IntegrationRegistryError(
-      result?.error || "The integration registry request failed.",
-      {
-        status: response.status,
-        code: result?.code || "integration_registry_request_failed"
-      }
-    );
-  }
-  return result;
-}
-
-export async function createIntegrationInvitation(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/invitations",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function reserveIntegrationInvitation(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/invitations/reserve",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function completeIntegrationInvitation(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/invitations/complete",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function listIntegrationsForGroup(env, group, { limit } = {}) {
-  group = validatedGroup(group);
-  const url = new URL("https://integration-registry/integrations");
-  url.searchParams.set("groupKey", group.key);
-  if (limit !== undefined) url.searchParams.set("limit", String(limit));
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(url));
-}
-
-export async function getIntegrationById(env, integrationId) {
-  integrationId = validatedOpaqueId(integrationId, "Integration ID");
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    `https://integration-registry/integrations/${encodeURIComponent(integrationId)}`
-  ));
-}
-
-export async function getIntegrationManagementStatus(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/integrations/status",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function updateIntegrationRoute(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/routes/update",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function listIntegrationAudit(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/audit",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function revokeIntegration(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/integrations/revoke",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function revokeIntegrationsForGroup(env, input) {
-  if (!env.INTEGRATION_REGISTRY) return { revoked: 0 };
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/groups/revoke",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
-}
-
-export async function resolveIntegrationRoutes(env, input) {
-  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
-    "https://integration-registry/routes/resolve",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input)
-    }
-  ));
 }
 
 export class IntegrationRegistry {
@@ -833,7 +342,7 @@ export class IntegrationRegistry {
       const { destination, serialized } = validatedRouteDestination(input.destination);
       if (targetGroup.platform === "discord" && (
         typeof destination.channelId !== "string" ||
-        !OPAQUE_ID_PATTERN.test(destination.channelId)
+        !isValidOpaqueId(destination.channelId)
       )) {
         throw new IntegrationRegistryError(
           "Discord integration routes require a valid destination channel."
