@@ -299,7 +299,7 @@ describe("Twitch broadcaster OAuth", () => {
 		});
 
 		const healthResponse = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=25", {
+			new Request("https://example.com/twitch/channels/health?limit=20", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			channelOAuthEnv,
@@ -426,7 +426,7 @@ describe("Twitch broadcaster OAuth", () => {
 			}
 		});
 		const healthResponse = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=25", {
+			new Request("https://example.com/twitch/channels/health?limit=20", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			channelOAuthEnv,
@@ -510,7 +510,7 @@ describe("Twitch broadcaster OAuth", () => {
 			}
 		});
 		const healthResponse = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=25", {
+			new Request("https://example.com/twitch/channels/health?limit=20", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			channelOAuthEnv,

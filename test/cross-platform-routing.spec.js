@@ -33,7 +33,7 @@ const integrationEnv = {
 };
 
 let sequence = 0;
-const uniqueId = (prefix) => `${prefix}-${++sequence}`;
+const uniqueId = (prefix) => `${prefix}-cross-platform-${++sequence}`;
 
 function toHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

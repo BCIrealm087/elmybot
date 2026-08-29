@@ -52,6 +52,13 @@ and creates missing subscriptions. Deconfiguration removes every registered
 type owned by the bot. The protected manual creation endpoint accepts an
 optional `kind` and defaults to the existing chat definition for compatibility.
 
+The protected aggregate channel-health endpoint remains a live view of the
+per-channel authorization and EventSub Durable Objects. Its cursor-paginated
+page size is capped at 20 channels, keeping an all-broadcaster-OAuth page to at
+most 41 internal requests including the registry lookup. Health collection
+processes four channels at a time, so no more than eight component requests are
+in flight concurrently.
+
 ## Durable acceptance
 
 After signature verification and JSON parsing, a definition may reject a

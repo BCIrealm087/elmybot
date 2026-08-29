@@ -3,7 +3,11 @@ import { jsonResponse, logError } from "../../common.js";
 export const TWITCH_CHANNEL_REGISTRY_NAME = "twitch:channel-registry";
 
 const DEFAULT_PAGE_SIZE = 20;
-const MAX_PAGE_SIZE = 25;
+// A full broadcaster-OAuth page costs one registry request plus two component
+// requests per channel: 1 + (20 * 2) = 41. Four concurrent channels cap the
+// component fan-out at eight in-flight requests while preserving live status.
+const MAX_PAGE_SIZE = 20;
+const HEALTH_CHANNEL_CONCURRENCY = 4;
 const AUTHORIZATION_MODES = new Set(["moderator", "broadcaster_oauth"]);
 
 function channelAuthObjectName(broadcasterUserId) {
@@ -197,6 +201,25 @@ async function channelHealth(env, entry) {
 	};
 }
 
+async function mapWithConcurrency(items, concurrency, mapper) {
+	const results = new Array(items.length);
+	let nextIndex = 0;
+	async function run() {
+		while (nextIndex < items.length) {
+			const index = nextIndex;
+			nextIndex += 1;
+			results[index] = await mapper(items[index]);
+		}
+	}
+	await Promise.all(
+		Array.from(
+			{ length: Math.min(concurrency, items.length) },
+			() => run()
+		)
+	);
+	return results;
+}
+
 export async function handleTwitchChannelHealth(request, env) {
 	try {
 		if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
@@ -215,8 +238,10 @@ export async function handleTwitchChannelHealth(request, env) {
 		const page = await checkedRegistryResponse(
 			await registryStub(env).fetch(registryUrl)
 		);
-		const channels = await Promise.all(
-			page.channels.map((entry) => channelHealth(env, entry))
+		const channels = await mapWithConcurrency(
+			page.channels,
+			HEALTH_CHANNEL_CONCURRENCY,
+			(entry) => channelHealth(env, entry)
 		);
 		const summary = {};
 		for (const channel of channels) {

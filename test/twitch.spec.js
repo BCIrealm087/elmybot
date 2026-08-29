@@ -11,6 +11,7 @@ import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
+	handleTwitchChannelHealth,
 	TWITCH_CHANNEL_REGISTRY_NAME
 } from "../src/platforms/twitch/channel-registry.js";
 import {
@@ -1187,7 +1188,7 @@ describe("Twitch EventSub management", () => {
 		);
 
 		const response = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=25", {
+			new Request("https://example.com/twitch/channels/health?limit=20", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			eventSubEnv,
@@ -1226,7 +1227,7 @@ describe("Twitch EventSub management", () => {
 		expect(unauthorized.status).toBe(401);
 
 		const response = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=26", {
+			new Request("https://example.com/twitch/channels/health?limit=21", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			eventSubEnv,
@@ -1236,6 +1237,55 @@ describe("Twitch EventSub management", () => {
 		expect(await response.json()).toMatchObject({
 			code: "twitch_channel_registry_error"
 		});
+	});
+
+	it("bounds channel health fan-out concurrency", async () => {
+		let activeComponentRequests = 0;
+		let maxActiveComponentRequests = 0;
+		let componentRequests = 0;
+		const componentFetch = async (url) => {
+			componentRequests += 1;
+			activeComponentRequests += 1;
+			maxActiveComponentRequests = Math.max(
+				maxActiveComponentRequests,
+				activeComponentRequests
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			activeComponentRequests -= 1;
+			return url.endsWith("channel-auth/status")
+				? Response.json({ authorized: true })
+				: Response.json({ configured: true, channel: { lastResult: "existing" } });
+		};
+		const channels = Array.from({ length: 10 }, (_, index) => ({
+			broadcasterUserId: `bounded-health-${index}`,
+			authorizationMode: "broadcaster_oauth",
+			login: `bounded-health-${index}`
+		}));
+		const namespace = (fetch) => ({
+			idFromName: (name) => name,
+			get: () => ({ fetch })
+		});
+		const response = await handleTwitchChannelHealth(
+			new Request("https://example.com/twitch/channels/health?limit=20"),
+			{
+				TWITCH_CHANNEL_REGISTRY: namespace(async () => Response.json({
+					total: channels.length,
+					channels,
+					nextCursor: null
+				})),
+				TWITCH_EVENTSUB_MANAGER: namespace(componentFetch),
+				TWITCH_CHANNEL_AUTH: namespace(componentFetch)
+			}
+		);
+
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		expect(result.count).toBe(channels.length);
+		expect(result.channels.map((channel) => channel.broadcasterUserId)).toEqual(
+			channels.map((channel) => channel.broadcasterUserId)
+		);
+		expect(componentRequests).toBe(20);
+		expect(maxActiveComponentRequests).toBe(8);
 	});
 
 	it("paginates the central channel registry with opaque membership metadata", async () => {
@@ -1484,7 +1534,7 @@ describe("Twitch EventSub management", () => {
 		});
 		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 		const registryResponse = await twitchChannelRegistryStub().fetch(
-			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=25"
+			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=20"
 		);
 		const registryPage = await registryResponse.json();
 		expect(registryPage.channels).toContainEqual(expect.objectContaining({
