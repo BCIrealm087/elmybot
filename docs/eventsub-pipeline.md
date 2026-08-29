@@ -86,8 +86,10 @@ Inbox messages move through these states:
 
 The request execution context starts an immediate best-effort drain, while the
 Durable Object alarm is the recovery mechanism if that work is interrupted.
-Drains process at most 20 due messages. Retry delays start at 30 seconds and cap
-at 30 minutes. An `attempting` claim has a one-minute lease; its recovery alarm
+Drains process at most 20 due messages and stop claiming new messages after five
+seconds. The handler already in progress may finish, and due messages left
+behind are rearmed immediately. Retry delays start at 30 seconds and cap at 30
+minutes. An `attempting` claim has a one-minute lease; its recovery alarm
 returns an interrupted attempt to the retry queue. Completed and dead-letter
 records are retained for 14 days and pruned opportunistically.
 

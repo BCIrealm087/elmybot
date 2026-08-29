@@ -1,4 +1,5 @@
 import { jsonResponse, logError } from "../common.js";
+import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 
 // Durable Object environment: indexed job storage + alarms.
 
@@ -299,8 +300,9 @@ async function setNextAlarm(state) {
     ORDER BY next_attempt_at_ms, run_at_ms, id
     LIMIT 1
   `).toArray()[0];
-  if (next) await state.storage.setAlarm(next.next_attempt_at_ms);
-  else await state.storage.deleteAlarm();
+  if (next) {
+    await state.storage.setAlarm(Math.max(next.next_attempt_at_ms, Date.now()));
+  } else await state.storage.deleteAlarm();
 }
 
 function deliveryKey(job) {
@@ -485,12 +487,14 @@ export class GroupSchedulerBackend {
   }
 
   async alarm() {
+    const startedAtMs = Date.now();
     let delivered = (await this.state.storage.get("delivered")) ?? {};
     if (!isPlainObject(delivered)) delivered = {};
     pruneDelivered(delivered, Date.now());
 
     try {
       for (let processed = 0; processed < MAX_JOBS_PER_ALARM; processed++) {
+        if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
         const job = firstJob(this.state.storage.sql);
         const nowMs = Date.now();
         if (!job || deliveryAttemptAt(job) > nowMs) break;

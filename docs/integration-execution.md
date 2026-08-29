@@ -44,8 +44,11 @@ Each outbox effect moves through these states:
 | `delivered` | The adapter returned successfully and its bounded result is stored |
 | `dead_letter` | Delivery is terminal or five attempts were exhausted |
 
-Alarms drain at most 20 due effects. Retry delays begin at 30 seconds and cap at
-30 minutes. A dead-lettered effect can be explicitly rearmed; its stable
+Alarms drain at most 20 due effects and stop admitting new effects after five
+seconds. The handler already in progress may finish under its own bounded
+external-request behavior. Due work left behind is rearmed immediately. Retry
+delays begin at 30 seconds and cap at 30 minutes. A
+dead-lettered effect can be explicitly rearmed; its stable
 idempotency key and original envelope do not change.
 
 The coordinator re-reads the integration before each alarm batch. Revoking a

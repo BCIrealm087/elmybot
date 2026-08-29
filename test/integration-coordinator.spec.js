@@ -16,6 +16,7 @@ import {
   submitIntegrationExecution
 } from "../src/integrations/index.js";
 import { DISCORD_EFFECT_KINDS } from "../src/platforms/discord/integration-effects.js";
+import { ALARM_DRAIN_TIME_BUDGET_MS } from "../src/alarm-drain.js";
 
 const integrationEnv = {
   ...env,
@@ -77,21 +78,27 @@ function discordMessageExecution({
   sourceEventId = `twitch:eventsub:${uniqueId("message")}`,
   idempotencyKey = uniqueId("effect"),
   content = "Cross-platform hello",
-  channelId = uniqueId("discord-channel")
+  channelId = uniqueId("discord-channel"),
+  effectCount = 1
 }) {
   return createIntegrationExecution({
     integration,
     source: { group: source },
     sourceEventId,
-    effects: [createEffect({
+    effects: Array.from({ length: effectCount }, (_, index) => createEffect({
       kind: DISCORD_EFFECT_KINDS.SEND_MESSAGE,
-      target: { group: target, destination: { channelId } },
+      target: {
+        group: target,
+        destination: {
+          channelId: effectCount === 1 ? channelId : `${channelId}-${index}`
+        }
+      },
       payload: { content },
       integration,
-      idempotencyKey,
+      idempotencyKey: effectCount === 1 ? idempotencyKey : `${idempotencyKey}-${index}`,
       correlationId: sourceEventId,
       causationId: sourceEventId
-    })]
+    }))
   });
 }
 
@@ -217,6 +224,39 @@ describe("Per-integration execution coordinator", () => {
     )).toMatchObject({
       state: "completed",
       effects: [{ state: "delivered", attempts: 1, lastError: null }]
+    });
+  });
+
+  it("stops an outbox alarm at its time budget and re-arms due effects", async () => {
+    const linked = await activateIntegration();
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const input = discordMessageExecution({
+      integration: linked.integration,
+      source: linked.channel,
+      target: linked.group,
+      effectCount: 2
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+      return new Response(null, { status: 204 });
+    }));
+    const stub = integrationCoordinatorStub(integrationEnv, linked.integration.id);
+    await submitIntegrationExecution(integrationEnv, input);
+
+    await runInDurableObject(stub, async (instance) => instance.alarm());
+
+    const status = await getIntegrationExecution(
+      integrationEnv,
+      linked.integration.id,
+      input.sourceEventId
+    );
+    expect(status.effects.map((effect) => effect.state).sort()).toEqual([
+      "delivered",
+      "pending"
+    ]);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBe(nowMs);
     });
   });
 

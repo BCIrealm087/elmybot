@@ -1,4 +1,5 @@
 import { jsonResponse, logError } from "../common.js";
+import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 import {
   createIntegrationExecution,
   IntegrationContractError
@@ -276,8 +277,9 @@ async function setNextAlarm(state) {
      ORDER BY next_attempt_at_ms, created_at_ms, effect_id
      LIMIT 1`
   ).toArray()[0];
-  if (next) await state.storage.setAlarm(next.next_attempt_at_ms);
-  else await state.storage.deleteAlarm();
+  if (next) {
+    await state.storage.setAlarm(Math.max(next.next_attempt_at_ms, Date.now()));
+  } else await state.storage.deleteAlarm();
 }
 
 function pruneCompletedExecutions(sql, nowMs) {
@@ -786,6 +788,7 @@ export class IntegrationCoordinatorBackend {
   }
 
   async alarm() {
+    const startedAtMs = Date.now();
     const meta = this.state.storage.sql.exec(
       "SELECT integration_id FROM integration_coordinator_meta WHERE singleton = 1"
     ).toArray()[0];
@@ -807,6 +810,7 @@ export class IntegrationCoordinatorBackend {
       const memberKeys = new Set(integration.members.map((member) => member.group.key));
 
       for (let processed = 0; processed < MAX_EFFECTS_PER_ALARM; processed++) {
+        if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
         const due = firstDueEffect(this.state.storage.sql, Date.now());
         if (!due) break;
         const claimed = this.claimEffect(due, Date.now());

@@ -1,4 +1,5 @@
 import { logError } from "../../common.js";
+import { alarmDrainTimeRemaining } from "../../alarm-drain.js";
 import { twitchPublicUrl } from "./environment.js";
 import {
 	noStoreJson,
@@ -409,7 +410,7 @@ export class TwitchEventSubInboxBackend {
 			ATTEMPT_LEASE_MS
 		).toArray()[0]?.next_attempt_at_ms;
 		if (Number.isInteger(next)) {
-			await this.state.storage.setAlarm(next);
+			await this.state.storage.setAlarm(Math.max(next, Date.now()));
 		} else {
 			await this.state.storage.deleteAlarm();
 		}
@@ -439,10 +440,12 @@ export class TwitchEventSubInboxBackend {
 	}
 
 	async drain(runtimeEnvironment = this.runtimeEnvironment ?? {}) {
+		const startedAtMs = Date.now();
 		runtimeEnvironment = twitchRuntimeEnvironment(runtimeEnvironment);
 		this.recoverExpiredAttempts();
 		let processed = 0;
 		for (; processed < DRAIN_BATCH_SIZE; processed++) {
+			if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
 			const message = this.claimNext();
 			if (!message) break;
 			await this.state.storage.setAlarm(Date.now() + ATTEMPT_LEASE_MS);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
+import { ALARM_DRAIN_TIME_BUDGET_MS } from "../src/alarm-drain.js";
 import {
 	drainTwitchEventSubInbox,
 	enqueueTwitchEventSubMessage,
@@ -195,5 +196,42 @@ describe("Twitch EventSub durable inbox", () => {
 			status: "completed",
 			attempts: 2
 		});
+	});
+
+	it("stops a drain at its time budget and immediately re-arms due messages", async () => {
+		const broadcasterUserId = `inbox-budget-${++sequence}`;
+		let nowMs = 2_100_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+		await storeAppToken();
+		vi.stubGlobal("fetch", vi.fn(async () => {
+			nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+			return Response.json({
+				data: [{ message_id: "sent-message", is_sent: true }]
+			});
+		}));
+		for (const messageId of ["budget-message-a", "budget-message-b"]) {
+			await enqueueTwitchEventSubMessage(
+				eventSubEnv,
+				broadcasterUserId,
+				inboxMessage(broadcasterUserId, messageId, "!alive")
+			);
+		}
+
+		expect(await drainTwitchEventSubInbox(eventSubEnv, broadcasterUserId))
+			.toEqual({ processed: 1 });
+		expect((await inboxRow(
+			broadcasterUserId,
+			"budget-message-a"
+		)).status).toBe("completed");
+		expect((await inboxRow(
+			broadcasterUserId,
+			"budget-message-b"
+		)).status).toBe("pending");
+		await runInDurableObject(
+			twitchEventSubInboxStub(env, broadcasterUserId),
+			async (_instance, state) => {
+				expect(await state.storage.getAlarm()).toBe(nowMs);
+			}
+		);
 	});
 });

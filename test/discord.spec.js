@@ -7,6 +7,7 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import worker from '../src/index.js';
+import { ALARM_DRAIN_TIME_BUDGET_MS } from '../src/alarm-drain.js';
 import { SCHEDULER_JOB_SCHEMA_VERSION } from '../src/message-scheduling/index.js';
 import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
@@ -1151,6 +1152,39 @@ describe('Discord platform', () => {
         remaining.delivery.nextAttemptAtMs,
       );
       expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
+      await state.storage.deleteAlarm();
+    });
+  });
+
+  it('stops an alarm at its time budget and immediately re-arms due work', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const sentMessages = [];
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
+      sentMessages.push(JSON.parse(init.body).content);
+      nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+      return jsonResponse({ id: uniqueId('message') });
+    }));
+
+    for (let index = 0; index < 2; index++) {
+      await scheduleTestJob(stub, {
+        sourceId: `timed-job-${index}`,
+        guildId,
+        channelId,
+        subject: `timed-message-${index}`,
+        runAtMs: nowMs - 1_000,
+      });
+    }
+
+    await runInDurableObject(stub, async (instance) => instance.alarm());
+
+    expect(sentMessages).toHaveLength(1);
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(1);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBe(nowMs);
       await state.storage.deleteAlarm();
     });
   });
