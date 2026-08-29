@@ -1024,6 +1024,125 @@ describe("Twitch EventSub management", () => {
 		expect(fetchMock).toHaveBeenCalledTimes(2);
 	});
 
+	it("caps EventSub reconciliation list pagination", async () => {
+		let listRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "pagination-app-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			expect(init.method).toBe("GET");
+			listRequests += 1;
+			return Response.json({
+				data: [],
+				pagination: { cursor: `page-${listRequests}` }
+			});
+		}));
+
+		await expect(ensureTwitchChatSubscription({
+			broadcasterUserId: "pagination-limit-broadcaster",
+			callbackUrl: "https://example.com/twitch"
+		}, eventSubEnv)).rejects.toMatchObject({
+			code: "twitch_eventsub_pagination_limit"
+		});
+		expect(listRequests).toBe(5);
+	});
+
+	it("stops EventSub reconciliation between requests at its time budget", async () => {
+		let nowMs = 2_100_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+		await storeTwitchAppToken();
+		let listRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+			expect(init.method).toBe("GET");
+			listRequests += 1;
+			nowMs += 5_000;
+			return Response.json({
+				data: [],
+				pagination: { cursor: "another-page" }
+			});
+		}));
+
+		await expect(ensureTwitchChatSubscription({
+			broadcasterUserId: "time-budget-broadcaster",
+			callbackUrl: "https://example.com/twitch"
+		}, eventSubEnv)).rejects.toMatchObject({
+			code: "twitch_eventsub_reconciliation_time_budget"
+		});
+		expect(listRequests).toBe(1);
+	});
+
+	it("caps reconciliation mutations and resumes safely on retry", async () => {
+		const broadcasterUserId = "mutation-limit-broadcaster";
+		const remainingIds = new Set(
+			Array.from({ length: 11 }, (_, index) => `stale-subscription-${index}`)
+		);
+		let deleteRequests = 0;
+		let createRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "mutation-app-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			if (init.method === "GET") {
+				return Response.json({
+					data: Array.from(remainingIds, (id) => ({
+						id,
+						type: "channel.chat.message",
+						version: "1",
+						status: "enabled",
+						condition: {
+							broadcaster_user_id: broadcasterUserId,
+							user_id: "bot-user-id"
+						},
+						transport: {
+							method: "webhook",
+							callback: "https://old.example/twitch"
+						}
+					})),
+					pagination: {}
+				});
+			}
+			if (init.method === "DELETE") {
+				deleteRequests += 1;
+				remainingIds.delete(new URL(input).searchParams.get("id"));
+				return new Response(null, { status: 204 });
+			}
+			expect(init.method).toBe("POST");
+			createRequests += 1;
+			return Response.json({
+				data: [{
+					id: "replacement-subscription",
+					status: "webhook_callback_verification_pending"
+				}]
+			}, { status: 202 });
+		}));
+		const channel = {
+			broadcasterUserId,
+			callbackUrl: "https://example.com/twitch"
+		};
+
+		await expect(ensureTwitchChatSubscription(channel, eventSubEnv))
+			.rejects.toMatchObject({
+				code: "twitch_eventsub_reconciliation_mutation_limit"
+			});
+		expect(deleteRequests).toBe(10);
+		expect(remainingIds.size).toBe(1);
+		expect(createRequests).toBe(0);
+
+		await expect(ensureTwitchChatSubscription(channel, eventSubEnv))
+			.resolves.toMatchObject({ result: "created" });
+		expect(deleteRequests).toBe(11);
+		expect(remainingIds.size).toBe(0);
+		expect(createRequests).toBe(1);
+	});
+
 	it("serializes EventSub mutations for the same broadcaster", async () => {
 		let releaseFirstCreate;
 		let markFirstCreateStarted;
@@ -1533,6 +1652,12 @@ describe("Twitch EventSub management", () => {
 			}
 		});
 		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
+		expect(status.alarmAtMs).toBeGreaterThanOrEqual(
+			status.channel.lastReconciledAtMs + 55 * 60 * 1000
+		);
+		expect(status.alarmAtMs).toBeLessThanOrEqual(
+			status.channel.lastReconciledAtMs + 60 * 60 * 1000
+		);
 		const registryResponse = await twitchChannelRegistryStub().fetch(
 			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=20"
 		);

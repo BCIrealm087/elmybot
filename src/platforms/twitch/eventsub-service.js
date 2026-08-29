@@ -15,7 +15,9 @@ import {
 export const TWITCH_EVENTSUB_SERVICE_NAME = "twitch:eventsub-service";
 
 const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
-const MAX_LIST_PAGES = 100;
+const MAX_LIST_PAGES = 5;
+const MAX_RECONCILIATION_MUTATIONS = 10;
+const RECONCILIATION_TIME_BUDGET_MS = 5_000;
 const LIST_FILTER_NAMES = Object.freeze([
 	"status",
 	"type",
@@ -40,6 +42,38 @@ function noStoreJson(value, status = 200) {
 	const response = jsonResponse(value, status);
 	response.headers.set("cache-control", "no-store");
 	return response;
+}
+
+function createReconciliationBudget() {
+	return {
+		startedAtMs: Date.now(),
+		operations: 0,
+		mutations: 0
+	};
+}
+
+async function startReconciliationOperation(budget) {
+	if (!budget) return;
+	if (
+		budget.operations > 0 &&
+		Date.now() - budget.startedAtMs >= RECONCILIATION_TIME_BUDGET_MS
+	) {
+		throw new TwitchEventSubServiceError(
+			"Twitch EventSub reconciliation exceeded its time budget.",
+			{ status: 502, code: "twitch_eventsub_reconciliation_time_budget" }
+		);
+	}
+	budget.operations += 1;
+}
+
+async function claimReconciliationMutation(budget) {
+	if (budget.mutations >= MAX_RECONCILIATION_MUTATIONS) {
+		throw new TwitchEventSubServiceError(
+			"Twitch EventSub reconciliation exceeded its mutation limit.",
+			{ status: 502, code: "twitch_eventsub_reconciliation_mutation_limit" }
+		);
+	}
+	budget.mutations += 1;
 }
 
 function requiredString(value, name) {
@@ -230,7 +264,8 @@ export class TwitchEventSubServiceBackend {
 		}
 	}
 
-	async eventSubRequest(credentials, request) {
+	async eventSubRequest(credentials, request, budget = null) {
+		await startReconciliationOperation(budget);
 		let accessToken = await this.appAccessToken(credentials);
 		let response = await rawEventSubRequest({
 			...request,
@@ -262,7 +297,7 @@ export class TwitchEventSubServiceBackend {
 		}
 	}
 
-	async listSubscriptions(credentials, filters = {}) {
+	async listSubscriptions(credentials, filters = {}, budget = null) {
 		const appliedFilters = LIST_FILTER_NAMES.filter((name) =>
 			typeof filters[name] === "string" && filters[name].length > 0
 		);
@@ -280,17 +315,21 @@ export class TwitchEventSubServiceBackend {
 				url.searchParams.set(name, filters[name]);
 			}
 		}
-		return this.eventSubRequest(credentials, { method: "GET", url: url.href });
+		return this.eventSubRequest(
+			credentials,
+			{ method: "GET", url: url.href },
+			budget
+		);
 	}
 
-	async matchingSubscriptions(channel, credentials, definitions) {
+	async matchingSubscriptions(channel, credentials, definitions, budget) {
 		const subscriptions = [];
 		let cursor = null;
 		for (let page = 0; page < MAX_LIST_PAGES; page++) {
 			const response = await this.listSubscriptions(credentials, {
 				user_id: channel.broadcasterUserId,
 				...(cursor ? { after: cursor } : {})
-			});
+			}, budget);
 			if (!response.ok) {
 				await response.text();
 				throw new TwitchEventSubServiceError(
@@ -330,13 +369,14 @@ export class TwitchEventSubServiceBackend {
 		});
 	}
 
-	async deleteSubscription(id, credentials) {
+	async deleteSubscription(id, credentials, budget) {
+		await claimReconciliationMutation(budget);
 		const url = new URL(EVENTSUB_SUBSCRIPTIONS_URL);
 		url.searchParams.set("id", id);
 		const response = await this.eventSubRequest(credentials, {
 			method: "DELETE",
 			url: url.href
-		});
+		}, budget);
 		if (response.status !== 204) {
 			await response.text();
 			throw new TwitchEventSubServiceError(
@@ -346,25 +386,28 @@ export class TwitchEventSubServiceBackend {
 		}
 	}
 
-	async createSubscription(definition, channel, credentials) {
+	async createSubscription(definition, channel, credentials, budget = null) {
+		if (budget) await claimReconciliationMutation(budget);
 		return this.eventSubRequest(credentials, {
 			method: "POST",
 			url: EVENTSUB_SUBSCRIPTIONS_URL,
 			body: createSubscriptionBody(definition, channel, credentials)
-		});
+		}, budget);
 	}
 
 	async removeSubscriptions(channel, credentials, definitions) {
 		return this.withChannelOperation(channel.broadcasterUserId, async () => {
+			const budget = createReconciliationBudget();
 			const subscriptions = await this.matchingSubscriptions(
 				channel,
 				credentials,
-				definitions
+				definitions,
+				budget
 			);
 			let removedSubscriptions = 0;
 			for (const subscription of subscriptions) {
 				if (typeof subscription?.id === "string" && subscription.id.length > 0) {
-					await this.deleteSubscription(subscription.id, credentials);
+					await this.deleteSubscription(subscription.id, credentials, budget);
 					removedSubscriptions += 1;
 				}
 			}
@@ -374,10 +417,12 @@ export class TwitchEventSubServiceBackend {
 
 	async ensureSubscriptions(channel, credentials, definitions) {
 		return this.withChannelOperation(channel.broadcasterUserId, async () => {
+			const budget = createReconciliationBudget();
 			const subscriptions = await this.matchingSubscriptions(
 				channel,
 				credentials,
-				definitions
+				definitions,
+				budget
 			);
 			const reconciled = [];
 			for (const definition of definitions) {
@@ -402,7 +447,11 @@ export class TwitchEventSubServiceBackend {
 						typeof subscription?.id === "string" &&
 						subscription.id.length > 0
 					) {
-						await this.deleteSubscription(subscription.id, credentials);
+						await this.deleteSubscription(
+							subscription.id,
+							credentials,
+							budget
+						);
 					}
 				}
 				if (healthy) {
@@ -418,7 +467,8 @@ export class TwitchEventSubServiceBackend {
 				const response = await this.createSubscription(
 					definition,
 					channel,
-					credentials
+					credentials,
+					budget
 				);
 				if (response.status === 409) {
 					await response.text();

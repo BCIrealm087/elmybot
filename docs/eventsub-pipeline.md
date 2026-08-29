@@ -46,11 +46,20 @@ To add an EventSub type:
 4. Use a new `.vN` kind when the event semantics change.
 
 Configured channel managers reconcile every definition currently installed in
-the registry. The EventSub service lists the channel's subscriptions once,
-keeps one healthy exact match per definition, removes stale managed matches,
-and creates missing subscriptions. Deconfiguration removes every registered
-type owned by the bot. The protected manual creation endpoint accepts an
-optional `kind` and defaults to the existing chat definition for compatibility.
+the registry. The EventSub service scans the channel's subscriptions within a
+bounded page limit, keeps one healthy exact match per definition, removes stale
+managed matches, and creates missing subscriptions. Deconfiguration removes
+every registered type owned by the bot. The protected manual creation endpoint
+accepts an optional `kind` and defaults to the existing chat definition for
+compatibility.
+Reconciliation is capped at five Twitch list pages, ten create/delete mutations,
+and a five-second admission budget between external operations. An operation
+already in progress may finish under its request timeout. Partial stale-removal
+work is safe to resume through the manager's existing retry alarm; pagination
+beyond five pages is treated as an abnormal safety failure rather than carrying
+a durable cursor for the currently two-definition registry. Successful periodic
+reconciliation is scheduled with a 55–60 minute jittered delay to spread channel
+traffic.
 
 The protected aggregate channel-health endpoint remains a live view of the
 per-channel authorization and EventSub Durable Objects. Its cursor-paginated

@@ -16,6 +16,7 @@ const CHANNEL_CONFIG_KEY = "channelConfig";
 const RECOVERY_INITIAL_DELAY_MS = 1000;
 const RECONCILIATION_INITIAL_DELAY_MS = 60 * 1000;
 const RECONCILIATION_INTERVAL_MS = 55 * 60 * 1000;
+const RECONCILIATION_JITTER_MS = 5 * 60 * 1000;
 const RECOVERY_RETRY_DELAYS_MS = Object.freeze([
 	60 * 1000,
 	5 * 60 * 1000,
@@ -39,6 +40,12 @@ function validateRecovery(recovery) {
 		attempts: 0,
 		queuedAtMs: Date.now()
 	};
+}
+
+function nextReconciliationDelayMs() {
+	return RECONCILIATION_INTERVAL_MS + Math.floor(
+		Math.random() * (RECONCILIATION_JITTER_MS + 1)
+	);
 }
 
 export class TwitchEventSubManagerBackend {
@@ -181,7 +188,7 @@ export class TwitchEventSubManagerBackend {
 					result: result.result
 				}));
 			}
-			await this.state.storage.setAlarm(nowMs + RECONCILIATION_INTERVAL_MS);
+			await this.state.storage.setAlarm(nowMs + nextReconciliationDelayMs());
 		} catch (error) {
 			const attempts = recovery
 				? (recovery.attempts ?? 0) + 1
@@ -274,4 +281,3 @@ export class TwitchEventSubManagerBackend {
 		}
 	}
 }
-
