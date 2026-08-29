@@ -648,6 +648,58 @@ describe('Discord platform', () => {
     });
   });
 
+  it('prunes scheduling sources incrementally after each 100 insertions', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(`
+        WITH digits(value) AS (
+          VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+        ), source_numbers(value) AS (
+          SELECT ones.value + tens.value * 10 + hundreds.value * 100 +
+                 thousands.value * 1000
+          FROM digits ones
+          CROSS JOIN digits tens
+          CROSS JOIN digits hundreds
+          CROSS JOIN digits thousands
+        )
+        INSERT INTO scheduler_sources
+          (source_event_id, created_at_ms, response_json)
+        SELECT printf('discord:retained-source-%04d', value), value, '{}'
+        FROM source_numbers
+      `);
+      for (let index = 0; index < 99; index++) {
+        state.storage.sql.exec(
+          `INSERT INTO scheduler_sources
+            (source_event_id, created_at_ms, response_json)
+           VALUES (?, ?, '{}')`,
+          `discord:excess-source-${index}`,
+          10_000 + index
+        );
+      }
+    });
+
+    const scheduled = await scheduleTestJob(stub, {
+      sourceId: 'new-source-after-retention-limit',
+      guildId,
+      runAtMs: Date.now() + 60_000,
+    });
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS total FROM scheduler_sources'
+      ).one().total).toBe(10_000);
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_sources
+         WHERE source_event_id = 'discord:retained-source-0000'`
+      ).one().total).toBe(0);
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_sources
+         WHERE source_event_id = ?`,
+        scheduled.sourceEventId
+      ).one().total).toBe(1);
+    });
+  });
+
   it('rejects malformed shared envelopes and adapter payloads before persistence', async () => {
     const guildId = uniqueId('guild');
     const channelId = uniqueId('channel');
@@ -1153,6 +1205,74 @@ describe('Discord platform', () => {
       );
       expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
       await state.storage.deleteAlarm();
+    });
+  });
+
+  it('stores delivered occurrences as indexed SQLite rows instead of one value', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: uniqueId('message') })));
+    const job = await scheduleTestJob(stub, { guildId });
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT occurrence_key, delivered_at_ms
+         FROM scheduler_deliveries WHERE occurrence_key = ?`,
+        `${job.id}:${job.timestamp}`
+      ).toArray()).toEqual([{
+        occurrence_key: `${job.id}:${job.timestamp}`,
+        delivered_at_ms: expect.any(Number),
+      }]);
+      expect(await state.storage.get('delivered')).toBeUndefined();
+    });
+  });
+
+  it('migrates the legacy delivery value and bounds expired ledger pruning', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    const nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const fetchMock = vi.fn(async () => jsonResponse({ id: uniqueId('message') }));
+    vi.stubGlobal('fetch', fetchMock);
+    const job = await scheduleTestJob(stub, { guildId });
+    const legacyOccurrenceKey = `${job.id}:${job.timestamp}`;
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put('delivered', {
+        [legacyOccurrenceKey]: nowMs,
+        invalid: 'not-a-timestamp',
+      });
+      for (let index = 0; index < 251; index++) {
+        state.storage.sql.exec(
+          `INSERT INTO scheduler_deliveries
+            (occurrence_key, delivered_at_ms) VALUES (?, ?)`,
+          `expired-job-${index}`,
+          nowMs - 15 * 24 * 60 * 60 * 1000
+        );
+      }
+
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_deliveries
+         WHERE occurrence_key LIKE 'expired-job-%'`
+      ).one().total).toBe(1);
+      expect(state.storage.sql.exec(
+        `SELECT delivered_at_ms FROM scheduler_deliveries
+         WHERE occurrence_key = ?`,
+        legacyOccurrenceKey
+      ).one().delivered_at_ms).toBe(nowMs);
+      expect(await state.storage.get('delivered')).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS total FROM scheduler_jobs'
+      ).one().total).toBe(0);
+
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_deliveries
+         WHERE occurrence_key LIKE 'expired-job-%'`
+      ).one().total).toBe(0);
     });
   });
 
