@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	createTwitchEventSubRegistry,
 	eventSubDefinitionForSubscription,
-	requireTwitchEventSubDefinition
+	requireTwitchEventSubDefinition,
+	shouldEnqueueTwitchEventSubNotification
 } from "../src/platforms/twitch/eventsub-registry.js";
 
 function definition(kind, type, overrides = {}) {
@@ -69,5 +70,63 @@ describe("Twitch EventSub registry", () => {
 				{ handleNotification: null }
 			)
 		})).toThrow(/notification handler must be a function/);
+	});
+
+	it("uses an optional definition-specific notification admission hook", async () => {
+		const admissionHook = vi.fn(({ payload }) => payload.event.accepted);
+		const streamOnline = definition(
+			"twitch.stream.online.v1",
+			"stream.online",
+			{ shouldEnqueueNotification: admissionHook }
+		);
+		const registry = createTwitchEventSubRegistry({
+			[streamOnline.kind]: streamOnline
+		});
+		const payload = {
+			subscription: { type: "stream.online", version: "1" },
+			event: { accepted: false }
+		};
+
+		await expect(shouldEnqueueTwitchEventSubNotification(
+			registry,
+			{ payload, messageId: "message-id" }
+		)).resolves.toBe(false);
+		expect(admissionHook).toHaveBeenCalledWith({
+			payload,
+			messageId: "message-id"
+		});
+	});
+
+	it("admits notifications by default and validates admission hooks", async () => {
+		const streamOnline = definition(
+			"twitch.stream.online.v1",
+			"stream.online"
+		);
+		const registry = createTwitchEventSubRegistry({
+			[streamOnline.kind]: streamOnline
+		});
+
+		await expect(shouldEnqueueTwitchEventSubNotification(registry, {
+			payload: { subscription: { type: "stream.online", version: "1" } }
+		})).resolves.toBe(true);
+		expect(() => createTwitchEventSubRegistry({
+			[streamOnline.kind]: {
+				...streamOnline,
+				shouldEnqueueNotification: true
+			}
+		})).toThrow(/admission hook must be a function or null/);
+
+		const invalidResult = definition(
+			"twitch.stream.started.v1",
+			"stream.started",
+			{ shouldEnqueueNotification: () => "yes" }
+		);
+		const invalidRegistry = createTwitchEventSubRegistry({
+			[invalidResult.kind]: invalidResult
+		});
+		await expect(shouldEnqueueTwitchEventSubNotification(
+			invalidRegistry,
+			{ payload: { subscription: { type: "stream.started", version: "1" } } }
+		)).rejects.toThrow(/admission hook must return a boolean/);
 	});
 });

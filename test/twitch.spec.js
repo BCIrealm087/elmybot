@@ -637,29 +637,45 @@ describe("Twitch EventSub worker", () => {
 		});
 	});
 
-	it("acknowledges non-command chat messages without sending a reply", async () => {
+	it("acknowledges irrelevant chat messages without durable admission", async () => {
 		const secret = "eventsub-secret";
-		const request = await makeSignedTwitchRequest({
-			body: JSON.stringify({
-				subscription: { type: "channel.chat.message" },
-				event: {
-					broadcaster_user_id: "broadcaster-id",
-					message: { text: "hello" }
-				}
-			}),
-			secret
-		});
+		const broadcasterUserId = "filtered-chat-broadcaster";
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
-		const response = await worker.fetch(
-			request,
-			{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
-			createExecutionContext()
-		);
+		for (const messageText of ["hello", "!unknown"]) {
+			const request = await makeSignedTwitchRequest({
+				body: JSON.stringify({
+					subscription: {
+						type: "channel.chat.message",
+						condition: { broadcaster_user_id: broadcasterUserId }
+					},
+					event: {
+						broadcaster_user_id: broadcasterUserId,
+						message: { text: messageText }
+					}
+				}),
+				secret
+			});
+			const response = await worker.fetch(
+				request,
+				{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
+				createExecutionContext()
+			);
+			expect(response.status).toBe(204);
+		}
 
-		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+		await runInDurableObject(
+			twitchEventSubInboxStub(env, broadcasterUserId),
+			async (_instance, state) => {
+				const rows = state.storage.sql.exec(
+					"SELECT COUNT(*) AS count FROM eventsub_inbox"
+				).toArray();
+				expect(rows[0].count).toBe(0);
+				expect(await state.storage.getAlarm()).toBeNull();
+			}
+		);
 	});
 });
 

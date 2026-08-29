@@ -8,6 +8,7 @@ import {
 	assertTwitchRequestOrigin,
 	TwitchEnvironmentError
 } from "./environment.js";
+import { shouldEnqueueTwitchEventSubNotification } from "./eventsub-registry.js";
 import { handleTwitchManagementRoute } from "./routes.js";
 
 const encoder = new TextEncoder();
@@ -65,7 +66,7 @@ async function verifyTwitchRequest({ secret, messageId, timestamp, signature, bo
 /**
  * Entrypoint for Twitch EventSub webhook requests.
  */
-export async function handleTwitchRequest(request, env, ctx) {
+export async function handleTwitchRequest(request, env, ctx, eventSubRegistry) {
 	const url = new URL(request.url);
 	const isHealthCheck = url.pathname === "/twitch" && request.method === "GET";
 	let environmentConfiguration;
@@ -131,6 +132,23 @@ export async function handleTwitchRequest(request, env, ctx) {
 		const broadcasterUserId =
 			payload.subscription?.condition?.broadcaster_user_id ??
 			payload.event?.broadcaster_user_id;
+		if (messageType === "notification") {
+			try {
+				const shouldEnqueue = await shouldEnqueueTwitchEventSubNotification(
+					eventSubRegistry,
+					{ payload, messageId, messageTimestamp: timestamp }
+				);
+				if (!shouldEnqueue) return new Response(null, { status: 204 });
+			} catch (error) {
+				logError("twitch.eventsub_admission_failed", {
+					platform: "twitch",
+					correlationId: `twitch:${messageId}`,
+					groupId: broadcasterUserId ?? null,
+					messageType
+				}, error);
+				return new Response("Service Unavailable", { status: 503 });
+			}
+		}
 		try {
 			await enqueueTwitchEventSubMessage(env, broadcasterUserId, {
 				schemaVersion: TWITCH_EVENTSUB_INBOX_SCHEMA_VERSION,

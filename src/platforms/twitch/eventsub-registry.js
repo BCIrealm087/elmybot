@@ -33,6 +33,7 @@ export function createTwitchEventSubDefinition({
 	needsBotUserId = false,
 	condition,
 	handleNotification,
+	shouldEnqueueNotification = null,
 	handleRevocation = null
 }) {
 	const normalizedKind = requiredString(kind, "EventSub definition kind", EVENT_KIND_PATTERN);
@@ -61,6 +62,14 @@ export function createTwitchEventSubDefinition({
 			"EventSub notification handler must be a function."
 		);
 	}
+	if (
+		shouldEnqueueNotification !== null &&
+		typeof shouldEnqueueNotification !== "function"
+	) {
+		throw new TwitchEventSubRegistryError(
+			"EventSub notification admission hook must be a function or null."
+		);
+	}
 	if (handleRevocation !== null && typeof handleRevocation !== "function") {
 		throw new TwitchEventSubRegistryError(
 			"EventSub revocation handler must be a function or null."
@@ -74,6 +83,7 @@ export function createTwitchEventSubDefinition({
 		needsBotUserId,
 		condition,
 		handleNotification,
+		shouldEnqueueNotification,
 		handleRevocation
 	});
 }
@@ -116,6 +126,27 @@ export function createTwitchEventSubRegistry(...definitionSets) {
 
 export function eventSubDefinitionForSubscription(registry, type, version) {
 	return registry.bySubscription[subscriptionKey(type, version)] ?? null;
+}
+
+export async function shouldEnqueueTwitchEventSubNotification(
+	registry,
+	context
+) {
+	const subscription = context.payload?.subscription;
+	const definition = eventSubDefinitionForSubscription(
+		registry,
+		subscription?.type,
+		subscription?.version ?? "1"
+	);
+	if (!definition?.shouldEnqueueNotification) return true;
+
+	const shouldEnqueue = await definition.shouldEnqueueNotification(context);
+	if (typeof shouldEnqueue !== "boolean") {
+		throw new TwitchEventSubRegistryError(
+			"EventSub notification admission hook must return a boolean."
+		);
+	}
+	return shouldEnqueue;
 }
 
 export function requireTwitchEventSubDefinition(registry, kind) {

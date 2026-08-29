@@ -80,7 +80,7 @@ export default {
       return handleDiscordRequest(request, env, ctx);
     }
     if (url.pathname === "/twitch" || url.pathname.startsWith("/twitch/")) {
-      return handleTwitchRequest(request, env, ctx);
+      return handleTwitchRequest(request, env, ctx, twitchEventSubRegistry);
     }
     return new Response("Not found", { status: 404 });
   },

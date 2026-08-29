@@ -7,7 +7,10 @@ import {
 	submitRoutedEffects
 } from "../../integrations/index.js";
 import { markTwitchChannelAuthorizationRevoked } from "./channel-auth.js";
-import { processTwitchChatNotification } from "./chat.js";
+import {
+	isRecognizedTwitchCommandNotification,
+	processTwitchChatNotification
+} from "./chat.js";
 import {
 	queueTwitchEventSubRecovery,
 	RECOVERABLE_EVENTSUB_STATUS
@@ -188,6 +191,9 @@ export const twitchEventSubDefinitions = Object.freeze({
 				broadcaster_user_id: channel.broadcasterUserId,
 				user_id: credentials.botUserId
 			};
+		},
+		shouldEnqueueNotification({ payload }) {
+			return isRecognizedTwitchCommandNotification(payload);
 		},
 		handleNotification({ payload, env, messageId }) {
 			return processTwitchChatNotification(payload, env, messageId);

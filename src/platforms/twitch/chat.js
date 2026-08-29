@@ -15,6 +15,12 @@ function commandFromMessage(messageText) {
 	};
 }
 
+export function isRecognizedTwitchCommandNotification(payload) {
+	if (payload.subscription?.type !== "channel.chat.message") return false;
+	const messageText = payload.event?.message?.text;
+	return typeof messageText === "string" && commandFromMessage(messageText) !== null;
+}
+
 export async function processTwitchChatNotification(payload, env, messageId) {
 	if (payload.subscription?.type !== "channel.chat.message") return;
 

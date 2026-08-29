@@ -21,6 +21,7 @@ stable place to enter the platform-neutral pipeline.
 - Twitch's subscription `type` and `version`;
 - whether its condition requires the bot user ID;
 - a condition builder;
+- an optional notification admission hook;
 - a notification handler; and
 - an optional revocation handler.
 
@@ -53,8 +54,16 @@ optional `kind` and defaults to the existing chat definition for compatibility.
 
 ## Durable acceptance
 
-After signature verification, notifications and revocations are submitted to
-one inbox Durable Object per Twitch broadcaster. The inbox validates the
+After signature verification and JSON parsing, a definition may reject a
+notification before durable admission. The chat definition uses this hook to
+admit only messages containing a recognized bot command. Ordinary chat and
+unknown `!commands` are acknowledged without creating an inbox row or alarm.
+This keeps high-volume, non-actionable chat out of SQLite while preserving HMAC
+verification at the public boundary. Definitions without a hook admit every
+notification, and revocations always enter the inbox.
+
+Admitted notifications and revocations are submitted to one inbox Durable
+Object per Twitch broadcaster. The inbox validates the
 registered subscription type, broadcaster identity, timestamp, message ID, and
 payload size. It then writes the message and arms an alarm before the Worker
 returns `204` to Twitch.
