@@ -6,6 +6,8 @@ import {
   createEffectHandlerRegistry,
   createIntegrationExecution,
   createIntegrationInvitation,
+  getIntegrationCoordinatorStatus,
+  getIntegrationDeadLetters,
   getIntegrationExecution,
   integrationCoordinatorStub,
   reserveIntegrationInvitation,
@@ -234,6 +236,15 @@ describe("Per-integration execution coordinator", () => {
     vi.stubGlobal("fetch", fetchMock);
     const stub = integrationCoordinatorStub(integrationEnv, linked.integration.id);
     await submitIntegrationExecution(integrationEnv, input);
+    expect(await getIntegrationCoordinatorStatus(
+      integrationEnv,
+      linked.integration.id
+    )).toMatchObject({
+      initialized: true,
+      integrationId: linked.integration.id,
+      executions: { pending: 1 },
+      effects: { pending: 1 }
+    });
     for (let attempt = 1; attempt <= 5; attempt++) {
       await runInDurableObject(stub, async (instance) => instance.alarm());
       const status = await getIntegrationExecution(
@@ -253,6 +264,19 @@ describe("Per-integration execution coordinator", () => {
         });
       }
     }
+
+    expect(await getIntegrationDeadLetters(
+      integrationEnv,
+      linked.integration.id,
+      { limit: 5 }
+    )).toMatchObject({
+      total: 1,
+      effects: [{
+        idempotencyKey: input.effects[0].idempotencyKey,
+        state: "dead_letter",
+        attempts: 5
+      }]
+    });
 
     fetchMock.mockImplementation(async () => new Response(null, { status: 204 }));
     expect(await retryIntegrationEffect(

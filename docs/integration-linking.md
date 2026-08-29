@@ -12,19 +12,29 @@ per-integration execution ledger and effect outbox. See
 
 ## Discord commands
 
-Linking and its first routed command are exposed through four guild-only
-deferred commands:
+Linking, routing, and operations are exposed through guild-only deferred
+commands:
 
 - `/integration_link_twitch` creates a one-use Twitch broadcaster invitation
   and uses the command's Discord channel as the initial cross-platform message
   destination.
 - `/integration_list` lists the server's active integrations and their IDs.
+- `/integration_status integration_id:<id>` shows membership, route state, and
+  aggregate execution/effect state.
+- `/integration_route_set integration_id:<id> route:<kind> enabled:<boolean>
+  [channel:<channel>]` enables, disables, or retargets a route.
+- `/integration_audit integration_id:<id>` shows the ten most recent lifecycle
+  and configuration events.
+- `/integration_dead_letters integration_id:<id>` shows the ten most recent
+  terminal delivery failures and their stable retry keys.
+- `/integration_retry_effect integration_id:<id> idempotency_key:<key>`
+  explicitly rearms one dead-lettered effect.
 - `/integration_announce_twitch message:<text>` sends an authorized message to
   every linked Twitch channel.
 - `/integration_unlink integration_id:<id>` revokes one integration without
   disconnecting the Twitch channel from Elmybot generally.
 
-The three lifecycle commands require `integration.manage`. This capability is
+All inspection and lifecycle commands require `integration.manage`. This capability is
 intentionally stricter than scheduling and general configuration: only the
 Discord server owner or a member with Administrator or Manage Server can use
 it. Configured scheduling roles and other moderator permissions do not grant
@@ -100,8 +110,9 @@ Repeating the link flow for an already active Discord–Twitch pair updates thes
 initial routes. Discord-bound messages use the channel where the new link
 command was run; Twitch-bound messages target the Twitch channel authenticated
 during OAuth.
-Dedicated route inspection, enable/disable, and destination management remain
-separate management functionality rather than hidden command behavior.
+Route changes affect only new route resolutions; already accepted coordinator
+work retains its original destination. See `docs/integration-management.md` for
+the management, audit, and recovery model.
 
 ## Failure and revocation behavior
 
@@ -126,7 +137,7 @@ namespaces, preserving the existing test/production isolation rule.
 
 Wrangler migration `v11` creates `IntegrationRegistry`, and migration `v12`
 creates `IntegrationCoordinator`. After deploying, register the Discord command
-set again if the three integration commands have not already been registered.
+set again so the management commands and their choices are published.
 No new secret is required; the flow and effect adapters reuse the existing
 Discord verification and bot credentials, Twitch application credentials,
 public Twitch origin, and `channel:bot` OAuth configuration.

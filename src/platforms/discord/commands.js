@@ -15,10 +15,17 @@ import { discordGroupConfigFetch } from "./group-config.js";
 import {
   createIntegrationInvitation,
   defaultDiscordTwitchRoutes,
+  getIntegrationCoordinatorStatus,
+  getIntegrationDeadLetters,
+  getIntegrationManagementStatus,
   INTEGRATION_ROUTE_KINDS,
+  IntegrationCoordinatorError,
   IntegrationRegistryError,
+  listIntegrationAudit,
   listIntegrationsForGroup,
-  revokeIntegration
+  retryIntegrationEffect,
+  revokeIntegration,
+  updateIntegrationRoute
 } from "../../integrations/index.js";
 import { twitchPublicUrl } from "../twitch/environment.js";
 import {
@@ -325,11 +332,54 @@ async function integrationCommandRequest(operation) {
   try {
     return { result: await operation(), userFacingError: null };
   } catch (error) {
-    if (error instanceof IntegrationRegistryError && error.status < 500) {
+    if (
+      (error instanceof IntegrationRegistryError ||
+       error instanceof IntegrationCoordinatorError) &&
+      error.status < 500
+    ) {
       return { result: null, userFacingError: error.message };
     }
     throw error;
   }
+}
+
+const INTEGRATION_ROUTE_CHOICES = Object.freeze([
+  {
+    name: "Discord announcements to Twitch chat",
+    value: INTEGRATION_ROUTE_KINDS.DISCORD_ANNOUNCE_TO_TWITCH
+  },
+  {
+    name: "Twitch announcements to Discord",
+    value: INTEGRATION_ROUTE_KINDS.TWITCH_ANNOUNCE_TO_DISCORD
+  },
+  {
+    name: "Twitch stream-online events to Discord",
+    value: INTEGRATION_ROUTE_KINDS.TWITCH_STREAM_ONLINE_TO_DISCORD
+  }
+]);
+
+function integrationIdOption() {
+  return {
+    name: "integration_id",
+    description: "Integration ID from /integration_list",
+    type: 3,
+    required: true
+  };
+}
+
+function routeSummary(route) {
+  const destination = route.targetGroup.platform === "discord"
+    ? ` → <#${route.destination.channelId}>`
+    : "";
+  return `• ${route.enabled ? "enabled" : "disabled"} — ` +
+    `\`${compactDiagnosticText(route.kind, 80)}\`${destination}`;
+}
+
+function countSummary(counts) {
+  const entries = Object.entries(counts);
+  return entries.length === 0
+    ? "none"
+    : entries.map(([state, total]) => `${state}: ${total}`).join(", ");
 }
 
 function twitchMemberDescription(integration) {
@@ -401,6 +451,190 @@ export const commands = {
       ).join("\n");
       return ephemeralData(
         `Active integrations (${result.total} total, showing ${result.integrations.length}):\n${shown}`
+      );
+    }
+  },
+
+  "integration_status": {
+    description: "Show link, route, and delivery status for an integration.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [integrationIdOption()],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const { result, userFacingError } = await integrationCommandRequest(async () => {
+        const registry = await getIntegrationManagementStatus(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction)
+        });
+        const delivery = await getIntegrationCoordinatorStatus(env, integrationId);
+        return { registry, delivery };
+      });
+      if (userFacingError) return ephemeralData(userFacingError);
+      const { integration, routes } = result.registry;
+      const routeLines = routes.length > 0
+        ? routes.map(routeSummary).join("\n")
+        : "• no routes configured";
+      return ephemeralData(
+        `Integration \`${integration.id}\` is **${integration.status}**.\n` +
+        `${twitchMemberDescription(integration)}\n` +
+        `Executions: ${countSummary(result.delivery.executions)}\n` +
+        `Effects: ${countSummary(result.delivery.effects)}\n` +
+        `Routes:\n${routeLines}`
+      );
+    }
+  },
+
+  "integration_route_set": {
+    description: "Enable, disable, or retarget an integration route.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [
+      integrationIdOption(),
+      {
+        name: "route",
+        description: "Cross-platform route to update",
+        type: 3,
+        required: true,
+        choices: INTEGRATION_ROUTE_CHOICES
+      },
+      {
+        name: "enabled",
+        description: "Whether this route should process new events",
+        type: 5,
+        required: true
+      },
+      {
+        name: "channel",
+        description: "New Discord destination for Twitch-to-Discord routes",
+        type: 7,
+        required: false
+      }
+    ],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const routeKind = String(getOption(interaction, "route") ?? "");
+      const enabled = getOption(interaction, "enabled");
+      const channelId = getOption(interaction, "channel");
+      if (
+        channelId !== undefined &&
+        routeKind === INTEGRATION_ROUTE_KINDS.DISCORD_ANNOUNCE_TO_TWITCH
+      ) {
+        return ephemeralData("Discord-to-Twitch routes do not accept a Discord destination.");
+      }
+      const { result, userFacingError } = await integrationCommandRequest(() =>
+        updateIntegrationRoute(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction),
+          actor: discordIntegrationActor(interaction),
+          routeKind,
+          enabled,
+          ...(channelId === undefined ? {} : { destination: { channelId: String(channelId) } })
+        })
+      );
+      if (userFacingError) return ephemeralData(userFacingError);
+      return ephemeralData(`Updated route:\n${routeSummary(result.route)}`);
+    }
+  },
+
+  "integration_audit": {
+    description: "Show recent management history for an integration.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [integrationIdOption()],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const { result, userFacingError } = await integrationCommandRequest(() =>
+        listIntegrationAudit(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction),
+          limit: 10
+        })
+      );
+      if (userFacingError) return ephemeralData(userFacingError);
+      if (result.total === 0) return ephemeralData("No audit history for this integration.");
+      const lines = result.entries.map((entry) => {
+        const occurredAt = Math.floor(entry.occurredAtMs / 1000);
+        const actor = entry.actor
+          ? ` by ${compactDiagnosticText(entry.actor.platform, 24)} actor \`${compactDiagnosticText(entry.actor.id, 64)}\``
+          : "";
+        return `• <t:${occurredAt}:F> — \`${compactDiagnosticText(entry.event, 80)}\`${actor}`;
+      }).join("\n");
+      return ephemeralData(
+        `Audit history (${result.total} total, showing ${result.entries.length}):\n${lines}`
+      );
+    }
+  },
+
+  "integration_dead_letters": {
+    description: "Inspect failed cross-platform deliveries for an integration.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [integrationIdOption()],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const { result, userFacingError } = await integrationCommandRequest(async () => {
+        await getIntegrationManagementStatus(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction)
+        });
+        return getIntegrationDeadLetters(env, integrationId, { limit: 10 });
+      });
+      if (userFacingError) return ephemeralData(userFacingError);
+      if (result.total === 0) return ephemeralData("No dead-lettered deliveries.");
+      const lines = result.effects.map((effect) =>
+        `• \`${compactDiagnosticText(effect.kind, 64)}\` — attempts: ${effect.attempts}` +
+        ` — \`${compactDiagnosticText(effect.lastError?.code, 64)}\`` +
+        ` — key: \`${compactDiagnosticText(effect.idempotencyKey, 80)}\``
+      ).join("\n");
+      return ephemeralData(
+        `Dead letters (${result.total} total, showing ${result.effects.length}):\n${lines}`
+      );
+    }
+  },
+
+  "integration_retry_effect": {
+    description: "Retry one dead-lettered cross-platform delivery.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [
+      integrationIdOption(),
+      {
+        name: "idempotency_key",
+        description: "Effect key from /integration_dead_letters",
+        type: 3,
+        required: true
+      }
+    ],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const idempotencyKey = String(getOption(interaction, "idempotency_key") ?? "").trim();
+      const { userFacingError } = await integrationCommandRequest(async () => {
+        const status = await getIntegrationManagementStatus(env, {
+          integrationId,
+          group: discordIntegrationGroup(interaction)
+        });
+        if (status.integration.status !== "active") {
+          throw new IntegrationRegistryError("The integration is not active.", {
+            status: 409,
+            code: "integration_inactive"
+          });
+        }
+        return retryIntegrationEffect(env, integrationId, idempotencyKey);
+      });
+      if (userFacingError) return ephemeralData(userFacingError);
+      return ephemeralData(
+        `Queued delivery \`${compactDiagnosticText(idempotencyKey, 80)}\` for retry.`
       );
     }
   },

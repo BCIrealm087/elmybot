@@ -361,6 +361,22 @@ function publicMember(row) {
   };
 }
 
+function publicRoute(row) {
+  return {
+    kind: row.route_kind,
+    integration: {
+      id: row.integration_id,
+      key: `integration:${row.integration_id}`
+    },
+    sourceGroup: parseGroupKey(row.source_group_key),
+    targetGroup: parseGroupKey(row.target_group_key),
+    destination: validatedRouteDestination(JSON.parse(row.destination_json)).destination,
+    enabled: Boolean(row.enabled),
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms
+  };
+}
+
 export function integrationRegistryStub(env) {
   if (!env.INTEGRATION_REGISTRY) {
     throw new IntegrationRegistryError("The integration registry is not configured.", {
@@ -437,6 +453,39 @@ export async function getIntegrationById(env, integrationId) {
   integrationId = validatedOpaqueId(integrationId, "Integration ID");
   return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
     `https://integration-registry/integrations/${encodeURIComponent(integrationId)}`
+  ));
+}
+
+export async function getIntegrationManagementStatus(env, input) {
+  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
+    "https://integration-registry/integrations/status",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  ));
+}
+
+export async function updateIntegrationRoute(env, input) {
+  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
+    "https://integration-registry/routes/update",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  ));
+}
+
+export async function listIntegrationAudit(env, input) {
+  return checkedRegistryResponse(await integrationRegistryStub(env).fetch(
+    "https://integration-registry/audit",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    }
   ));
 }
 
@@ -654,6 +703,162 @@ export class IntegrationRegistry {
       revokedReason: row.revoked_reason,
       members: members.map(publicMember)
     };
+  }
+
+  requireIntegrationMember(integrationId, group) {
+    const integration = this.getIntegration(integrationId);
+    if (!integration) {
+      throw new IntegrationRegistryError("The integration was not found.", {
+        status: 404,
+        code: "integration_not_found"
+      });
+    }
+    if (!integration.members.some((member) => member.group.key === group.key)) {
+      throw new IntegrationRegistryError(
+        "The requesting group does not belong to this integration.",
+        { status: 403, code: "integration_group_not_member" }
+      );
+    }
+    return integration;
+  }
+
+  managementStatus(input) {
+    const integrationId = validatedOpaqueId(input?.integrationId, "Integration ID");
+    const group = validatedGroup(input?.group);
+    const integration = this.requireIntegrationMember(integrationId, group);
+    const routes = this.state.storage.sql.exec(
+      `SELECT integration_id, route_kind, source_group_key, target_group_key,
+              destination_json, enabled, created_at_ms, updated_at_ms
+       FROM integration_routes
+       WHERE integration_id = ?
+       ORDER BY route_kind`,
+      integrationId
+    ).toArray();
+    return { integration, routes: routes.map(publicRoute) };
+  }
+
+  updateRoute(input) {
+    const integrationId = validatedOpaqueId(input?.integrationId, "Integration ID");
+    const group = validatedGroup(input?.group);
+    const actor = validatedActor(input?.actor, group.platform);
+    const routeKind = validatedRouteKind(input?.routeKind);
+    if (typeof input?.enabled !== "boolean") {
+      throw new IntegrationRegistryError("The route enabled value must be boolean.", {
+        status: 422,
+        code: "integration_route_enabled_invalid"
+      });
+    }
+    const integration = this.requireIntegrationMember(integrationId, group);
+    if (integration.status !== "active") {
+      throw new IntegrationRegistryError("The integration is not active.", {
+        status: 409,
+        code: "integration_inactive"
+      });
+    }
+    const row = this.state.storage.sql.exec(
+      `SELECT integration_id, route_kind, source_group_key, target_group_key,
+              destination_json, enabled, created_at_ms, updated_at_ms
+       FROM integration_routes
+       WHERE integration_id = ? AND route_kind = ?`,
+      integrationId,
+      routeKind
+    ).toArray()[0];
+    if (!row) {
+      throw new IntegrationRegistryError("The integration route was not found.", {
+        status: 404,
+        code: "integration_route_not_found"
+      });
+    }
+
+    let destinationJson = row.destination_json;
+    if (input.destination !== undefined) {
+      const targetGroup = parseGroupKey(row.target_group_key);
+      const { destination, serialized } = validatedRouteDestination(input.destination);
+      if (targetGroup.platform === "discord" && (
+        typeof destination.channelId !== "string" ||
+        !OPAQUE_ID_PATTERN.test(destination.channelId)
+      )) {
+        throw new IntegrationRegistryError(
+          "Discord integration routes require a valid destination channel."
+        );
+      }
+      if (targetGroup.platform === "twitch" && Object.keys(destination).length !== 0) {
+        throw new IntegrationRegistryError(
+          "Twitch integration routes do not accept a separate destination."
+        );
+      }
+      destinationJson = serialized;
+    }
+
+    const nowMs = Date.now();
+    return this.state.storage.transactionSync(() => {
+      this.state.storage.sql.exec(
+        `UPDATE integration_routes
+         SET destination_json = ?, enabled = ?, updated_at_ms = ?
+         WHERE integration_id = ? AND route_kind = ?`,
+        destinationJson,
+        input.enabled ? 1 : 0,
+        nowMs,
+        integrationId,
+        routeKind
+      );
+      this.state.storage.sql.exec(
+        "UPDATE integrations SET updated_at_ms = ? WHERE integration_id = ?",
+        nowMs,
+        integrationId
+      );
+      audit(this.state.storage.sql, {
+        integrationId,
+        event: "integration.route.updated.v1",
+        actor,
+        groupKey: group.key,
+        occurredAtMs: nowMs
+      });
+      const updated = this.state.storage.sql.exec(
+        `SELECT integration_id, route_kind, source_group_key, target_group_key,
+                destination_json, enabled, created_at_ms, updated_at_ms
+         FROM integration_routes
+         WHERE integration_id = ? AND route_kind = ?`,
+        integrationId,
+        routeKind
+      ).toArray()[0];
+      return { route: publicRoute(updated) };
+    });
+  }
+
+  listAudit(input) {
+    const integrationId = validatedOpaqueId(input?.integrationId, "Integration ID");
+    const group = validatedGroup(input?.group);
+    this.requireIntegrationMember(integrationId, group);
+    const limit = input?.limit ?? DEFAULT_PAGE_SIZE;
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
+      throw new IntegrationRegistryError(
+        `limit must be between 1 and ${MAX_PAGE_SIZE}.`,
+        { status: 422, code: "integration_audit_limit_invalid" }
+      );
+    }
+    const total = this.state.storage.sql.exec(
+      "SELECT COUNT(*) AS total FROM integration_audit WHERE integration_id = ?",
+      integrationId
+    ).one().total;
+    const entries = this.state.storage.sql.exec(
+      `SELECT audit_id, event, actor_platform, actor_id, group_key, occurred_at_ms
+       FROM integration_audit
+       WHERE integration_id = ?
+       ORDER BY occurred_at_ms DESC, audit_id DESC
+       LIMIT ?`,
+      integrationId,
+      limit
+    ).toArray().map((row) => ({
+      id: row.audit_id,
+      event: row.event,
+      actor: row.actor_platform && row.actor_id
+        ? { platform: row.actor_platform, id: row.actor_id }
+        : null,
+      group: row.group_key ? parseGroupKey(row.group_key) : null,
+      occurredAtMs: row.occurred_at_ms
+    }));
+    return { total, entries };
   }
 
   async completeInvitation(input) {
@@ -1061,8 +1266,17 @@ export class IntegrationRegistry {
       if (request.method === "GET" && url.pathname === "/integrations") {
         return noStoreJson(this.listIntegrations(url));
       }
+      if (request.method === "POST" && url.pathname === "/integrations/status") {
+        return noStoreJson(this.managementStatus(await request.json()));
+      }
       if (request.method === "POST" && url.pathname === "/routes/resolve") {
         return noStoreJson(this.resolveRoutes(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/routes/update") {
+        return noStoreJson(this.updateRoute(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/audit") {
+        return noStoreJson(this.listAudit(await request.json()));
       }
       if (request.method === "GET" && url.pathname.startsWith("/integrations/")) {
         const integrationId = decodeURIComponent(

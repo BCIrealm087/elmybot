@@ -380,6 +380,24 @@ export async function getIntegrationExecution(env, integrationId, sourceEventId)
   ).fetch(url));
 }
 
+export async function getIntegrationCoordinatorStatus(env, integrationId) {
+  const url = new URL("https://integration-coordinator/status");
+  url.searchParams.set("integrationId", integrationId);
+  return checkedCoordinatorResponse(await integrationCoordinatorStub(
+    env,
+    integrationId
+  ).fetch(url));
+}
+
+export async function getIntegrationDeadLetters(env, integrationId, { limit } = {}) {
+  const url = new URL("https://integration-coordinator/dead-letters");
+  if (limit !== undefined) url.searchParams.set("limit", String(limit));
+  return checkedCoordinatorResponse(await integrationCoordinatorStub(
+    env,
+    integrationId
+  ).fetch(url));
+}
+
 export async function retryIntegrationEffect(env, integrationId, idempotencyKey) {
   return checkedCoordinatorResponse(await integrationCoordinatorStub(
     env,
@@ -861,7 +879,40 @@ export class IntegrationCoordinatorBackend {
         }
         return noStoreJson(result);
       }
+      if (request.method === "GET" && url.pathname === "/status") {
+        const meta = this.state.storage.sql.exec(
+          "SELECT integration_id FROM integration_coordinator_meta WHERE singleton = 1"
+        ).toArray()[0];
+        if (meta && meta.integration_id !== url.searchParams.get("integrationId") &&
+            url.searchParams.has("integrationId")) {
+          throw new IntegrationCoordinatorError(
+            "This coordinator belongs to a different integration.",
+            { status: 409, code: "integration_coordinator_identity_mismatch" }
+          );
+        }
+        const executionRows = this.state.storage.sql.exec(
+          "SELECT state, COUNT(*) AS total FROM integration_executions GROUP BY state"
+        ).toArray();
+        const effectRows = this.state.storage.sql.exec(
+          "SELECT state, COUNT(*) AS total FROM integration_effects GROUP BY state"
+        ).toArray();
+        return noStoreJson({
+          initialized: Boolean(meta),
+          integrationId: meta?.integration_id ?? null,
+          executions: Object.fromEntries(executionRows.map((row) => [row.state, row.total])),
+          effects: Object.fromEntries(effectRows.map((row) => [row.state, row.total])),
+          alarmAtMs: await this.state.storage.getAlarm()
+        });
+      }
       if (request.method === "GET" && url.pathname === "/dead-letters") {
+        const rawLimit = url.searchParams.get("limit");
+        const limit = rawLimit === null ? 10 : Number(rawLimit);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 25) {
+          throw new IntegrationCoordinatorError("limit must be between 1 and 25.", {
+            status: 422,
+            code: "integration_dead_letter_limit_invalid"
+          });
+        }
         const rows = this.state.storage.sql.exec(
           `SELECT effect_id, source_event_id, idempotency_key, kind,
                   target_group_key, state, attempts, next_attempt_at_ms,
@@ -870,7 +921,8 @@ export class IntegrationCoordinatorBackend {
            FROM integration_effects
            WHERE state = 'dead_letter'
            ORDER BY last_attempt_at_ms DESC, created_at_ms DESC
-           LIMIT 25`
+           LIMIT ?`,
+          limit
         ).toArray();
         const total = this.state.storage.sql.exec(
           `SELECT COUNT(*) AS total FROM integration_effects

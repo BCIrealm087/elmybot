@@ -90,11 +90,15 @@ The exported helpers address the correct per-integration Durable Object:
 
 - `submitIntegrationExecution` accepts or replays an execution.
 - `getIntegrationExecution` returns its current ledger and effect states.
+- `getIntegrationCoordinatorStatus` returns bounded aggregate state counts and
+  the next scheduled alarm without exposing effect payloads.
+- `getIntegrationDeadLetters` returns a bounded page of terminal failures.
 - `retryIntegrationEffect` rearms one dead-lettered effect.
 
-The Durable Object also exposes a bounded `/dead-letters` diagnostic response
-for future management tooling. These are internal service interfaces, not public
-Worker routes.
+These are internal service interfaces, not public Worker routes. Discord
+management commands first prove that their guild is an integration member
+through the registry before reading coordinator diagnostics or requesting a
+retry. See `docs/integration-management.md`.
 
 ## Deployment notes
 
