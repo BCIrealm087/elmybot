@@ -1,4 +1,9 @@
-import { logError } from "../../common.js";
+import {
+	declaredRequestBodyTooLarge,
+	encodedTextTooLarge,
+	logError,
+	MAX_SIGNED_WEBHOOK_BODY_BYTES
+} from "../../common.js";
 import {
 	drainTwitchEventSubInbox,
 	enqueueTwitchEventSubMessage,
@@ -93,6 +98,9 @@ export async function handleTwitchRequest(request, env, ctx, eventSubRegistry) {
 
 	if (request.method === "GET") return new Response("OK");
 	if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+	if (declaredRequestBodyTooLarge(request, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+		return new Response("Payload Too Large", { status: 413 });
+	}
 
 	const messageId = request.headers.get("Twitch-Eventsub-Message-Id");
 	const timestamp = request.headers.get("Twitch-Eventsub-Message-Timestamp");
@@ -103,6 +111,9 @@ export async function handleTwitchRequest(request, env, ctx, eventSubRegistry) {
 	}
 
 	const bodyText = await request.text();
+	if (encodedTextTooLarge(bodyText, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+		return new Response("Payload Too Large", { status: 413 });
+	}
 	const verified = await verifyTwitchRequest({
 		secret: env.TWITCH_EVENTSUB_SECRET,
 		messageId,

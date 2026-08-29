@@ -7,6 +7,7 @@ import {
 	waitOnExecutionContext
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { MAX_SIGNED_WEBHOOK_BODY_BYTES } from "../src/common.js";
 import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
@@ -251,6 +252,46 @@ describe("Twitch EventSub worker", () => {
 
 		expect(response.status).toBe(401);
 		expect(await response.text()).toBe("Invalid signature");
+	});
+
+	it("rejects a declared oversized EventSub body before reading it", async () => {
+		const request = new Request("https://example.com/twitch", {
+			method: "POST",
+			headers: {
+				"Content-Length": String(MAX_SIGNED_WEBHOOK_BODY_BYTES + 1),
+				"Twitch-Eventsub-Message-Id": "oversized-declared",
+				"Twitch-Eventsub-Message-Timestamp": new Date().toISOString(),
+				"Twitch-Eventsub-Message-Signature": `sha256=${"00".repeat(32)}`,
+				"Twitch-Eventsub-Message-Type": "notification"
+			},
+			body: "{}"
+		});
+		const textSpy = vi.spyOn(request, "text");
+
+		const response = await worker.fetch(request, eventSubEnv, createExecutionContext());
+
+		expect(response.status).toBe(413);
+		expect(await response.text()).toBe("Payload Too Large");
+		expect(textSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects the actual encoded EventSub body size before signature verification", async () => {
+		const request = new Request("https://example.com/twitch", {
+			method: "POST",
+			headers: {
+				"Content-Length": "1",
+				"Twitch-Eventsub-Message-Id": "oversized-actual",
+				"Twitch-Eventsub-Message-Timestamp": new Date().toISOString(),
+				"Twitch-Eventsub-Message-Signature": `sha256=${"00".repeat(32)}`,
+				"Twitch-Eventsub-Message-Type": "notification"
+			},
+			body: "é".repeat(Math.floor(MAX_SIGNED_WEBHOOK_BODY_BYTES / 2) + 1)
+		});
+
+		const response = await worker.fetch(request, eventSubEnv, createExecutionContext());
+
+		expect(response.status).toBe(413);
+		expect(await response.text()).toBe("Payload Too Large");
 	});
 
 	it("routes !alive and sends its reply to Twitch chat", async () => {

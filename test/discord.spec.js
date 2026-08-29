@@ -8,6 +8,7 @@ import {
 } from 'cloudflare:test';
 import worker from '../src/index.js';
 import { ALARM_DRAIN_TIME_BUDGET_MS } from '../src/alarm-drain.js';
+import { MAX_SIGNED_WEBHOOK_BODY_BYTES } from '../src/common.js';
 import { SCHEDULER_JOB_SCHEMA_VERSION } from '../src/message-scheduling/index.js';
 import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
@@ -205,6 +206,42 @@ describe('Discord platform', () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Bad Request');
+  });
+
+  it('rejects a declared oversized Discord body before reading it', async () => {
+    const request = new Request('https://example.com/discord', {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(MAX_SIGNED_WEBHOOK_BODY_BYTES + 1),
+        'X-Signature-Ed25519': '00'.repeat(64),
+        'X-Signature-Timestamp': `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: '{}',
+    });
+    const textSpy = vi.spyOn(request, 'text');
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe('Payload Too Large');
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects the actual encoded Discord body size before signature verification', async () => {
+    const request = new Request('https://example.com/discord', {
+      method: 'POST',
+      headers: {
+        'Content-Length': '1',
+        'X-Signature-Ed25519': '00'.repeat(64),
+        'X-Signature-Timestamp': `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: 'é'.repeat(Math.floor(MAX_SIGNED_WEBHOOK_BODY_BYTES / 2) + 1),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe('Payload Too Large');
   });
 
   it('returns 401 when signature is invalid', async () => {

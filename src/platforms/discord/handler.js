@@ -2,7 +2,10 @@ import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
 import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
 import {
+  declaredRequestBodyTooLarge,
+  encodedTextTooLarge,
   logError,
+  MAX_SIGNED_WEBHOOK_BODY_BYTES,
   unknownErrorMessage,
   withExternalRequestTimeout
 } from "../../common.js";
@@ -172,12 +175,18 @@ export async function handleDiscordRequest(request, env, ctx) {
   // Optional health
   if (request.method === "GET") return new Response("OK");
   if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+  if (declaredRequestBodyTooLarge(request, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
 
   const signature = request.headers.get("X-Signature-Ed25519");
   const timestamp = request.headers.get("X-Signature-Timestamp");
   if (!signature || !timestamp) return new Response("Bad Request", { status: 400 });
 
   const bodyText = await request.text();
+  if (encodedTextTooLarge(bodyText, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
 
   const ok = await verifyDiscordRequest({
     publicKeyHex: env.PUBLIC_KEY,
