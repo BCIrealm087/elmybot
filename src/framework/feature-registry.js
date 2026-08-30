@@ -14,6 +14,7 @@ import {
   NATIVE_COMMAND_TYPE,
   validateRegisteredCapability
 } from "./command-common.js";
+import { isRouteDefinition } from "./route-definition.js";
 
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -78,6 +79,16 @@ function commandName(command, platform, featureId, index) {
   return name;
 }
 
+function routeKind(route, featureId, index) {
+  if (!isRouteDefinition(route)) {
+    throw new FeatureRegistryError(
+      `Feature \`${featureId}\` route at index ${index} must use defineRoute().`,
+      { code: "feature_route_invalid" }
+    );
+  }
+  return route.kind;
+}
+
 function addUnique(target, key, value, description, code) {
   if (Object.prototype.hasOwnProperty.call(target, key)) {
     throw new FeatureRegistryError(`Duplicate ${description}: \`${key}\`.`, {
@@ -87,10 +98,52 @@ function addUnique(target, key, value, description, code) {
   target[key] = value;
 }
 
-export function createFeatureRegistry(features) {
+function collectEffectAdapters(effectAdapters) {
+  const collected = Object.create(null);
+  for (const platform of PLATFORMS) {
+    const platformAdapters = effectAdapters?.[platform] ?? {};
+    if (
+      typeof platformAdapters !== "object" ||
+      platformAdapters === null ||
+      Array.isArray(platformAdapters)
+    ) {
+      throw new FeatureRegistryError(
+        `Effect adapters for ${platform} must be an object.`,
+        { code: "feature_effect_adapter_invalid" }
+      );
+    }
+    for (const [kind, adapter] of Object.entries(platformAdapters)) {
+      if (
+        typeof adapter !== "object" ||
+        adapter === null ||
+        adapter.platform !== platform ||
+        typeof adapter.validateEffect !== "function" ||
+        typeof adapter.deliver !== "function"
+      ) {
+        throw new FeatureRegistryError(
+          `Effect adapter \`${kind}\` is invalid.`,
+          { code: "feature_effect_adapter_invalid" }
+        );
+      }
+      addUnique(
+        collected,
+        kind,
+        adapter,
+        "effect adapter kind",
+        "duplicate_feature_effect_adapter"
+      );
+    }
+  }
+  return collected;
+}
+
+export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
   requireFeatureList(features);
   const featuresById = Object.create(null);
+  const rawActions = Object.create(null);
   const actions = Object.create(null);
+  const routes = Object.create(null);
+  const adapters = collectEffectAdapters(effectAdapters);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
     platform,
     Object.create(null)
@@ -113,25 +166,28 @@ export function createFeatureRegistry(features) {
           code: "feature_action_capability_unknown"
         });
       }
-      if (
-        action.uses.routes.length > 0 ||
-        action.uses.effects.length > 0 ||
-        action.uses.services.length > 0
-      ) {
-        throw new FeatureRegistryError(
-          `Feature action \`${kind}\` declares dependencies that are not available ` +
-          "in the current framework stage.",
-          { code: "feature_action_dependency_unavailable" }
-        );
-      }
       addUnique(
-        actions,
+        rawActions,
         kind,
-        bindFeatureActionDefinition(action, feature.id),
+        { action, featureId: feature.id },
         "feature action kind",
         "duplicate_feature_action"
       );
     });
+    feature.routes.forEach((route, index) => addUnique(
+      routes,
+      routeKind(route, feature.id, index),
+      route,
+      "feature route kind",
+      "duplicate_feature_route"
+    ));
+    if (PLATFORMS.some((platform) => feature.effectAdapters[platform].length > 0)) {
+      throw new FeatureRegistryError(
+        `Feature \`${feature.id}\` declares feature-owned effect adapters, which are ` +
+        "not available in the current framework stage.",
+        { code: "feature_effect_adapter_unavailable" }
+      );
+    }
     for (const platform of PLATFORMS) {
       feature.commands[platform].forEach((command, index) => addUnique(
         commands[platform],
@@ -141,6 +197,53 @@ export function createFeatureRegistry(features) {
         "duplicate_feature_command"
       ));
     }
+  }
+
+  for (const [kind, { action, featureId }] of Object.entries(rawActions)) {
+    if (action.uses.services.length > 0) {
+      throw new FeatureRegistryError(
+        `Feature action \`${kind}\` declares services that are not available in the ` +
+        "current framework stage.",
+        { code: "feature_action_dependency_unavailable" }
+      );
+    }
+    const routeTargetPlatforms = new Set();
+    for (const usedRouteKind of action.uses.routes) {
+      const route = routes[usedRouteKind];
+      if (!route) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` refers to an uninstalled route ` +
+          `\`${usedRouteKind}\`.`,
+          { code: "feature_action_route_unknown" }
+        );
+      }
+      if (!action.supportedOrigins.includes(route.sourcePlatform)) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` cannot use route \`${usedRouteKind}\` from an ` +
+          "unsupported origin.",
+          { code: "feature_action_route_origin_unsupported" }
+        );
+      }
+      routeTargetPlatforms.add(route.targetPlatform);
+    }
+    for (const effectKind of action.uses.effects) {
+      const adapter = adapters[effectKind];
+      if (!adapter) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` refers to an unavailable effect ` +
+          `\`${effectKind}\`.`,
+          { code: "feature_action_effect_unknown" }
+        );
+      }
+      if (!routeTargetPlatforms.has(adapter.platform)) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` effect \`${effectKind}\` has no compatible ` +
+          "declared route.",
+          { code: "feature_action_effect_route_missing" }
+        );
+      }
+    }
+    actions[kind] = bindFeatureActionDefinition(action, featureId);
   }
 
   for (const [platform, definitions] of Object.entries(commands)) {
@@ -198,6 +301,8 @@ export function createFeatureRegistry(features) {
     features: Object.freeze([...features]),
     featuresById: Object.freeze(featuresById),
     actions: Object.freeze(actions),
+    routes: Object.freeze(routes),
+    effectAdapters: Object.freeze(adapters),
     commands: Object.freeze(Object.fromEntries(PLATFORMS.map((platform) => [
       platform,
       Object.freeze(commands[platform])

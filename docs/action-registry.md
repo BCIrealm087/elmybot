@@ -105,9 +105,12 @@ Discord or Twitch action-command helpers. Add the reviewed module to the
 explicit catalog in `src/features/index.js` and give it a focused test.
 
 The framework then validates its argument schema, capability, supported
-origins, action references, and command collisions while composing the existing
-immutable action and command registries. `core.alive` is the first migrated
-example of this path.
+origins, action references, route and effect dependencies, and command
+collisions while composing the existing immutable registries. The installed
+`integrations.announcements` feature is the routed example: it declares both
+directions, resolves only routes permitted by the action, and uses controlled
+effect factories. Platform executors submit the normalized effects through the
+durable integration coordinator after action validation succeeds.
 
 Platform-only behavior uses the native command helper and a controlled platform
 context. It does not need to enter the action registry. The

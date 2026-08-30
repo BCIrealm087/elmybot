@@ -1,4 +1,3 @@
-import { INTEGRATION_ACTION_KINDS } from "../../actions/index.js";
 import {
   createIntegrationInvitation,
   defaultDiscordTwitchRoutes,
@@ -15,7 +14,6 @@ import {
   updateIntegrationRoute
 } from "../../integrations/index.js";
 import { CAPABILITIES } from "./discord-permissions.js";
-import { discordTextActionResponse, executeDiscordRoutedAction } from "./actions.js";
 import { ephemeralData, getOption } from "./common.js";
 import { twitchPublicUrl } from "../twitch/environment.js";
 
@@ -338,42 +336,6 @@ export const integrationCommands = Object.freeze({
       return ephemeralData(
         `Queued delivery \`${compactDiagnosticText(idempotencyKey, 80)}\` for retry.`
       );
-    }
-  },
-
-  "integration_announce_twitch": {
-    description: "Publish an announcement to linked Twitch channels.",
-    guild: {
-      capability: CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH
-    },
-    deferred: true,
-    options: [
-      {
-        name: "message",
-        description: "Message to send to linked Twitch chats.",
-        type: 3,
-        required: true,
-        max_length: 500
-      }
-    ],
-    exec: async (interaction, env, _name, context) => {
-      const message = String(getOption(interaction, "message") ?? "").trim();
-      if (message.length === 0) {
-        return ephemeralData("Announcement message is required.");
-      }
-      if (message.length > 500) {
-        return ephemeralData("Twitch announcements must not exceed 500 characters.");
-      }
-      return discordTextActionResponse(await executeDiscordRoutedAction(
-        context.sourceInteraction,
-        INTEGRATION_ACTION_KINDS.PUBLISH_ANNOUNCEMENT,
-        { message },
-        {
-          env,
-          routeKind: INTEGRATION_ROUTE_KINDS.DISCORD_ANNOUNCE_TO_TWITCH,
-          authorizedCapability: context.authorizedCapability
-        }
-      ));
     }
   },
 

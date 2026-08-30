@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { CORE_ACTION_KINDS, coreActions } from "../src/actions/index.js";
+import {
+  CORE_ACTION_KINDS,
+  coreActions,
+  integrationActions
+} from "../src/actions/index.js";
+import {
+  ANNOUNCEMENT_ACTION_KIND,
+  ANNOUNCEMENT_ROUTE_KINDS
+} from "../src/features/announcements/feature.js";
 import {
   featureRegistry,
   installedFeatures
@@ -46,5 +54,25 @@ describe("Representative feature migrations", () => {
       type: 8,
       required: true
     }]);
+  });
+
+  it("installs announcements as one routed action with two route directions", () => {
+    expect(installedFeatures.map(({ id }) => id))
+      .toContain("integrations.announcements");
+    expect(featureRegistry.actions[ANNOUNCEMENT_ACTION_KIND]).toMatchObject({
+      featureId: "integrations.announcements",
+      supportedOrigins: ["discord", "twitch"]
+    });
+    expect(Object.keys(featureRegistry.routes)).toEqual(
+      Object.values(ANNOUNCEMENT_ROUTE_KINDS)
+    );
+    expect(featureRegistry.commands.discord.integration_announce_twitch)
+      .toMatchObject({ mode: "action-command", actionKind: ANNOUNCEMENT_ACTION_KIND });
+    expect(featureRegistry.commands.twitch.announce)
+      .toMatchObject({ mode: "action-command", actionKind: ANNOUNCEMENT_ACTION_KIND });
+    expect(discordCommands.integration_announce_twitch.actionKind)
+      .toBe(ANNOUNCEMENT_ACTION_KIND);
+    expect(twitchCommands.announce.actionKind).toBe(ANNOUNCEMENT_ACTION_KIND);
+    expect(integrationActions).toEqual({});
   });
 });

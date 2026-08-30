@@ -1,6 +1,8 @@
 import { actionRegistry, executeAction } from "../../actions/index.js";
+import { featureRegistry } from "../../features/index.js";
 import { createCommandInvocation } from "../../integrations/contracts.js";
 import {
+  ROUTED_MESSAGE_EFFECT_KINDS,
   resolveRoutes,
   submitRoutedEffects
 } from "../../integrations/index.js";
@@ -40,33 +42,30 @@ export async function executeDiscordAction(
   args = {},
   context = {}
 ) {
-  return executeAction(
-    actionRegistry,
-    createDiscordActionInvocation(interaction, kind, args),
-    context
-  );
-}
-
-export async function executeDiscordRoutedAction(
-  interaction,
-  kind,
-  args,
-  { env, routeKind, authorizedCapability }
-) {
   const invocation = createDiscordActionInvocation(interaction, kind, args);
-  const routes = await resolveRoutes(env, invocation.origin.group, routeKind);
-  const result = await executeAction(actionRegistry, invocation, {
-    env,
-    routes,
-    routeTargetPlatform: "twitch",
-    authorize: ({ capability }) => capability === authorizedCapability
-  });
-  await submitRoutedEffects(env, {
-    source: invocation.origin,
-    sourceEventId: invocation.sourceEventId,
-    correlationId: invocation.correlationId,
-    effects: result.effects
-  });
+  const result = await executeAction(
+    actionRegistry,
+    invocation,
+    {
+      ...context,
+      routeDefinitions: featureRegistry.routes,
+      effectAdapters: featureRegistry.effectAdapters,
+      routedMessageEffectKinds: ROUTED_MESSAGE_EFFECT_KINDS,
+      resolveRoutes: (routeKind) => resolveRoutes(
+        context.env,
+        invocation.origin.group,
+        routeKind
+      )
+    }
+  );
+  if (result.effects.length > 0) {
+    await submitRoutedEffects(context.env, {
+      source: invocation.origin,
+      sourceEventId: invocation.sourceEventId,
+      correlationId: invocation.correlationId,
+      effects: result.effects
+    });
+  }
   return result;
 }
 

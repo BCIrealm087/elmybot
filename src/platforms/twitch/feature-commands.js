@@ -32,24 +32,33 @@ function nativeContext(event, messageId) {
   });
 }
 
-function userFacingError(error, commandName) {
+function userFacingError(error, commandName, capability = null) {
   if (error instanceof SchemaValidationError) return error.message;
   if (error instanceof ActionRegistryError && error.code === "action_arguments_invalid") {
     return error.message;
   }
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
+    if (
+      capability === "framework.moderators" ||
+      capability === "integration.announcement.publish"
+    ) {
+      return `Only the broadcaster or a moderator can use !${commandName}.`;
+    }
     return `You are not authorized to use !${commandName}.`;
   }
   return null;
 }
 
-export function compileTwitchFeatureCommands(definitions) {
+export function compileTwitchFeatureCommands(definitions, actions = {}) {
   const compiled = Object.create(null);
   for (const definition of Object.values(definitions)) {
     compiled[definition.name] = Object.freeze({
       description: definition.description,
       actionKind: definition.actionKind,
       exec: async (event, env, { messageId, argsText }) => {
+        const capability = definition.mode === "action-command"
+          ? actions[definition.actionKind]?.capability ?? null
+          : definition.capability;
         try {
           const parsed = definition.parse.parse(argsText);
           if (definition.mode === "action-command") {
@@ -81,7 +90,7 @@ export function compileTwitchFeatureCommands(definitions) {
           const args = definition.input.parse(parsed, { path: "arguments" });
           return await definition.execute(nativeContext(event, messageId), args);
         } catch (error) {
-          const response = userFacingError(error, definition.name);
+          const response = userFacingError(error, definition.name, capability);
           if (response) return response;
           throw error;
         }

@@ -13,6 +13,9 @@ export {
   defineAction
 } from "./action-definition.js";
 export {
+  defineRoute
+} from "./route-definition.js";
+export {
   schema,
   SchemaValidationError
 } from "./argument-schema.js";

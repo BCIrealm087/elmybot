@@ -3,6 +3,7 @@ import {
   createFeatureRegistry,
   defineAction,
   defineFeature,
+  defineRoute,
   discordActionCommand,
   discordNativeCommand,
   FEATURE_FRAMEWORK_API_VERSION,
@@ -12,8 +13,14 @@ import {
   twitchActionCommand,
   twitchNativeCommand
 } from "../src/framework/index.js";
-import { createActionRegistry } from "../src/actions/registry.js";
-import { createActionDefinition } from "../src/integrations/index.js";
+import {
+  createActionRegistry,
+  executeAction
+} from "../src/actions/registry.js";
+import {
+  createActionDefinition,
+  createCommandInvocation
+} from "../src/integrations/index.js";
 
 function action(kind) {
   return defineAction({
@@ -26,6 +33,7 @@ function action(kind) {
 function feature({
   id = "test.feature",
   actions = [],
+  routes = [],
   discord = [],
   twitch = []
 } = {}) {
@@ -34,6 +42,7 @@ function feature({
     id,
     description: `Feature ${id}`,
     actions,
+    routes,
     commands: { discord, twitch }
   });
 }
@@ -138,6 +147,113 @@ describe("Command and feature framework", () => {
     expect(registry.commands.twitch.hello).toMatchObject({ name: "hello" });
     expect(Object.isFrozen(registry.actions)).toBe(true);
     expect(Object.isFrozen(registry.commands.discord)).toBe(true);
+  });
+
+  it("catalogs feature routes and verifies routed action dependencies", () => {
+    const route = defineRoute({
+      kind: "discord.test-to-twitch.v1",
+      sourcePlatform: "discord",
+      targetPlatform: "twitch",
+      destination: "none"
+    });
+    const routedAction = defineAction({
+      kind: "test.routed.publish.v1",
+      supportedOrigins: ["discord"],
+      uses: {
+        routes: [route.kind],
+        effects: ["twitch.chat.send.v1"]
+      },
+      execute: () => ({ output: {}, effects: [] })
+    });
+    const adapter = Object.freeze({
+      platform: "twitch",
+      validateEffect: () => null,
+      deliver: async () => null
+    });
+    const registry = createFeatureRegistry([
+      feature({ actions: [routedAction], routes: [route] })
+    ], {
+      effectAdapters: { twitch: { "twitch.chat.send.v1": adapter } }
+    });
+
+    expect(registry.routes[route.kind]).toBe(route);
+    expect(registry.effectAdapters["twitch.chat.send.v1"]).toBe(adapter);
+    expect(Object.isFrozen(registry.routes)).toBe(true);
+
+    expect(() => createFeatureRegistry([
+      feature({ actions: [routedAction], routes: [route] })
+    ])).toThrow("refers to an unavailable effect");
+    expect(() => createFeatureRegistry([
+      feature({ actions: [routedAction] })
+    ], {
+      effectAdapters: { twitch: { "twitch.chat.send.v1": adapter } }
+    })).toThrow("refers to an uninstalled route");
+  });
+
+  it("resolves declared routes and creates controlled routed effects", async () => {
+    const route = defineRoute({
+      kind: "discord.test-to-twitch.v1",
+      sourcePlatform: "discord",
+      targetPlatform: "twitch",
+      destination: "none"
+    });
+    const routedAction = defineAction({
+      kind: "test.routed.publish.v1",
+      supportedOrigins: ["discord"],
+      uses: {
+        routes: [route.kind],
+        effects: ["twitch.chat.send.v1"]
+      },
+      async execute(ctx) {
+        const routes = await ctx.routes.resolve(route.kind);
+        return {
+          output: { count: routes.length },
+          effects: routes.map((resolved) =>
+            ctx.effects.routedMessage(resolved, { message: "hello" })
+          )
+        };
+      }
+    });
+    const adapter = Object.freeze({
+      platform: "twitch",
+      validateEffect: () => null,
+      deliver: async () => null
+    });
+    const featureCatalog = createFeatureRegistry([
+      feature({ actions: [routedAction], routes: [route] })
+    ], {
+      effectAdapters: { twitch: { "twitch.chat.send.v1": adapter } }
+    });
+    const registry = createActionRegistry(featureCatalog.actions);
+    const invocation = createCommandInvocation({
+      kind: routedAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:1",
+      correlationId: "discord:interaction:1"
+    });
+    const result = await executeAction(registry, invocation, {
+      routeDefinitions: featureCatalog.routes,
+      effectAdapters: featureCatalog.effectAdapters,
+      routedMessageEffectKinds: { twitch: "twitch.chat.send.v1" },
+      resolveRoutes: async () => [{
+        kind: route.kind,
+        integration: { id: "integration-1" },
+        sourceGroup: invocation.origin.group,
+        targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" },
+        destination: {}
+      }]
+    });
+
+    expect(result.output).toEqual({ count: 1 });
+    expect(result.effects[0]).toMatchObject({
+      kind: "twitch.chat.send.v1",
+      target: { group: { platform: "twitch", id: "channel-1" } },
+      payload: { message: "hello" },
+      integration: { id: "integration-1" }
+    });
   });
 
   it("rejects duplicate feature IDs, actions, and same-platform commands", () => {

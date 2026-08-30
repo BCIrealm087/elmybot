@@ -7,6 +7,11 @@ import { resolveIntegrationRoutes } from "./registry.js";
 import { DISCORD_EFFECT_KINDS } from "../platforms/discord/integration-effects.js";
 import { TWITCH_EFFECT_KINDS } from "../platforms/twitch/integration-effects.js";
 
+export const ROUTED_MESSAGE_EFFECT_KINDS = Object.freeze({
+  discord: DISCORD_EFFECT_KINDS.SEND_MESSAGE,
+  twitch: TWITCH_EFFECT_KINDS.SEND_CHAT_MESSAGE
+});
+
 export async function resolveRoutes(env, sourceGroup, routeKind) {
   const result = await resolveIntegrationRoutes(env, {
     sourceGroup,

@@ -250,7 +250,9 @@ defineRoute({
   kind: "discord.hype-to-twitch.v1",
   sourcePlatform: "discord",
   targetPlatform: "twitch",
-  defaultEnabled: false
+  destination: "none",
+  newIntegration: "enabled",
+  existingIntegration: "disabled"
 });
 ```
 
@@ -385,9 +387,13 @@ so those representations cannot silently drift.
    Discord-native `/config_allow_role` command and uses a narrow adapter service
    instead of raw Worker bindings. All other commands remain on their legacy
    registrations; this is intentionally not a big-bang conversion.
-5. **Add the route catalog and effect helpers.** Migrate bidirectional
-   announcements. A contributor should then be able to add an immediate
-   cross-platform command without editing coordinator code.
+5. **Add the route catalog and effect helpers — completed.** Installed
+   features now contribute validated route definitions, actions declare their
+   route and effect dependencies, and controlled context factories construct
+   routed Discord-message and Twitch-chat effects. Both announcement commands
+   now belong to one installed feature; platform executors submit its results
+   through the existing durable coordinator without feature code constructing
+   integration envelopes or handling retries.
 6. **Add scheduled-action and event-action adapters.** Include immutable
    occurrence planning. Migrate `stream.online` and use a randomly scheduled
    Discord-to-Twitch message as the cross-platform scheduling proof.

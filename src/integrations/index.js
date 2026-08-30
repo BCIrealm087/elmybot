@@ -50,6 +50,7 @@ export {
 export {
   createDiscordMessageEffects,
   createRoutedMessageEffects,
+  ROUTED_MESSAGE_EFFECT_KINDS,
   resolveRoutes,
   submitRoutedEffects
 } from "./routing.js";
