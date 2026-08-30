@@ -5,6 +5,11 @@ import {
   INTEGRATION_CONTRACT_SCHEMA_VERSION,
   IntegrationContractError
 } from "../integrations/contracts.js";
+import { SchemaValidationError } from "../framework/argument-schema.js";
+import { createFeatureActionContext } from "../framework/action-context.js";
+import {
+  isBoundFeatureActionDefinition
+} from "../framework/action-definition.js";
 
 export class ActionRegistryError extends Error {
   constructor(message, {
@@ -26,7 +31,9 @@ export function createActionRegistry(...actionSets) {
       if (registry[kind]) {
         throw new Error(`Duplicate action kind: \`${kind}\`.`);
       }
-      const normalized = createActionDefinition(definition);
+      const normalized = isBoundFeatureActionDefinition(definition)
+        ? definition
+        : createActionDefinition(definition);
       if (normalized.kind !== kind) {
         throw new Error(
           `Action registry key \`${kind}\` does not match definition kind ` +
@@ -75,7 +82,7 @@ function normalizedResult(value, actionKind) {
 }
 
 export async function executeAction(registry, input, context = {}) {
-  const invocation = normalizedInvocation(input);
+  let invocation = normalizedInvocation(input);
   const action = registry[invocation.kind];
   if (!action) {
     throw new ActionRegistryError(
@@ -89,6 +96,22 @@ export async function executeAction(registry, input, context = {}) {
       `\`${invocation.origin.group.platform}\` commands.`,
       { status: 422, code: "action_origin_unsupported" }
     );
+  }
+
+  if (isBoundFeatureActionDefinition(action)) {
+    try {
+      const args = action.input.parse(invocation.args, { path: "arguments" });
+      invocation = Object.freeze({ ...invocation, args });
+    } catch (cause) {
+      if (cause instanceof SchemaValidationError) {
+        throw new ActionRegistryError(cause.message, {
+          status: 422,
+          code: "action_arguments_invalid",
+          cause
+        });
+      }
+      throw cause;
+    }
   }
 
   if (action.capability !== null) {
@@ -110,8 +133,11 @@ export async function executeAction(registry, input, context = {}) {
     }
   }
 
-  return normalizedResult(
-    await action.execute(invocation, Object.freeze({ ...context })),
-    action.kind
-  );
+  const value = isBoundFeatureActionDefinition(action)
+    ? await action.execute(
+      createFeatureActionContext(action, invocation, context),
+      invocation.args
+    )
+    : await action.execute(invocation, Object.freeze({ ...context }));
+  return normalizedResult(value, action.kind);
 }

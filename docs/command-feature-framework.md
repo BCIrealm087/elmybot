@@ -374,8 +374,12 @@ so those representations cannot silently drift.
    catalog, immutable action and per-platform command contribution registries,
    and collision-safe merging with legacy action and command sets. The catalog
    remains empty until representative features are migrated in later steps.
-3. **Add Discord and Twitch command helpers.** Include runtime argument schemas,
-   access presets, common replies, and Discord registration generation.
+3. **Add Discord and Twitch command helpers — completed.** The framework now
+   provides runtime argument schemas, reviewed access presets, separate
+   action-backed and native command definitions, Twitch parsers, safe text
+   renderers, Discord option/registration generation, and composition checks
+   tying action commands to installed actions. Existing commands remain on the
+   legacy adapters until the representative migrations in step 4.
 4. **Migrate representative local behavior.** Use `/alive` and `!alive` for one
    shared action and migrate one genuinely platform-native command. Do not use a
    big-bang conversion.

@@ -133,17 +133,19 @@ async function handleCommand(interaction, env, command) {
       // guild-specific permission evaluation.
       if (!interaction.guild_id) throw new CommandUserFacingError("Use this command inside a server.");
       const capability = def.guild.capability;
-      if (typeof capability !== "string" || capability.length === 0) {
-        throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+      if (capability !== null) {
+        if (typeof capability !== "string" || capability.length === 0) {
+          throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+        }
+        const permStatus = await checkPermissions(interaction, env, { capability });
+        if (!permStatus.configured) {
+          throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+        }
+        if (!permStatus.ok) throw new CommandUserFacingError(
+          `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
+        );
+        authorizedCapability = capability;
       }
-      const permStatus = await checkPermissions(interaction, env, { capability });
-      if (!permStatus.configured) {
-        throw new CommandUserFacingError("Error: permissions for this command have not been set.");
-      }
-      if (!permStatus.ok) throw new CommandUserFacingError(
-        `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
-      );
-      authorizedCapability = capability;
     } else {
       // Commands without an explicit guild descriptor receive a shallow copy
       // without guild access. The source adapter separately retains the

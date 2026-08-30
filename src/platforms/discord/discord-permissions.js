@@ -4,6 +4,7 @@
  */
 
 import { withExternalRequestTimeout } from "../../common.js";
+import { FRAMEWORK_CAPABILITIES } from "../../framework/index.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 
 export const PERMS = {
@@ -24,6 +25,9 @@ export const PERM_STRINGS = {
 }
 
 export const CAPABILITIES = Object.freeze({
+  FRAMEWORK_MEMBERS: FRAMEWORK_CAPABILITIES.MEMBERS,
+  FRAMEWORK_MODERATORS: FRAMEWORK_CAPABILITIES.MODERATORS,
+  FRAMEWORK_MANAGERS: FRAMEWORK_CAPABILITIES.MANAGERS,
   CONFIG_MANAGE: "config.manage",
   INTEGRATION_ANNOUNCEMENT_PUBLISH: "integration.announcement.publish",
   INTEGRATION_MANAGE: "integration.manage",
@@ -33,6 +37,18 @@ export const CAPABILITIES = Object.freeze({
 });
 
 const CAPABILITY_POLICIES = Object.freeze({
+  [CAPABILITIES.FRAMEWORK_MEMBERS]: Object.freeze([
+    PERMS.MEMBERS
+  ]),
+  [CAPABILITIES.FRAMEWORK_MODERATORS]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.MODERATORS,
+    PERMS.GUILD_ALLOWED_ROLES
+  ]),
+  [CAPABILITIES.FRAMEWORK_MANAGERS]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.GUILD_MANAGERS
+  ]),
   [CAPABILITIES.INTEGRATION_ANNOUNCEMENT_PUBLISH]: Object.freeze([
     PERMS.OWNER,
     PERMS.MODERATORS,

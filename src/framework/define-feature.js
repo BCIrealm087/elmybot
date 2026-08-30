@@ -1,3 +1,5 @@
+import { frameworkDefinitionType } from "./definition-brand.js";
+
 export const FEATURE_FRAMEWORK_API_VERSION = 1;
 
 const FEATURE_ID_PATTERN =
@@ -45,6 +47,7 @@ function requirePlainObject(value, path) {
 }
 
 function cloneAndFreeze(value, path, ancestors = new Set()) {
+  if (frameworkDefinitionType(value) !== null) return value;
   if (
     value === null ||
     typeof value === "string" ||

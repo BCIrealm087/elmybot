@@ -8,8 +8,9 @@ import {
   resolveRoutes,
   submitRoutedEffects
 } from "../../integrations/index.js";
+import { FRAMEWORK_CAPABILITIES } from "../../framework/index.js";
 
-function twitchActorClaims(event) {
+export function twitchActorClaims(event) {
   const badgeClaims = new Set(
     Array.isArray(event.badges)
       ? event.badges.map((badge) => badge?.set_id)
@@ -24,6 +25,22 @@ function twitchActorClaims(event) {
   }
   if (badgeClaims.has("moderator")) claims.push("twitch.moderator");
   return claims;
+}
+
+export function twitchCapabilityAllowed(capability, actorClaims) {
+  if (capability === null) return true;
+  const claims = new Set(actorClaims);
+  if (capability === FRAMEWORK_CAPABILITIES.MEMBERS) return true;
+  if (capability === FRAMEWORK_CAPABILITIES.MODERATORS) {
+    return claims.has("twitch.broadcaster") || claims.has("twitch.moderator");
+  }
+  if (capability === FRAMEWORK_CAPABILITIES.MANAGERS) {
+    return claims.has("twitch.broadcaster");
+  }
+  if (capability === INTEGRATION_ACTION_CAPABILITIES.PUBLISH_ANNOUNCEMENT) {
+    return claims.has("twitch.broadcaster") || claims.has("twitch.moderator");
+  }
+  return false;
 }
 
 export function createTwitchActionInvocation(event, messageId, kind, args = {}) {
@@ -63,11 +80,7 @@ export async function executeTwitchAction(
 }
 
 function authorizeTwitchAction({ capability, invocation }) {
-  if (capability !== INTEGRATION_ACTION_CAPABILITIES.PUBLISH_ANNOUNCEMENT) {
-    return false;
-  }
-  const claims = new Set(invocation.origin.actor.claims);
-  return claims.has("twitch.broadcaster") || claims.has("twitch.moderator");
+  return twitchCapabilityAllowed(capability, invocation.origin.actor.claims);
 }
 
 export async function executeTwitchRoutedAction(
@@ -82,6 +95,7 @@ export async function executeTwitchRoutedAction(
   const result = await executeAction(actionRegistry, invocation, {
     env,
     routes,
+    routeTargetPlatform: "discord",
     authorize: authorizeTwitchAction
   });
   await submitRoutedEffects(env, {

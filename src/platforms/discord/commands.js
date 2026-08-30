@@ -5,6 +5,7 @@ import { discordTextActionResponse, executeDiscordAction } from "./actions.js";
 import { CAPABILITIES } from "./discord-permissions.js";
 import { ephemeralData, getOption } from "./common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
+import { compileDiscordFeatureCommands } from "./feature-commands.js";
 import { integrationCommands } from "./integration-commands.js";
 import {
   DISCORD_JOB_KINDS,
@@ -267,5 +268,8 @@ const legacyCommands = {
 export const commands = mergeCommandDefinitions(
   "discord",
   legacyCommands,
-  featureRegistry.commands.discord
+  compileDiscordFeatureCommands(
+    featureRegistry.commands.discord,
+    featureRegistry.actions
+  )
 );

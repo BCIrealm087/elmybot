@@ -6,6 +6,7 @@ import {
 import { featureRegistry } from "../../features/index.js";
 import { mergeCommandDefinitions } from "../../framework/index.js";
 import { INTEGRATION_ROUTE_KINDS } from "../../integrations/index.js";
+import { compileTwitchFeatureCommands } from "./feature-commands.js";
 import {
 	executeTwitchAction,
 	executeTwitchRoutedAction,
@@ -57,5 +58,5 @@ const legacyCommands = Object.freeze({
 export const commands = mergeCommandDefinitions(
 	"twitch",
 	legacyCommands,
-	featureRegistry.commands.twitch
+	compileTwitchFeatureCommands(featureRegistry.commands.twitch)
 );
