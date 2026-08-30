@@ -1,4 +1,6 @@
 import { CORE_ACTION_KINDS } from "../../actions/index.js";
+import { featureRegistry } from "../../features/index.js";
+import { mergeCommandDefinitions } from "../../framework/index.js";
 import { discordTextActionResponse, executeDiscordAction } from "./actions.js";
 import { CAPABILITIES } from "./discord-permissions.js";
 import { ephemeralData, getOption } from "./common.js";
@@ -245,7 +247,7 @@ const managementCommands = Object.freeze({
 // `exec` return values are Discord interaction `data` payloads, not full
 // `Response` instances. Commands without a guild descriptor will not receive
 // a guild_id on execution.
-export const commands = {
+const legacyCommands = {
   "alive": {
     description: "Replies if alive.",
     actionKind: CORE_ACTION_KINDS.ALIVE,
@@ -261,3 +263,9 @@ export const commands = {
   ...schedulingCommands,
   ...managementCommands
 };
+
+export const commands = mergeCommandDefinitions(
+  "discord",
+  legacyCommands,
+  featureRegistry.commands.discord
+);

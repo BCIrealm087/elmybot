@@ -3,6 +3,8 @@ import {
 	CORE_ACTION_KINDS,
 	INTEGRATION_ACTION_KINDS
 } from "../../actions/index.js";
+import { featureRegistry } from "../../features/index.js";
+import { mergeCommandDefinitions } from "../../framework/index.js";
 import { INTEGRATION_ROUTE_KINDS } from "../../integrations/index.js";
 import {
 	executeTwitchAction,
@@ -10,7 +12,7 @@ import {
 	twitchTextActionResponse
 } from "./actions.js";
 
-export const commands = Object.freeze({
+const legacyCommands = Object.freeze({
 	"alive": Object.freeze({
 		description: "Replies if alive.",
 		actionKind: CORE_ACTION_KINDS.ALIVE,
@@ -51,3 +53,9 @@ export const commands = Object.freeze({
 		}
 	})
 });
+
+export const commands = mergeCommandDefinitions(
+	"twitch",
+	legacyCommands,
+	featureRegistry.commands.twitch
+);

@@ -1,8 +1,13 @@
 import { coreActions } from "./core.js";
 import { integrationActions } from "./integration.js";
+import { featureRegistry } from "../features/index.js";
 import { createActionRegistry } from "./registry.js";
 
-export const actionRegistry = createActionRegistry(coreActions, integrationActions);
+export const actionRegistry = createActionRegistry(
+  coreActions,
+  integrationActions,
+  featureRegistry.actions
+);
 
 export {
   ActionRegistryError,
