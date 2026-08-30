@@ -1,6 +1,8 @@
 import { frameworkDefinitionType } from "./definition-brand.js";
-
-export const FEATURE_FRAMEWORK_API_VERSION = 1;
+import {
+  frameworkApiVersion,
+  supportedFrameworkApiVersions
+} from "./api-version.js";
 
 const FEATURE_ID_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
@@ -21,11 +23,16 @@ const SUPPORTED_PLATFORMS = Object.freeze(["discord", "twitch"]);
 const featureDefinitions = new WeakSet();
 
 export class FeatureDefinitionError extends TypeError {
-  constructor(message, { path = "Feature definition" } = {}) {
+  constructor(message, {
+    path = "Feature definition",
+    code = "invalid_feature_definition",
+    details = null
+  } = {}) {
     super(`${path} ${message}`);
     this.name = "FeatureDefinitionError";
-    this.code = "invalid_feature_definition";
+    this.code = code;
     this.path = path;
+    this.details = details;
   }
 }
 
@@ -108,10 +115,17 @@ export function defineFeature(input) {
       fail(`Feature definition.${field}`, "is not a supported field.");
     }
   }
-  if (input.apiVersion !== FEATURE_FRAMEWORK_API_VERSION) {
-    fail(
-      "Feature definition.apiVersion",
-      `must equal ${FEATURE_FRAMEWORK_API_VERSION}.`
+  if (input.apiVersion !== frameworkApiVersion) {
+    throw new FeatureDefinitionError(
+      `must equal ${frameworkApiVersion}.`,
+      {
+        path: "Feature definition.apiVersion",
+        code: "unsupported_framework_api_version",
+        details: Object.freeze({
+          received: input.apiVersion ?? null,
+          supported: supportedFrameworkApiVersions
+        })
+      }
     );
   }
   if (
@@ -130,7 +144,7 @@ export function defineFeature(input) {
   }
 
   const feature = Object.freeze({
-    apiVersion: FEATURE_FRAMEWORK_API_VERSION,
+    apiVersion: frameworkApiVersion,
     id: input.id,
     description: input.description,
     actions: definitionArray(input.actions, "Feature definition.actions"),

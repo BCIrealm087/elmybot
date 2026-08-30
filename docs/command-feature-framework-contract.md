@@ -2,13 +2,12 @@
 
 ## Status
 
-**Framework API v1 approved on 2026-08-30; implementation steps 1–8 complete.**
+**Framework API v1 stable on 2026-08-30; implementation steps 1–9 complete.**
 
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
-semantics during staged implementation. Examples use the approved public API;
-they are not executable until the corresponding implementation steps are
-complete.
+semantics. Examples use the stable public API. The compatibility and
+deprecation policy is maintained in [`framework-api.md`](framework-api.md).
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** describe requirements
 on the eventual implementation.
@@ -42,17 +41,11 @@ Ordinary feature modules MUST import authoring APIs only from:
 import { /* public helpers */ } from "../../framework/index.js";
 ```
 
-Platform-native feature adapters MAY additionally import from a documented
-public platform SDK:
-
-```js
-import { /* Discord helpers */ } from "../../framework/discord.js";
-import { /* Twitch helpers */ } from "../../framework/twitch.js";
-```
-
 Imports from integration coordinator storage, Durable Object backends,
 platform authentication modules, or internal registry implementations are not
-part of the feature API and MUST fail the contribution review checklist.
+part of the feature API and MUST fail the automated feature-boundary check.
+`src/framework/testing.js` is the supported test-only companion entry; every
+other framework module is internal to composition, adapters, or tooling.
 
 ## Identifiers and versions
 
@@ -61,7 +54,10 @@ part of the feature API and MUST fail the contribution review checklist.
 Every feature declares:
 
 ```js
-apiVersion: 1
+import { frameworkApiVersion } from "../../framework/index.js";
+
+// Inside defineFeature(...)
+apiVersion: frameworkApiVersion
 ```
 
 The runtime MUST reject an unsupported API version during composition. It MUST
@@ -96,7 +92,7 @@ work drains or callers migrate.
 
 ```js
 defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "namespace.feature-name",
   description: "Human-readable feature description.",
   actions: [],
@@ -644,6 +640,14 @@ field required, weaken isolation, or change when authorization occurs.
 API versions MAY coexist during a bounded migration period. New features use
 the newest stable version; existing features are migrated explicitly.
 
+### Deprecation
+
+A public v1 helper may be deprecated but MUST remain functional for the rest of
+v1. Deprecation MUST identify a replacement in code and documentation. Removal
+requires a new framework API version, updated migration guidance, scaffolds and
+examples, and confirmation that no installed feature still uses the deprecated
+surface. `docs/framework-api.md` is the authoritative deprecation register.
+
 ### Changes requiring a new semantic `.vN` kind
 
 A new semantic kind is required when persisted input, output, routing meaning,
@@ -666,6 +670,7 @@ import {
   defineFeature,
   discordActionCommand,
   discordTextResult,
+  frameworkApiVersion,
   schema,
   twitchActionCommand,
   twitchNoArgs,
@@ -675,7 +680,7 @@ import {
 const HEALTH_CHECK = "core.health.check.v1";
 
 export default defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "core.alive",
   description: "A shared responsiveness check.",
 
@@ -730,6 +735,7 @@ import {
   discordActionCommand,
   discordOption,
   discordTextResult,
+  frameworkApiVersion,
   schema,
   twitchActionCommand,
   twitchRestText,
@@ -742,7 +748,7 @@ const DISCORD_TO_TWITCH = "discord.announce-to-twitch.v1";
 const TWITCH_TO_DISCORD = "twitch.announce-to-discord.v1";
 
 export default defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "integration.announcements",
   description: "Publishes announcements between linked platform groups.",
 
@@ -853,14 +859,15 @@ import {
   defineFeature,
   defineScheduledAction,
   discordOption,
-  discordScheduledActionCommand
+  discordScheduledActionCommand,
+  frameworkApiVersion
 } from "../../framework/index.js";
 
 const PUBLISH = "integration.announcement.publish.v1";
 const SCHEDULE = "discord.integration.announce-twitch-random.v1";
 
 export default defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "integration.scheduled-twitch-announcements",
   description: "Schedules recurring announcements to linked Twitch chats.",
 

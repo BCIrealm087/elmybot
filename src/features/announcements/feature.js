@@ -5,6 +5,7 @@ import {
   discordActionCommand,
   discordOption,
   discordTextResult,
+  frameworkApiVersion,
   schema,
   twitchActionCommand,
   twitchRestText,
@@ -44,7 +45,7 @@ const twitchToDiscord = defineRoute({
 });
 
 export const announcementsFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "integrations.announcements",
   description: "Publishes immediate announcements across linked platforms.",
   routes: [discordToTwitch, twitchToDiscord],

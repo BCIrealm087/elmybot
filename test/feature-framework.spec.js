@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createFeatureRegistry,
   defineAction,
   defineEventAction,
   defineFeature,
@@ -8,13 +7,16 @@ import {
   defineScheduledAction,
   discordActionCommand,
   discordNativeCommand,
-  FEATURE_FRAMEWORK_API_VERSION,
   FeatureDefinitionError,
-  FeatureRegistryError,
-  mergeCommandDefinitions,
+  frameworkApiVersion,
   twitchActionCommand,
   twitchNativeCommand
 } from "../src/framework/index.js";
+import {
+  createFeatureRegistry,
+  FeatureRegistryError,
+  mergeCommandDefinitions
+} from "../src/framework/internal.js";
 import {
   createActionRegistry,
   executeAction
@@ -43,7 +45,7 @@ function feature({
   twitch = []
 } = {}) {
   return defineFeature({
-    apiVersion: FEATURE_FRAMEWORK_API_VERSION,
+    apiVersion: frameworkApiVersion,
     id,
     description: `Feature ${id}`,
     actions,

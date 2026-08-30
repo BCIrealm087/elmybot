@@ -1,8 +1,8 @@
 import {
-  FEATURE_FRAMEWORK_API_VERSION,
   FeatureDefinitionError,
   isFeatureDefinition
 } from "./define-feature.js";
+import { frameworkApiVersion } from "./api-version.js";
 import {
   bindFeatureActionDefinition,
   isFeatureActionDefinition,
@@ -437,7 +437,7 @@ export function createFeatureRegistry(features, {
   }
 
   return Object.freeze({
-    apiVersion: FEATURE_FRAMEWORK_API_VERSION,
+    apiVersion: frameworkApiVersion,
     features: Object.freeze([...features]),
     featuresById: Object.freeze(featuresById),
     actions: Object.freeze(actions),

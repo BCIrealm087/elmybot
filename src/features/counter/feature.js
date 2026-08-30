@@ -3,6 +3,7 @@ import {
   defineFeature,
   discordActionCommand,
   discordTextResult,
+  frameworkApiVersion,
   schema,
   twitchActionCommand,
   twitchNoArgs,
@@ -18,7 +19,7 @@ function counterLabel(value) {
 }
 
 export const counterFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "fun.counter",
   description: "A shared, per-platform-group counter demonstrating durable feature state.",
   actions: [

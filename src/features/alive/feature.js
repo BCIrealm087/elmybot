@@ -3,6 +3,7 @@ import {
   defineFeature,
   discordActionCommand,
   discordTextResult,
+  frameworkApiVersion,
   schema,
   twitchActionCommand,
   twitchNoArgs,
@@ -12,7 +13,7 @@ import {
 export const ALIVE_ACTION_KIND = "core.health.check.v1";
 
 export const aliveFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "core.alive",
   description: "A shared responsiveness check.",
   actions: [

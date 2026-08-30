@@ -2,13 +2,12 @@
 
 ## Status
 
-This document is the design overview and implementation plan. The proposed
+This document is the design overview and implementation plan. The stable
 normative Framework API v1 contract is in
 `docs/command-feature-framework-contract.md`. The project owner approved that
-contract on 2026-08-30, and its implementation is proceeding in stages. An API
-is not available merely because it appears in the contract; until each stage is
-implemented and stabilized, the existing action, integration, scheduling, and
-platform contracts remain authoritative.
+contract on 2026-08-30, and implementation steps 1–9 are complete. The public
+entry point, compatibility rules, and deprecation policy are recorded in
+`docs/framework-api.md`. Build-time feature packages remain a future step.
 
 ## Motivation
 
@@ -417,9 +416,14 @@ so those representations cannot silently drift.
    routed, scheduled, event-driven, and stateful cookbooks, while the generated
    installed-feature catalog and lint freshness check keep contributor
    documentation tied to registry metadata.
-9. **Stabilize and version the framework API.** Introduce a framework API
-   version and documented deprecation rules. Feature modules must not depend on
-   internal persistence layouts.
+9. **Stabilize and version the framework API — completed.** Feature manifests
+   bind to exported `frameworkApiVersion`; unsupported versions fail with a
+   machine-readable compatibility error. `src/framework/index.js` now exposes
+   a deliberately tested contributor surface while registry, adapter, service,
+   and storage composition moved behind an explicitly internal entry. ESLint
+   mechanically prevents feature modules from importing project internals, and
+   `docs/framework-api.md` defines compatible changes, API-major changes, the
+   deprecation lifecycle, and the current compatibility alias.
 10. **Consider build-time feature packages.** Only after the API is stable,
     allow separately maintained packages to be added to the explicit installed
     feature catalog.

@@ -39,13 +39,14 @@ function featureTemplate(identity) {
   defineFeature,
   discordActionCommand,
   discordTextResult,
+  frameworkApiVersion,
   schema
 } from "../../framework/index.js";
 
 export const ${identity.constantName} = "${identity.actionKind}";
 
 export const feature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "${identity.featureId}",
   description: "TODO: describe ${identity.featureId}.",
   actions: [

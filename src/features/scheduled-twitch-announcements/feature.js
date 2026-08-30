@@ -2,7 +2,8 @@ import {
   defineFeature,
   defineScheduledAction,
   discordOption,
-  discordScheduledActionCommand
+  discordScheduledActionCommand,
+  frameworkApiVersion
 } from "../../framework/index.js";
 import { ANNOUNCEMENT_ACTION_KIND } from "../announcements/feature.js";
 
@@ -10,7 +11,7 @@ export const SCHEDULED_TWITCH_ANNOUNCEMENT_KIND =
   "discord.integration.announce-twitch-random.v1";
 
 export const scheduledTwitchAnnouncementsFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "integrations.scheduled-twitch-announcements",
   description: "Schedules recurring announcements to linked Twitch chats.",
   schedules: [

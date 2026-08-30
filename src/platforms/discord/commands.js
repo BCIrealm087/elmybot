@@ -1,5 +1,5 @@
 import { featureRegistry } from "../../features/index.js";
-import { mergeCommandDefinitions } from "../../framework/index.js";
+import { mergeCommandDefinitions } from "../../framework/internal.js";
 import { CAPABILITIES } from "./discord-permissions.js";
 import { ephemeralData, formatInterval, getOption } from "./common.js";
 import { discordGroupConfigFetch } from "./group-config.js";

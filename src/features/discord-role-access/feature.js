@@ -3,11 +3,12 @@ import {
   defineFeature,
   discordNativeCommand,
   discordOption,
+  frameworkApiVersion,
   schema
 } from "../../framework/index.js";
 
 export const discordRoleAccessFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "discord.role-access",
   description: "Manages Discord roles trusted by protected bot commands.",
   commands: {

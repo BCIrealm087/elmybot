@@ -9,7 +9,7 @@
 		"feature:new": "node scripts/create-feature.js",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
-		"lint": "eslint . && node scripts/generate-feature-docs.js --check",
+		"lint": "eslint . && node scripts/check-feature-api-boundary.js && node scripts/generate-feature-docs.js --check",
 		"start": "wrangler dev",
 		"test": "vitest"
 	},

@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import featureApiBoundary from "./scripts/eslint/feature-api-boundary.js";
 
 export default [
 	{
@@ -26,6 +27,15 @@ export default [
 				argsIgnorePattern: "^_",
 				caughtErrors: "none"
 			}]
+		}
+	},
+	{
+		files: ["src/features/*/*.js", "src/features/*/**/*.js"],
+		plugins: {
+			"feature-api": featureApiBoundary
+		},
+		rules: {
+			"feature-api/public-api-only": "error"
 		}
 	},
 	{

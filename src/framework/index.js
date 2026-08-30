@@ -1,14 +1,13 @@
 export {
   defineFeature,
-  FEATURE_FRAMEWORK_API_VERSION,
   FeatureDefinitionError,
   isFeatureDefinition
 } from "./define-feature.js";
 export {
-  createFeatureRegistry,
-  FeatureRegistryError,
-  mergeCommandDefinitions
-} from "./feature-registry.js";
+  FEATURE_FRAMEWORK_API_VERSION,
+  frameworkApiVersion,
+  supportedFrameworkApiVersions
+} from "./api-version.js";
 export {
   defineAction
 } from "./action-definition.js";
@@ -27,7 +26,6 @@ export {
   discordActionCommand,
   discordNativeCommand,
   discordOption,
-  discordOptionDescriptor,
   discordScheduledActionCommand,
   discordTextResult
 } from "./discord.js";

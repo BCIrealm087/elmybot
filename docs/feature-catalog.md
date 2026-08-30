@@ -4,6 +4,7 @@
 
 This catalog is generated from the installed feature registry. It covers
 contributor-framework features; legacy commands remain documented in the README.
+Framework API: v1.
 
 ## Features
 

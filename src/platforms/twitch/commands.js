@@ -1,5 +1,5 @@
 import { featureRegistry } from "../../features/index.js";
-import { mergeCommandDefinitions } from "../../framework/index.js";
+import { mergeCommandDefinitions } from "../../framework/internal.js";
 import { compileTwitchFeatureCommands } from "./feature-commands.js";
 
 export const commands = mergeCommandDefinitions(

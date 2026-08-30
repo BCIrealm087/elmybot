@@ -3,6 +3,8 @@
 This guide is the practical entry point for adding commands and interactions to
 Elmybot. The normative API shapes remain in
 [`command-feature-framework-contract.md`](command-feature-framework-contract.md).
+The supported entry point, compatibility rules, and deprecation lifecycle are
+defined in [`framework-api.md`](framework-api.md).
 
 The contributor framework is intentionally an in-repository JavaScript API.
 Features are reviewed, tested, explicitly installed, and bundled with the
@@ -67,6 +69,11 @@ helps.
 
 ## Core rules
 
+- Production feature modules import contributor helpers only from
+  `src/framework/index.js`; `npm run lint` rejects imports into project
+  internals.
+- Set `apiVersion: frameworkApiVersion` so each manifest declares the stable
+  authoring contract it expects.
 - Feature IDs and semantic kinds are namespaced and stable.
 - Versioned action, route, event, effect, and schedule kinds end in `.v1`, `.v2`,
   and so on.
@@ -153,11 +160,12 @@ import {
   access,
   defineFeature,
   discordNativeCommand,
+  frameworkApiVersion,
   schema
 } from "../../framework/index.js";
 
 export default defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "discord.secret-handshake",
   description: "A Discord-only moderator handshake.",
   commands: {
@@ -188,7 +196,7 @@ Put shared intent in one action, then give each platform its own presentation:
 const KIND = "fun.cheer.run.v1";
 
 export default defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "fun.cheer",
   description: "Cheers from either platform.",
   actions: [
@@ -231,7 +239,7 @@ const ROUTE = "discord.fun-hype-to-twitch.v1";
 const ACTION = "integration.fun-hype.publish.v1";
 
 const feature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "integrations.fun-hype",
   description: "Sends Discord hype to linked Twitch chats.",
   routes: [defineRoute({

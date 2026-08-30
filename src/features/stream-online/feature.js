@@ -3,6 +3,7 @@ import {
   defineEventAction,
   defineFeature,
   defineRoute,
+  frameworkApiVersion,
   schema
 } from "../../framework/index.js";
 
@@ -11,7 +12,7 @@ export const STREAM_ONLINE_ACTION_KIND = "twitch.stream-online.publish.v1";
 export const STREAM_ONLINE_ROUTE_KIND = "twitch.stream-online-to-discord.v1";
 
 export const streamOnlineFeature = defineFeature({
-  apiVersion: 1,
+  apiVersion: frameworkApiVersion,
   id: "twitch.stream-online",
   description: "Publishes authenticated Twitch stream-online events to linked Discord channels.",
   routes: [

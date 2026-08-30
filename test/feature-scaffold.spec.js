@@ -20,6 +20,7 @@ describe("Feature scaffold templates", () => {
     const templates = featureScaffoldTemplates("fun-hype");
 
     expect(templates.featureSource).toContain('id: "fun.hype"');
+    expect(templates.featureSource).toContain("apiVersion: frameworkApiVersion");
     expect(templates.featureSource).toContain('name: "hype"');
     expect(templates.featureSource).toContain('"fun.hype.run.v1"');
     expect(templates.testSource).toContain("createFeatureTestRuntime(feature)");

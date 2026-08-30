@@ -1,4 +1,5 @@
 import { createEffect } from "../integrations/contracts.js";
+import { frameworkApiVersion } from "./api-version.js";
 
 export class FeatureContextError extends Error {
   constructor(message, { code = "feature_context_unavailable" } = {}) {
@@ -226,7 +227,7 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
     : () => new Date();
   const routed = routedServices(action, invocation, runtimeContext);
   return Object.freeze({
-    apiVersion: 1,
+    apiVersion: frameworkApiVersion,
     featureId: action.featureId,
     trigger: Object.freeze({ kind: runtimeContext.triggerKind ?? "command" }),
     origin: invocation.origin,

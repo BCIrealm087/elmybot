@@ -1,6 +1,6 @@
 import { ActionRegistryError } from "../../actions/index.js";
 import { SchemaValidationError } from "../../framework/index.js";
-import { discordOptionDescriptor } from "../../framework/discord.js";
+import { discordOptionDescriptor } from "../../framework/internal.js";
 import { SCHEDULED_ACTION_COMMAND_TYPE } from "../../framework/command-common.js";
 import { ephemeralData } from "./common.js";
 import { executeDiscordAction } from "./actions.js";

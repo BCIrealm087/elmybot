@@ -1,13 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   access,
-  createFeatureRegistry,
   defineAction,
   defineFeature,
   discordActionCommand,
   discordNativeCommand,
   discordOption,
-  discordOptionDescriptor,
   discordTextResult,
   schema,
   SchemaValidationError,
@@ -17,6 +15,10 @@ import {
   twitchTextResult,
   twitchTokens
 } from "../src/framework/index.js";
+import {
+  createFeatureRegistry,
+  discordOptionDescriptor
+} from "../src/framework/internal.js";
 import {
   createActionRegistry,
   executeAction
