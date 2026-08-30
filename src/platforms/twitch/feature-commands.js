@@ -46,6 +46,9 @@ function userFacingError(error, commandName, capability = null) {
     }
     return `You are not authorized to use !${commandName}.`;
   }
+  if (error instanceof ActionRegistryError && error.code === "action_cooldown_active") {
+    return `Try !${commandName} again in ${error.retryAfterSeconds} second(s).`;
+  }
   return null;
 }
 

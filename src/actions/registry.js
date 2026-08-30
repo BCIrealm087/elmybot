@@ -16,12 +16,58 @@ export class ActionRegistryError extends Error {
   constructor(message, {
     status = 400,
     code = "action_registry_error",
-    cause
+    cause,
+    retryAfterSeconds = null
   } = {}) {
     super(message, { cause });
     this.name = "ActionRegistryError";
     this.status = status;
     this.code = code;
+    if (retryAfterSeconds !== null) this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+async function enforceFeatureCooldown(action, invocation, context) {
+  if (action.cooldown === null) return;
+  if (typeof context.claimFeatureCooldown !== "function") {
+    throw new ActionRegistryError(
+      `Action \`${action.kind}\` requires the feature cooldown service.`,
+      { status: 500, code: "action_cooldown_unavailable" }
+    );
+  }
+  const scopeKey = action.cooldown.scope === "group"
+    ? invocation.origin.group.key
+    : invocation.origin.actor
+      ? `${invocation.origin.actor.platform}:${invocation.origin.actor.id}`
+      : null;
+  if (scopeKey === null) {
+    throw new ActionRegistryError(
+      `Action \`${action.kind}\` requires an actor for its cooldown.`,
+      { status: 500, code: "action_cooldown_actor_missing" }
+    );
+  }
+  const claim = await context.claimFeatureCooldown({
+    featureId: action.featureId,
+    actionKind: action.kind,
+    scopeKey,
+    seconds: action.cooldown.seconds
+  });
+  if (
+    typeof claim?.allowed !== "boolean" ||
+    !Number.isSafeInteger(claim.retryAfterSeconds) ||
+    claim.retryAfterSeconds < 0
+  ) {
+    throw new ActionRegistryError("Feature cooldown service returned an invalid result.", {
+      status: 500,
+      code: "action_cooldown_result_invalid"
+    });
+  }
+  if (!claim.allowed) {
+    throw new ActionRegistryError("This action is still on cooldown.", {
+      status: 429,
+      code: "action_cooldown_active",
+      retryAfterSeconds: Math.max(1, claim.retryAfterSeconds)
+    });
   }
 }
 
@@ -169,6 +215,7 @@ export async function executeAction(registry, input, context = {}) {
   }
 
   const featureAction = isBoundFeatureActionDefinition(action);
+  if (featureAction) await enforceFeatureCooldown(action, invocation, context);
   const value = featureAction
     ? await action.execute(
       createFeatureActionContext(action, invocation, context),

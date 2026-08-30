@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createFeatureRegistry,
   defineAction,
@@ -358,6 +358,127 @@ describe("Command and feature framework", () => {
     );
 
     expect(result.output).toEqual({ trigger: "event", actor: null });
+  });
+
+  it("provides only declared namespaced services and enforces atomic cooldown claims", async () => {
+    const statefulAction = defineAction({
+      kind: "test.services.run.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["config", "state", "random"] },
+      cooldown: { scope: "actor", seconds: 30 },
+      async execute(ctx) {
+        const label = await ctx.config.get("label");
+        await ctx.state.set("last_roll", 4);
+        const total = await ctx.state.increment("total", 2);
+        return {
+          output: {
+            label,
+            total,
+            roll: ctx.random.integer({ min: 4, max: 4 })
+          },
+          effects: []
+        };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [statefulAction] })
+    ], { availableServices: ["config", "state", "random"] });
+    const configGet = vi.fn(async () => "Score");
+    const stateSet = vi.fn(async () => undefined);
+    const stateIncrement = vi.fn(async () => 2);
+    const claimFeatureCooldown = vi.fn(async () => ({
+      allowed: true,
+      retryAfterSeconds: 0
+    }));
+    const input = createCommandInvocation({
+      kind: statefulAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:services",
+      correlationId: "discord:interaction:services"
+    });
+    const runtime = {
+      featureServices: {
+        config: { get: configGet },
+        state: {
+          get: vi.fn(),
+          set: stateSet,
+          delete: vi.fn(),
+          increment: stateIncrement
+        }
+      },
+      random: { integer: ({ min }) => min },
+      claimFeatureCooldown
+    };
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      runtime
+    )).resolves.toMatchObject({
+      output: { label: "Score", total: 2, roll: 4 }
+    });
+    expect(configGet).toHaveBeenCalledWith("test.feature", "label");
+    expect(stateSet).toHaveBeenCalledWith("test.feature", "last_roll", 4);
+    expect(stateIncrement).toHaveBeenCalledWith("test.feature", "total", 2);
+    expect(claimFeatureCooldown).toHaveBeenCalledWith({
+      featureId: "test.feature",
+      actionKind: statefulAction.kind,
+      scopeKey: "discord:user-1",
+      seconds: 30
+    });
+
+    claimFeatureCooldown.mockResolvedValueOnce({
+      allowed: false,
+      retryAfterSeconds: 12
+    });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      runtime
+    )).rejects.toMatchObject({
+      code: "action_cooldown_active",
+      status: 429,
+      retryAfterSeconds: 12
+    });
+  });
+
+  it("fails composition for unavailable services and blocks undeclared service access", async () => {
+    const serviceAction = defineAction({
+      kind: "test.service.required.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      execute: () => ({ output: {}, effects: [] })
+    });
+    expect(() => createFeatureRegistry([
+      feature({ actions: [serviceAction] })
+    ])).toThrow("requires unavailable service `state`");
+
+    const undeclaredAction = defineAction({
+      kind: "test.service.undeclared.v1",
+      supportedOrigins: ["discord"],
+      execute: async (ctx) => {
+        await ctx.state.get("value");
+        return { output: {}, effects: [] };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [undeclaredAction] })
+    ]);
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      createCommandInvocation({
+        kind: undeclaredAction.kind,
+        origin: {
+          group: { platform: "discord", kind: "guild", id: "guild-1" },
+          actor: { platform: "discord", id: "user-1", claims: [] }
+        },
+        sourceEventId: "discord:interaction:undeclared"
+      }),
+      { featureServices: { state: { get: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_service_undeclared" });
   });
 
   it("rejects duplicate feature IDs, actions, and same-platform commands", () => {

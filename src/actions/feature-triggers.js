@@ -5,10 +5,12 @@ import {
   resolveRoutes,
   submitRoutedEffects
 } from "../integrations/index.js";
+import { createFeatureServiceRuntime } from "../framework/service-runtime.js";
 
 function routedRuntime(featureRegistry, env, invocation, triggerKind, extra = {}) {
   return {
     ...extra,
+    ...createFeatureServiceRuntime(env, invocation),
     env,
     triggerKind,
     routeDefinitions: featureRegistry.routes,

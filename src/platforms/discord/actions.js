@@ -6,6 +6,7 @@ import {
   resolveRoutes,
   submitRoutedEffects
 } from "../../integrations/index.js";
+import { createFeatureServiceRuntime } from "../../framework/service-runtime.js";
 
 function discordOriginGroup(interaction) {
   if (typeof interaction.guild_id === "string" && interaction.guild_id.length > 0) {
@@ -48,6 +49,7 @@ export async function executeDiscordAction(
     invocation,
     {
       ...context,
+      ...createFeatureServiceRuntime(context.env, invocation),
       routeDefinitions: featureRegistry.routes,
       effectAdapters: featureRegistry.effectAdapters,
       routedMessageEffectKinds: ROUTED_MESSAGE_EFFECT_KINDS,

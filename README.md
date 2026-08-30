@@ -19,6 +19,7 @@ both platforms to share the same command syntax or permissions.
 - Authenticated Discord–Twitch linking with independently configurable routes.
 - Twitch stream-online notices sent to linked Discord channels.
 - Announcements from Twitch to Discord and from Discord to Twitch.
+- Contributor-owned per-group configuration, durable state, and atomic cooldowns.
 - Durable EventSub inboxes, execution ledgers, effect outboxes, retries, and
   dead-letter inspection.
 - Separate Twitch bot, app-token, and broadcaster OAuth lifecycles.
@@ -65,7 +66,7 @@ checked again before signature verification and JSON parsing.
 | Binding | Class | Scope and responsibility |
 |---|---|---|
 | `SCHEDULER` | `GroupScheduler` | One per scheduling group; jobs, delivery ledger, retry, and dead letters |
-| `CONFIG` | `GroupConfig` | One per platform group; Discord configuration uses `discord:guild:<guildId>` |
+| `CONFIG` | `GroupConfig` | One per platform group; operator configuration plus isolated feature config, state, and cooldowns |
 | `TWITCH_APP_AUTH` | `TwitchAppAuth` | Singleton Twitch app-access-token lifecycle |
 | `TWITCH_AUTH` | `TwitchAuth` | Singleton Twitch bot OAuth lifecycle |
 | `TWITCH_CHANNEL_OAUTH` | `TwitchChannelOAuthCoordinator` | Singleton OAuth states and standalone invitation records |
@@ -90,6 +91,7 @@ script. All commands except `/alive` are guild-only.
 | Command | Options | Purpose |
 |---|---|---|
 | `/alive` | — | Check responsiveness |
+| `/counter` | — | Increment the server's namespaced feature counter |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -101,6 +103,9 @@ script. All commands except `/alive` are guild-only.
 | `/config_disallow_role` | `role` | Remove an allowed role |
 | `/config_list_entries` | — | List configuration keys |
 | `/config_show_value` | `entry` | Inspect a configuration value |
+| `/feature_config_set` | `feature`, `key`, `json_value` | Set an installed feature's namespaced configuration |
+| `/feature_config_show` | `feature`, `key` | Inspect a feature configuration value |
+| `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
 | `/integration_status` | `integration_id` | Show membership, routes, and delivery aggregates |
@@ -129,11 +134,17 @@ characters and are resolved at delivery time.
 | Command | Authorization | Purpose |
 |---|---|---|
 | `!alive` | Any chatter | Check responsiveness |
+| `!counter` | Any chatter | Increment the channel's namespaced feature counter |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
 Command names are case-insensitive. `!announce` accepts at most 2,000
 characters. Ordinary chat and unknown commands are acknowledged after HMAC
 verification without creating a durable inbox row.
+
+`/counter` and `!counter` demonstrate the contributor state API. Each platform
+group has an independent count, and each actor has a five-second atomic
+cooldown. Operators can change its `label` setting with, for example,
+`/feature_config_set feature:fun.counter key:label json_value:"Wins"`.
 
 ## Cross-platform linking
 
@@ -340,7 +351,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-The complete suite currently contains 158 tests across 12 files. GitHub Actions
+The complete suite currently contains 195 tests across 15 files. GitHub Actions
 runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
@@ -359,6 +370,7 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 - [Durable integration execution](docs/integration-execution.md)
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
+- [Feature configuration, state, and cooldowns](docs/feature-state.md)
 
 ## External references
 

@@ -1,0 +1,334 @@
+const FEATURE_ID_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
+const VERSIONED_KIND_PATTERN =
+  /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
+const KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const SCOPE_KEY_PATTERN = /^[^\s]{1,300}$/;
+const MAX_FEATURE_VALUE_BYTES = 16 * 1024;
+const MAX_FEATURE_VALUE_DEPTH = 20;
+const MAX_VALUES_PER_NAMESPACE = 100;
+const MAX_INCREMENT_AMOUNT = 1_000_000;
+const MAX_COOLDOWN_ROWS = 10_000;
+const COOLDOWN_PRUNE_BATCH_SIZE = 100;
+
+export const FEATURE_STORAGE_PATH_PREFIX = "/internal/framework/";
+
+export class FeatureStorageUserFacingError extends Error {
+  constructor(message, status = 422) {
+    super(message);
+    this.name = "FeatureStorageUserFacingError";
+    this.status = status;
+  }
+}
+
+function requireString(value, pattern, message, maxLength = 200) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maxLength ||
+    !pattern.test(value)
+  ) {
+    throw new FeatureStorageUserFacingError(message);
+  }
+  return value;
+}
+
+function requireFeatureId(value) {
+  return requireString(value, FEATURE_ID_PATTERN, "The feature ID is invalid.", 100);
+}
+
+function requireActionKind(value) {
+  return requireString(value, VERSIONED_KIND_PATTERN, "The action kind is invalid.");
+}
+
+function requireKey(value) {
+  return requireString(value, KEY_PATTERN, "The feature storage key is invalid.", 64);
+}
+
+function requireScopeKey(value) {
+  return requireString(value, SCOPE_KEY_PATTERN, "The cooldown scope is invalid.", 300);
+}
+
+function copyJsonValue(value, path = "value", depth = 0) {
+  if (depth > MAX_FEATURE_VALUE_DEPTH) {
+    throw new FeatureStorageUserFacingError(`${path} is nested too deeply.`);
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new FeatureStorageUserFacingError(`${path} contains a non-finite number.`);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry, index) =>
+      copyJsonValue(entry, `${path}[${index}]`, depth + 1)
+    );
+  }
+  if (typeof value === "object" && value !== null) {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === Object.prototype || prototype === null) {
+      return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
+        key,
+        copyJsonValue(entry, `${path}.${key}`, depth + 1)
+      ]));
+    }
+  }
+  throw new FeatureStorageUserFacingError(`${path} must contain only JSON values.`);
+}
+
+function serializeValue(value) {
+  const serialized = JSON.stringify(copyJsonValue(value));
+  if (new TextEncoder().encode(serialized).byteLength > MAX_FEATURE_VALUE_BYTES) {
+    throw new FeatureStorageUserFacingError(
+      `Feature values must not exceed ${MAX_FEATURE_VALUE_BYTES} bytes.`
+    );
+  }
+  return serialized;
+}
+
+export function initializeFeatureStorageTables(state) {
+  state.storage.sql.exec(`
+    CREATE TABLE IF NOT EXISTS framework_feature_values (
+      value_kind TEXT NOT NULL CHECK (value_kind IN ('config', 'state')),
+      feature_id TEXT NOT NULL,
+      value_key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (value_kind, feature_id, value_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS framework_feature_values_namespace
+      ON framework_feature_values(value_kind, feature_id, value_key);
+
+    CREATE TABLE IF NOT EXISTS framework_feature_cooldowns (
+      feature_id TEXT NOT NULL,
+      action_kind TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, action_kind, scope_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS framework_feature_cooldowns_expiry
+      ON framework_feature_cooldowns(expires_at_ms);
+  `);
+}
+
+function valueRow(sql, valueKind, featureId, key) {
+  return sql.exec(
+    `SELECT value_json FROM framework_feature_values
+     WHERE value_kind = ? AND feature_id = ? AND value_key = ?`,
+    valueKind,
+    featureId,
+    key
+  ).toArray()[0];
+}
+
+function getValue(sql, valueKind, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const row = valueRow(sql, valueKind, featureId, key);
+  return { value: row ? JSON.parse(row.value_json) : null };
+}
+
+function namespaceAtCapacity(sql, valueKind, featureId) {
+  const row = sql.exec(
+    `SELECT COUNT(*) AS total FROM framework_feature_values
+     WHERE value_kind = ? AND feature_id = ?`,
+    valueKind,
+    featureId
+  ).toArray()[0];
+  return Number(row?.total ?? 0) >= MAX_VALUES_PER_NAMESPACE;
+}
+
+function setValue(state, valueKind, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const valueJson = serializeValue(input?.value);
+  state.storage.transactionSync(() => {
+    const existing = valueRow(state.storage.sql, valueKind, featureId, key);
+    if (!existing && namespaceAtCapacity(state.storage.sql, valueKind, featureId)) {
+      throw new FeatureStorageUserFacingError(
+        `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} ${valueKind} values.`,
+        409
+      );
+    }
+    state.storage.sql.exec(
+      `INSERT INTO framework_feature_values
+        (value_kind, feature_id, value_key, value_json, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at_ms = excluded.updated_at_ms`,
+      valueKind,
+      featureId,
+      key,
+      valueJson,
+      Date.now()
+    );
+  });
+  return { ok: true };
+}
+
+function deleteValue(state, valueKind, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const existing = valueRow(state.storage.sql, valueKind, featureId, key);
+  if (existing) {
+    state.storage.sql.exec(
+      `DELETE FROM framework_feature_values
+       WHERE value_kind = ? AND feature_id = ? AND value_key = ?`,
+      valueKind,
+      featureId,
+      key
+    );
+  }
+  return { deleted: Boolean(existing) };
+}
+
+function incrementState(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const amount = input?.amount ?? 1;
+  if (
+    !Number.isSafeInteger(amount) ||
+    Math.abs(amount) > MAX_INCREMENT_AMOUNT
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `State increments must be safe integers between -${MAX_INCREMENT_AMOUNT} and ` +
+      `${MAX_INCREMENT_AMOUNT}.`
+    );
+  }
+  return state.storage.transactionSync(() => {
+    const existing = valueRow(state.storage.sql, "state", featureId, key);
+    if (!existing && namespaceAtCapacity(state.storage.sql, "state", featureId)) {
+      throw new FeatureStorageUserFacingError(
+        `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} state values.`,
+        409
+      );
+    }
+    const current = existing ? JSON.parse(existing.value_json) : 0;
+    if (!Number.isSafeInteger(current) || !Number.isSafeInteger(current + amount)) {
+      throw new FeatureStorageUserFacingError(
+        "The selected state value is not a safely incrementable integer.",
+        409
+      );
+    }
+    const value = current + amount;
+    state.storage.sql.exec(
+      `INSERT INTO framework_feature_values
+        (value_kind, feature_id, value_key, value_json, updated_at_ms)
+       VALUES ('state', ?, ?, ?, ?)
+       ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at_ms = excluded.updated_at_ms`,
+      featureId,
+      key,
+      JSON.stringify(value),
+      Date.now()
+    );
+    return { value };
+  });
+}
+
+function pruneExpiredCooldowns(sql, nowMs) {
+  sql.exec(
+    `DELETE FROM framework_feature_cooldowns
+     WHERE rowid IN (
+       SELECT rowid FROM framework_feature_cooldowns
+       WHERE expires_at_ms <= ?
+       ORDER BY expires_at_ms
+       LIMIT ?
+     )`,
+    nowMs,
+    COOLDOWN_PRUNE_BATCH_SIZE
+  );
+}
+
+function claimCooldown(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const actionKind = requireActionKind(input?.actionKind);
+  const scopeKey = requireScopeKey(input?.scopeKey);
+  const seconds = input?.seconds;
+  if (!Number.isSafeInteger(seconds) || seconds < 1 || seconds > 86_400) {
+    throw new FeatureStorageUserFacingError(
+      "Cooldown seconds must be an integer between 1 and 86400."
+    );
+  }
+  const nowMs = Date.now();
+  return state.storage.transactionSync(() => {
+    pruneExpiredCooldowns(state.storage.sql, nowMs);
+    const existing = state.storage.sql.exec(
+      `SELECT expires_at_ms FROM framework_feature_cooldowns
+       WHERE feature_id = ? AND action_kind = ? AND scope_key = ?`,
+      featureId,
+      actionKind,
+      scopeKey
+    ).toArray()[0];
+    if (existing?.expires_at_ms > nowMs) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.max(1, Math.ceil((existing.expires_at_ms - nowMs) / 1000))
+      };
+    }
+    if (!existing) {
+      const total = state.storage.sql.exec(
+        "SELECT COUNT(*) AS total FROM framework_feature_cooldowns"
+      ).toArray()[0];
+      if (Number(total?.total ?? 0) >= MAX_COOLDOWN_ROWS) {
+        throw new FeatureStorageUserFacingError(
+          "This group's feature cooldown ledger is temporarily full.",
+          503
+        );
+      }
+    }
+    const expiresAtMs = nowMs + seconds * 1000;
+    state.storage.sql.exec(
+      `INSERT INTO framework_feature_cooldowns
+        (feature_id, action_kind, scope_key, expires_at_ms)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(feature_id, action_kind, scope_key) DO UPDATE SET
+         expires_at_ms = excluded.expires_at_ms`,
+      featureId,
+      actionKind,
+      scopeKey,
+      expiresAtMs
+    );
+    return { allowed: true, retryAfterSeconds: 0 };
+  });
+}
+
+export async function handleFeatureStorageRequest(state, request, pathname) {
+  if (request.method !== "POST" || !pathname.startsWith(FEATURE_STORAGE_PATH_PREFIX)) {
+    return null;
+  }
+  const input = await request.json();
+  const operation = pathname.slice(FEATURE_STORAGE_PATH_PREFIX.length);
+  switch (operation) {
+    case "config/get":
+      return getValue(state.storage.sql, "config", input);
+    case "config/set":
+      return setValue(state, "config", input);
+    case "config/delete":
+      return deleteValue(state, "config", input);
+    case "state/get":
+      return getValue(state.storage.sql, "state", input);
+    case "state/set":
+      return setValue(state, "state", input);
+    case "state/delete":
+      return deleteValue(state, "state", input);
+    case "state/increment":
+      return incrementState(state, input);
+    case "cooldown/claim":
+      return claimCooldown(state, input);
+    default:
+      return null;
+  }
+}
+
+export const FEATURE_STORAGE_LIMITS = Object.freeze({
+  maxValueBytes: MAX_FEATURE_VALUE_BYTES,
+  maxValuesPerNamespace: MAX_VALUES_PER_NAMESPACE,
+  maxIncrementAmount: MAX_INCREMENT_AMOUNT
+});

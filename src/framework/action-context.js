@@ -148,6 +148,58 @@ function unavailable(name) {
   };
 }
 
+function requireFeatureKey(key) {
+  if (typeof key !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(key)) {
+    throw new FeatureContextError("Feature storage key is invalid.", {
+      code: "feature_storage_key_invalid"
+    });
+  }
+  return key;
+}
+
+function requireDeclaredService(action, service) {
+  if (!action.uses.services.includes(service)) {
+    throw new FeatureContextError(
+      `Action \`${action.kind}\` did not declare service \`${service}\`.`,
+      { code: "feature_service_undeclared" }
+    );
+  }
+}
+
+function serviceMethod(action, runtimeContext, service, method) {
+  return (...args) => {
+    requireDeclaredService(action, service);
+    const implementation = runtimeContext.featureServices?.[service]?.[method];
+    if (typeof implementation !== "function") return unavailable(service)();
+    return implementation(action.featureId, ...args);
+  };
+}
+
+function randomInteger(action, runtimeContext, { min, max } = {}) {
+  requireDeclaredService(action, "random");
+  if (
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    min > max ||
+    !Number.isSafeInteger(max - min + 1)
+  ) {
+    throw new FeatureContextError(
+      "Random integer bounds must be safe integers with min no greater than max.",
+      { code: "feature_random_bounds_invalid" }
+    );
+  }
+  const implementation = runtimeContext.random?.integer;
+  const value = typeof implementation === "function"
+    ? implementation({ min, max })
+    : Math.floor(Math.random() * (max - min + 1)) + min;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new FeatureContextError("Feature random service returned an invalid integer.", {
+      code: "feature_random_result_invalid"
+    });
+  }
+  return value;
+}
+
 function logger(runtimeContext, action, invocation) {
   const write = (level, event, metadata) => {
     if (typeof runtimeContext.log === "function") {
@@ -189,15 +241,32 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         return new Date(value.getTime());
       }
     }),
-    random: Object.freeze({ integer: unavailable("random") }),
+    random: Object.freeze({
+      integer: (bounds) => randomInteger(action, runtimeContext, bounds)
+    }),
     routes: routed.routes,
     effects: routed.effects,
-    config: Object.freeze({ get: unavailable("config") }),
+    config: Object.freeze({
+      get: (key) => serviceMethod(action, runtimeContext, "config", "get")(
+        requireFeatureKey(key)
+      )
+    }),
     state: Object.freeze({
-      get: unavailable("state"),
-      set: unavailable("state"),
-      delete: unavailable("state"),
-      increment: unavailable("state")
+      get: (key) => serviceMethod(action, runtimeContext, "state", "get")(
+        requireFeatureKey(key)
+      ),
+      set: (key, value) => serviceMethod(action, runtimeContext, "state", "set")(
+        requireFeatureKey(key),
+        value
+      ),
+      delete: (key) => serviceMethod(action, runtimeContext, "state", "delete")(
+        requireFeatureKey(key)
+      ),
+      increment: (key, amount = 1) =>
+        serviceMethod(action, runtimeContext, "state", "increment")(
+          requireFeatureKey(key),
+          amount
+        )
     }),
     log: logger(runtimeContext, action, invocation)
   });

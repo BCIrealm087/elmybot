@@ -142,6 +142,11 @@ function userFacingError(error, commandName) {
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
     return ephemeralData(`You are not authorized to use /${commandName}.`);
   }
+  if (error instanceof ActionRegistryError && error.code === "action_cooldown_active") {
+    return ephemeralData(
+      `Try /${commandName} again in ${error.retryAfterSeconds} second(s).`
+    );
+  }
   return null;
 }
 

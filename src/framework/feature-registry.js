@@ -16,6 +16,7 @@ import {
   validateRegisteredCapability
 } from "./command-common.js";
 import { isRouteDefinition } from "./route-definition.js";
+import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import {
   isEventActionDefinition,
   isScheduledActionDefinition
@@ -163,7 +164,28 @@ function collectEffectAdapters(effectAdapters) {
   return collected;
 }
 
-export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
+function collectAvailableServices(availableServices) {
+  if (!Array.isArray(availableServices)) {
+    throw new FeatureRegistryError("Available feature services must be an array.", {
+      code: "feature_services_invalid"
+    });
+  }
+  const supported = new Set(FEATURE_RUNTIME_SERVICES);
+  if (
+    availableServices.some((service) => !supported.has(service)) ||
+    new Set(availableServices).size !== availableServices.length
+  ) {
+    throw new FeatureRegistryError("Available feature services are invalid.", {
+      code: "feature_services_invalid"
+    });
+  }
+  return new Set(availableServices);
+}
+
+export function createFeatureRegistry(features, {
+  effectAdapters = {},
+  availableServices = []
+} = {}) {
   requireFeatureList(features);
   const featuresById = Object.create(null);
   const rawActions = Object.create(null);
@@ -172,6 +194,7 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
   const events = Object.create(null);
   const schedules = Object.create(null);
   const adapters = collectEffectAdapters(effectAdapters);
+  const services = collectAvailableServices(availableServices);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
     platform,
     Object.create(null)
@@ -242,10 +265,13 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
   }
 
   for (const [kind, { action, featureId }] of Object.entries(rawActions)) {
-    if (action.uses.services.length > 0) {
+    const unavailableServices = action.uses.services.filter(
+      (service) => !services.has(service)
+    );
+    if (unavailableServices.length > 0) {
       throw new FeatureRegistryError(
-        `Feature action \`${kind}\` declares services that are not available in the ` +
-        "current framework stage.",
+        `Feature action \`${kind}\` requires unavailable service ` +
+        `\`${unavailableServices[0]}\`.`,
         { code: "feature_action_dependency_unavailable" }
       );
     }
@@ -310,6 +336,12 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
         `Feature event \`${event.eventKind}\` cannot invoke a protected action ` +
         "without a trusted event authorization policy.",
         { code: "feature_event_action_protected" }
+      );
+    }
+    if (action.cooldown?.scope === "actor") {
+      throw new FeatureRegistryError(
+        `Feature event \`${event.eventKind}\` cannot invoke an actor-cooldown action.`,
+        { code: "feature_event_actor_cooldown_unsupported" }
       );
     }
   }
@@ -412,6 +444,7 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
     routes: Object.freeze(routes),
     events: Object.freeze(events),
     schedules: Object.freeze(schedules),
+    services: Object.freeze([...services].sort()),
     effectAdapters: Object.freeze(adapters),
     commands: Object.freeze(Object.fromEntries(PLATFORMS.map((platform) => [
       platform,

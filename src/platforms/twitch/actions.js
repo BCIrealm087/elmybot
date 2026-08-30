@@ -11,6 +11,7 @@ import {
   submitRoutedEffects
 } from "../../integrations/index.js";
 import { FRAMEWORK_CAPABILITIES } from "../../framework/index.js";
+import { createFeatureServiceRuntime } from "../../framework/service-runtime.js";
 
 export function twitchActorClaims(event) {
   const badgeClaims = new Set(
@@ -80,6 +81,7 @@ export async function executeTwitchAction(
     invocation,
     {
       ...context,
+      ...createFeatureServiceRuntime(context.env, invocation),
       routeDefinitions: featureRegistry.routes,
       effectAdapters: featureRegistry.effectAdapters,
       routedMessageEffectKinds: ROUTED_MESSAGE_EFFECT_KINDS,

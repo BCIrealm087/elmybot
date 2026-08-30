@@ -401,8 +401,13 @@ so those representations cannot silently drift.
    route, and effect plan, and replays that plan on scheduler retries. The
    installed `/integration_schedule_twitch` proof repeatedly invokes the same
    announcement action at bounded-random intervals.
-7. **Add namespaced configuration, state, and cooldowns.** This enables games,
-   counters, quotes, points, and other stateful features safely.
+7. **Add namespaced configuration, state, and cooldowns — completed.** Actions
+   opt into frozen `config`, `state`, and `random` services; per-group SQLite
+   namespaces enforce key, value-size, and entry-count bounds; and declarative
+   actor or group cooldowns are claimed atomically before execution. Protected
+   Discord commands manage installed-feature configuration. The shared
+   `/counter` and `!counter` proof uses a configurable label, atomic increment,
+   and actor cooldown without accessing Worker bindings or storage layouts.
 8. **Complete the test kit, scaffold, and contributor guide.** Include
    cookbooks for native, shared, routed, scheduled, event-driven, and stateful
    commands.
@@ -435,7 +440,9 @@ The recommended proof set is:
 2. announcements, demonstrating bidirectional routed actions; and
 3. a bounded-random scheduled Discord-to-Twitch message, demonstrating
    authorization, scheduling, route resolution, immutable occurrence planning,
-   durable coordinator handoff, and Twitch delivery.
+   durable coordinator handoff, and Twitch delivery; and
+4. `counter`, demonstrating namespaced configuration, atomic state, and
+   declarative actor cooldowns through one action on both platforms.
 
 Together, these examples exercise the complete contributor pipeline without
 forcing every future command to use every layer.

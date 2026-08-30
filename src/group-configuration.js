@@ -1,4 +1,9 @@
 import { jsonResponse, logError } from "./common.js";
+import {
+  FeatureStorageUserFacingError,
+  handleFeatureStorageRequest,
+  initializeFeatureStorageTables
+} from "./framework/feature-storage.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -185,6 +190,7 @@ export class GroupConfig {
     this.state = state;
     this.env = env;
     this.identityMigrationPromise = null;
+    initializeFeatureStorageTables(state);
   }
 
   async exportConfig() {
@@ -268,14 +274,24 @@ export class GroupConfig {
       return this.exportConfig();
     }
 
-    const pathHandlers = requestHandlers[request.method];
-    const pathHandler = pathHandlers && pathHandlers[url.pathname];
-    if (!pathHandler) return new Response("Not Found", { status: 404 });
     try {
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
+      const featureStorageResult = await handleFeatureStorageRequest(
+        this.state,
+        request,
+        url.pathname
+      );
+      if (featureStorageResult !== null) return jsonResponse(featureStorageResult);
+
+      const pathHandlers = requestHandlers[request.method];
+      const pathHandler = pathHandlers && pathHandlers[url.pathname];
+      if (!pathHandler) return new Response("Not Found", { status: 404 });
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
-      if (e instanceof GroupConfigUserFacingError) {
+      if (
+        e instanceof GroupConfigUserFacingError ||
+        e instanceof FeatureStorageUserFacingError
+      ) {
         return jsonResponse({ userFacingError: e.message }, e.status);
       }
 

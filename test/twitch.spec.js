@@ -20,6 +20,7 @@ import {
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
 import { twitchEventSubInboxStub } from "../src/platforms/twitch/eventsub-inbox.js";
+import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
 
 const encoder = new TextEncoder();
 let twitchMessageIdCounter = 0;
@@ -137,6 +138,24 @@ function successfulTwitchChatResponse(messageId = "sent-message-id") {
 		}]
 	});
 }
+
+describe("Twitch feature commands", () => {
+	it("uses per-channel state and returns a friendly cooldown response", async () => {
+		const event = {
+			broadcaster_user_id: `counter-channel-${++twitchMessageIdCounter}`,
+			chatter_user_id: "counter-user",
+			badges: []
+		};
+		await expect(twitchCommands.counter.exec(event, env, {
+			messageId: `counter-message-${++twitchMessageIdCounter}`,
+			argsText: ""
+		})).resolves.toBe("Counter: 1");
+		await expect(twitchCommands.counter.exec(event, env, {
+			messageId: `counter-message-${++twitchMessageIdCounter}`,
+			argsText: ""
+		})).resolves.toContain("Try !counter again");
+	});
+});
 
 async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) {
 	const request = await makeSignedTwitchRequest({

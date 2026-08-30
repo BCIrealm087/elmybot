@@ -11,6 +11,7 @@ import {
 import {
   SCHEDULED_TWITCH_ANNOUNCEMENT_KIND
 } from "../src/features/scheduled-twitch-announcements/feature.js";
+import { COUNTER_ACTION_KIND } from "../src/features/counter/feature.js";
 import {
   STREAM_ONLINE_ACTION_KIND,
   STREAM_ONLINE_EVENT_KIND,
@@ -62,6 +63,25 @@ describe("Representative feature migrations", () => {
       type: 8,
       required: true
     }]);
+  });
+
+  it("installs the shared counter as the stateful feature proof", () => {
+    expect(installedFeatures.map(({ id }) => id)).toContain("fun.counter");
+    expect(featureRegistry.actions[COUNTER_ACTION_KIND]).toMatchObject({
+      featureId: "fun.counter",
+      uses: { services: ["config", "state"] },
+      cooldown: { scope: "actor", seconds: 5 }
+    });
+    expect(featureRegistry.commands.discord.counter).toMatchObject({
+      actionKind: COUNTER_ACTION_KIND,
+      availability: "guild"
+    });
+    expect(featureRegistry.commands.twitch.counter).toMatchObject({
+      actionKind: COUNTER_ACTION_KIND
+    });
+    expect(discordCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
+    expect(twitchCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
+    expect(featureRegistry.services).toEqual(["config", "random", "state"]);
   });
 
   it("installs announcements as one routed action with two route directions", () => {

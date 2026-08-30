@@ -340,11 +340,60 @@ describe('Discord platform', () => {
     });
   });
 
+  it('manages namespaced feature config and enforces counter cooldowns', async () => {
+    const guildId = uniqueId('feature-guild');
+    const setInteraction = buildSlashInteraction({
+      name: 'feature_config_set',
+      guildId,
+      options: [
+        { name: 'feature', value: 'fun.counter' },
+        { name: 'key', value: 'label' },
+        { name: 'json_value', value: '"Cheers"' },
+      ],
+    });
+    expect(commands.feature_config_set.guild).toEqual({
+      capability: CAPABILITIES.CONFIG_MANAGE,
+    });
+    await expect(commands.feature_config_set.exec(setInteraction, env))
+      .resolves.toMatchObject({ flags: 64, content: expect.stringContaining('fun.counter.label') });
+
+    const first = buildSlashInteraction({
+      name: 'counter',
+      guildId,
+      userId: uniqueId('counter-user'),
+    });
+    await expect(commands.counter.exec(first, env, 'counter', {
+      sourceInteraction: first,
+    })).resolves.toEqual({
+      content: 'Cheers: 1',
+      allowed_mentions: { parse: [] },
+    });
+    await expect(commands.counter.exec(first, env, 'counter', {
+      sourceInteraction: first,
+    })).resolves.toMatchObject({
+      flags: 64,
+      content: expect.stringContaining('Try /counter again'),
+    });
+
+    const second = buildSlashInteraction({
+      name: 'counter',
+      guildId,
+      userId: uniqueId('counter-user'),
+    });
+    await expect(commands.counter.exec(second, env, 'counter', {
+      sourceInteraction: second,
+    })).resolves.toMatchObject({ content: 'Cheers: 2' });
+  });
+
   it.each([
     ['config_show_value', [{ name: 'entry', value: 'allowedRoles' }]],
     ['config_list_entries', []],
     ['config_allow_role', [{ name: 'role', value: '12345' }]],
     ['config_disallow_role', [{ name: 'role', value: '12345' }]],
+    ['feature_config_show', [
+      { name: 'feature', value: 'fun.counter' },
+      { name: 'key', value: 'label' },
+    ]],
   ])('denies configured scheduling roles access to /%s', async (name, options) => {
     const guildId = uniqueId('guild');
     const roleId = uniqueId('role');

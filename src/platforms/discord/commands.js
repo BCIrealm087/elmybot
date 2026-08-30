@@ -44,7 +44,105 @@ function compactDiagnosticText(value, maxLength = 120) {
     .slice(0, maxLength);
 }
 
+function installedFeatureId(value) {
+  const featureId = String(value ?? "").trim();
+  return featureRegistry.featuresById[featureId] ? featureId : null;
+}
+
+function featureConfigBody(interaction, extra = {}) {
+  const featureId = installedFeatureId(getOption(interaction, "feature"));
+  if (!featureId) return null;
+  return {
+    featureId,
+    key: String(getOption(interaction, "key") ?? "").trim(),
+    ...extra
+  };
+}
+
+async function featureConfigFetch(interaction, env, operation, body) {
+  return await discordGroupConfigFetch(
+    env,
+    interaction.guild_id,
+    `https://config/internal/framework/config/${operation}`,
+    {
+      method: "POST",
+      headers: internalRequestHeaders(interaction),
+      body: JSON.stringify(body)
+    }
+  );
+}
+
 const managementCommands = Object.freeze({
+  "feature_config_set": {
+    description: "Sets a namespaced setting for an installed feature",
+    guild: { capability: CAPABILITIES.CONFIG_MANAGE },
+    deferred: true,
+    options: [
+      { name: "feature", description: "Installed feature ID", type: 3, required: true },
+      { name: "key", description: "Feature setting key", type: 3, required: true },
+      { name: "json_value", description: "Setting value as JSON", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      let value;
+      try {
+        value = JSON.parse(String(getOption(interaction, "json_value") ?? ""));
+      } catch {
+        return ephemeralData(
+          "The value must be valid JSON. Text values need quotes, for example `\"Wins\"`."
+        );
+      }
+      const body = featureConfigBody(interaction, { value });
+      if (!body) return ephemeralData("That feature is not installed.");
+      const response = await featureConfigFetch(interaction, env, "set", body);
+      if (!response.ok) return await serviceFailure(response, "Feature configuration service");
+      await response.text();
+      return ephemeralData(
+        `Set \`${compactDiagnosticText(body.featureId, 100)}.${compactDiagnosticText(body.key, 64)}\`.`
+      );
+    }
+  },
+
+  "feature_config_show": {
+    description: "Shows a namespaced setting for an installed feature",
+    guild: { capability: CAPABILITIES.CONFIG_MANAGE },
+    deferred: true,
+    options: [
+      { name: "feature", description: "Installed feature ID", type: 3, required: true },
+      { name: "key", description: "Feature setting key", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      const body = featureConfigBody(interaction);
+      if (!body) return ephemeralData("That feature is not installed.");
+      const response = await featureConfigFetch(interaction, env, "get", body);
+      if (!response.ok) return await serviceFailure(response, "Feature configuration service");
+      const data = await response.json();
+      if (data.value === null) return ephemeralData("No feature setting was found.");
+      const shown = compactDiagnosticText(JSON.stringify(data.value), 1_500);
+      return ephemeralData(
+        `\`${compactDiagnosticText(body.featureId, 100)}.${compactDiagnosticText(body.key, 64)}\` ` +
+        `is \`${shown}\`.`
+      );
+    }
+  },
+
+  "feature_config_delete": {
+    description: "Deletes a namespaced setting for an installed feature",
+    guild: { capability: CAPABILITIES.CONFIG_MANAGE },
+    deferred: true,
+    options: [
+      { name: "feature", description: "Installed feature ID", type: 3, required: true },
+      { name: "key", description: "Feature setting key", type: 3, required: true }
+    ],
+    exec: async (interaction, env) => {
+      const body = featureConfigBody(interaction);
+      if (!body) return ephemeralData("That feature is not installed.");
+      const response = await featureConfigFetch(interaction, env, "delete", body);
+      if (!response.ok) return await serviceFailure(response, "Feature configuration service");
+      const data = await response.json();
+      return ephemeralData(data.deleted ? "Feature setting deleted." : "No feature setting was found.");
+    }
+  },
+
   "config_show_value": {
     description: "Displays the value of a given configuration entry",
     guild: { capability: CAPABILITIES.CONFIG_MANAGE },

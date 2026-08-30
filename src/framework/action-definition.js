@@ -11,6 +11,7 @@ const VERSIONED_KIND_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
 const SUPPORTED_ORIGINS = new Set(["discord", "twitch"]);
 const SUPPORTED_SERVICES = new Set(["config", "state", "random"]);
+const COOLDOWN_SCOPES = new Set(["actor", "group"]);
 
 function requireVersionedKinds(value, path) {
   if (!Array.isArray(value)) throw new TypeError(`${path} must be an array.`);
@@ -53,12 +54,37 @@ function normalizeUses(value = {}) {
   });
 }
 
+function normalizeCooldown(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Action cooldown must be an object.");
+  }
+  const allowed = new Set(["scope", "seconds"]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new TypeError(`Unsupported action cooldown field: \`${key}\`.`);
+    }
+  }
+  if (!COOLDOWN_SCOPES.has(value.scope)) {
+    throw new TypeError("Action cooldown scope is invalid.");
+  }
+  if (
+    !Number.isSafeInteger(value.seconds) ||
+    value.seconds < 1 ||
+    value.seconds > 86_400
+  ) {
+    throw new TypeError("Action cooldown seconds must be between 1 and 86400.");
+  }
+  return Object.freeze({ scope: value.scope, seconds: value.seconds });
+}
+
 export function defineAction({
   kind,
   capability = null,
   supportedOrigins,
   input = schema.object({}),
   uses = {},
+  cooldown = null,
   execute,
   ...unknown
 }) {
@@ -96,6 +122,7 @@ export function defineAction({
     supportedOrigins: Object.freeze([...supportedOrigins].sort()),
     input,
     uses: normalizeUses(uses),
+    cooldown: normalizeCooldown(cooldown),
     execute
   }, ACTION_TYPE);
 }

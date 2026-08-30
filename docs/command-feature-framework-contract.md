@@ -2,7 +2,7 @@
 
 ## Status
 
-**Framework API v1 approved on 2026-08-30; implementation steps 1–6 complete.**
+**Framework API v1 approved on 2026-08-30; implementation steps 1–7 complete.**
 
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
@@ -354,6 +354,10 @@ Although `config`, `state`, and `random` are part of the approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
+
+Implementation status: all three API v1 services are available in the installed
+composition. Config and state are scoped through `GroupConfig`; declarative
+cooldowns use the same per-group boundary and are enforced before action code.
 
 ## Command definitions
 
