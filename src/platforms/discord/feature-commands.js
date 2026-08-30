@@ -3,6 +3,8 @@ import { SchemaValidationError } from "../../framework/index.js";
 import { discordOptionDescriptor } from "../../framework/discord.js";
 import { ephemeralData } from "./common.js";
 import { executeDiscordAction } from "./actions.js";
+import { CAPABILITIES } from "./discord-permissions.js";
+import { discordGroupConfigFetch } from "./group-config.js";
 
 function normalizeOptionValue(option, value) {
   const path = option.arg;
@@ -63,11 +65,52 @@ function discordOrigin(interaction) {
   });
 }
 
-function nativeContext(interaction) {
+async function updateAllowedRole(env, interaction, roleId, operation) {
+  const response = await discordGroupConfigFetch(
+    env,
+    interaction.guild_id,
+    `https://config/${operation}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-correlation-id": `discord:${interaction.id ?? "unknown"}`
+      },
+      body: JSON.stringify({ key: "allowedRoles", value: roleId })
+    }
+  );
+  if (!response.ok) {
+    await response.text();
+    const error = new Error("Group configuration service returned an unexpected response.");
+    error.status = response.status;
+    throw error;
+  }
+}
+
+function nativeContext(interaction, env, definition, runtime) {
+  const permissionServiceAuthorized =
+    definition.capability === CAPABILITIES.CONFIG_MANAGE &&
+    runtime.authorizedCapability === CAPABILITIES.CONFIG_MANAGE;
+  const updateRole = (roleId, operation) => {
+    if (!permissionServiceAuthorized) {
+      const error = new Error("The command cannot manage protected Discord roles.");
+      error.code = "discord_permission_service_forbidden";
+      throw error;
+    }
+    return updateAllowedRole(env, interaction, roleId, operation);
+  };
   return Object.freeze({
     platform: "discord",
     origin: discordOrigin(interaction),
     sourceEventId: `discord:interaction:${interaction.id}`,
+    permissions: Object.freeze({
+      allowRole(roleId) {
+        return updateRole(roleId, "append-to");
+      },
+      disallowRole(roleId) {
+        return updateRole(roleId, "remove-from");
+      }
+    }),
     response: Object.freeze({
       text(content, { ephemeral = false } = {}) {
         if (typeof content !== "string" || content.length === 0 || content.length > 2_000) {
@@ -104,6 +147,9 @@ export function compileDiscordFeatureCommands(definitions, actions) {
     compiled[definition.name] = Object.freeze({
       description: definition.description,
       deferred: definition.deferred,
+      ...(definition.mode === "action-command"
+        ? { actionKind: definition.actionKind }
+        : {}),
       ...(definition.availability === "guild"
         ? { guild: Object.freeze({ capability }) }
         : {}),
@@ -126,7 +172,12 @@ export function compileDiscordFeatureCommands(definitions, actions) {
           }
           const normalized = definition.input.parse(args, { path: "arguments" });
           return await definition.execute(
-            nativeContext(runtime.sourceInteraction ?? interaction),
+            nativeContext(
+              runtime.sourceInteraction ?? interaction,
+              env,
+              definition,
+              runtime
+            ),
             normalized
           );
         } catch (error) {

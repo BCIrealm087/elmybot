@@ -99,14 +99,18 @@ platform response shapes do not enter the action invocation.
 
 ## Adding an action
 
-1. Choose a semantic, versioned kind (`core.*`, `integration.*`, or a genuinely
-   platform-native namespace).
-2. Define supported origins and an explicit capability or `null`.
-3. Return a normalized action result with semantic output and/or effects.
-4. Register the definition in the appropriate immutable action set.
-5. Add small platform command descriptors that build invocations and render the
-   result.
+For contributor-facing behavior, create a feature module with `defineFeature()`,
+declare its semantic action with `defineAction()`, and expose it through the
+Discord or Twitch action-command helpers. Add the reviewed module to the
+explicit catalog in `src/features/index.js` and give it a focused test.
 
-Platform-only commands can continue using their existing implementations. They
-need to enter the action registry only when the shared semantic boundary is
-useful.
+The framework then validates its argument schema, capability, supported
+origins, action references, and command collisions while composing the existing
+immutable action and command registries. `core.alive` is the first migrated
+example of this path.
+
+Platform-only behavior uses the native command helper and a controlled platform
+context. It does not need to enter the action registry. The
+`discord.role-access` feature demonstrates this path without exposing Worker
+bindings or configuration storage to feature code. Existing low-level action
+sets remain available during the staged migration.

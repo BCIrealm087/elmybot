@@ -1,6 +1,5 @@
 import {
 	ActionRegistryError,
-	CORE_ACTION_KINDS,
 	INTEGRATION_ACTION_KINDS
 } from "../../actions/index.js";
 import { featureRegistry } from "../../features/index.js";
@@ -8,24 +7,11 @@ import { mergeCommandDefinitions } from "../../framework/index.js";
 import { INTEGRATION_ROUTE_KINDS } from "../../integrations/index.js";
 import { compileTwitchFeatureCommands } from "./feature-commands.js";
 import {
-	executeTwitchAction,
 	executeTwitchRoutedAction,
 	twitchTextActionResponse
 } from "./actions.js";
 
 const legacyCommands = Object.freeze({
-	"alive": Object.freeze({
-		description: "Replies if alive.",
-		actionKind: CORE_ACTION_KINDS.ALIVE,
-		exec: async (event, env, { messageId }) =>
-			twitchTextActionResponse(await executeTwitchAction(
-				event,
-				messageId,
-				CORE_ACTION_KINDS.ALIVE,
-				{},
-				{ env }
-			))
-	}),
 	"announce": Object.freeze({
 		description: "Publishes an announcement to linked Discord channels.",
 		actionKind: INTEGRATION_ACTION_KINDS.PUBLISH_ANNOUNCEMENT,

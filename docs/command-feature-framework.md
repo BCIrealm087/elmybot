@@ -373,16 +373,18 @@ so those representations cannot silently drift.
    runtime now has a strict `defineFeature()`, an explicit installed-feature
    catalog, immutable action and per-platform command contribution registries,
    and collision-safe merging with legacy action and command sets. The catalog
-   remains empty until representative features are migrated in later steps.
+   began empty so representative features could be migrated deliberately.
 3. **Add Discord and Twitch command helpers — completed.** The framework now
    provides runtime argument schemas, reviewed access presets, separate
    action-backed and native command definitions, Twitch parsers, safe text
    renderers, Discord option/registration generation, and composition checks
-   tying action commands to installed actions. Existing commands remain on the
-   legacy adapters until the representative migrations in step 4.
-4. **Migrate representative local behavior.** Use `/alive` and `!alive` for one
-   shared action and migrate one genuinely platform-native command. Do not use a
-   big-bang conversion.
+   tying action commands to installed actions.
+4. **Migrate representative local behavior — completed.** The installed
+   `core.alive` feature now owns one shared action exposed as Discord `/alive`
+   and Twitch `!alive`. The installed `discord.role-access` feature owns the
+   Discord-native `/config_allow_role` command and uses a narrow adapter service
+   instead of raw Worker bindings. All other commands remain on their legacy
+   registrations; this is intentionally not a big-bang conversion.
 5. **Add the route catalog and effect helpers.** Migrate bidirectional
    announcements. A contributor should then be able to add an immediate
    cross-platform command without editing coordinator code.

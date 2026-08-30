@@ -1,7 +1,5 @@
-import { CORE_ACTION_KINDS } from "../../actions/index.js";
 import { featureRegistry } from "../../features/index.js";
 import { mergeCommandDefinitions } from "../../framework/index.js";
-import { discordTextActionResponse, executeDiscordAction } from "./actions.js";
 import { CAPABILITIES } from "./discord-permissions.js";
 import { ephemeralData, getOption } from "./common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
@@ -100,32 +98,6 @@ const managementCommands = Object.freeze({
         `Entries (${data.totalEntries} total, showing ${data.keys.length}):\n` +
         `\`{${shown}}\``
       );
-    }
-  },
-
-  "config_allow_role": {
-    description: "Enables a role to use scheduling commands.",
-    guild: { capability: CAPABILITIES.CONFIG_MANAGE },
-    deferred: true,
-    options: [
-      { name: "role", description: "Role to allow", type: 8, required: true }
-    ],
-    exec: async (interaction, env) => {
-      const role = String(getOption(interaction, "role") ?? "");
-      const response = await discordGroupConfigFetch(
-        env,
-        interaction.guild_id,
-        "https://config/append-to",
-        {
-          method: "POST",
-          headers: internalRequestHeaders(interaction),
-          body: JSON.stringify({ key: "allowedRoles", value: role })
-        }
-      );
-      if (!response.ok) {
-        return await serviceFailure(response, "Group configuration service");
-      }
-      return ephemeralData(`Successfully added <@&${role}> to allowed roles.`);
     }
   },
 
@@ -249,17 +221,6 @@ const managementCommands = Object.freeze({
 // `Response` instances. Commands without a guild descriptor will not receive
 // a guild_id on execution.
 const legacyCommands = {
-  "alive": {
-    description: "Replies if alive.",
-    actionKind: CORE_ACTION_KINDS.ALIVE,
-    exec: async (_interaction, env, _name, context) =>
-      discordTextActionResponse(await executeDiscordAction(
-        context.sourceInteraction,
-        CORE_ACTION_KINDS.ALIVE,
-        {},
-        { env }
-      ))
-  },
   ...integrationCommands,
   ...schedulingCommands,
   ...managementCommands

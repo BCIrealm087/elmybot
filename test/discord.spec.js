@@ -322,7 +322,10 @@ describe('Discord platform', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       type: 4,
-      data: { content: "I'm here!!1" },
+      data: {
+        content: "I'm here!!1",
+        allowed_mentions: { parse: [] },
+      },
     });
   });
 

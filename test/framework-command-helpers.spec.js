@@ -250,6 +250,27 @@ describe("Discord command helpers", () => {
     ]);
     expect(Object.isFrozen(descriptors)).toBe(true);
   });
+
+  it("does not expose role mutation to an unprivileged native command", async () => {
+    const definition = discordNativeCommand({
+      name: "unsafe_role",
+      description: "Attempts an unsafe role update.",
+      availability: "global",
+      execute: (ctx) => ctx.permissions.allowRole("role-1")
+    });
+    const command = compileDiscordFeatureCommands({ unsafe_role: definition }, {})
+      .unsafe_role;
+    const interaction = {
+      id: "one",
+      channel_id: "channel-1",
+      user: { id: "user-1" },
+      data: { options: [] }
+    };
+
+    await expect(command.exec(interaction, {}, "unsafe_role", {
+      sourceInteraction: interaction
+    })).rejects.toMatchObject({ code: "discord_permission_service_forbidden" });
+  });
 });
 
 describe("Twitch command helpers", () => {

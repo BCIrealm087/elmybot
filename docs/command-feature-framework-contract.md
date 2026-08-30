@@ -2,7 +2,7 @@
 
 ## Status
 
-**Framework API v1 approved on 2026-08-30; implementation steps 1–3 complete.**
+**Framework API v1 approved on 2026-08-30; implementation steps 1–4 complete.**
 
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
