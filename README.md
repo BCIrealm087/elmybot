@@ -351,7 +351,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-The complete suite currently contains 195 tests across 15 files. GitHub Actions
+The complete suite currently contains 205 tests across 18 files. GitHub Actions
 runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
@@ -362,6 +362,14 @@ runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
 
 The CI Wrangler dry run is the authoritative clean build/configuration check.
 
+## Writing features
+
+Start with the [feature authoring guide](docs/feature-authoring.md). It includes
+the scaffold command, deployment-free test runtime, and cookbooks for native,
+shared, routed, scheduled, event-driven, and stateful features. The
+[installed feature catalog](docs/feature-catalog.md) is generated from registry
+metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
+
 ## Detailed documentation
 
 - [Cross-platform contracts](docs/cross-platform-contracts.md)
@@ -371,6 +379,8 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state, and cooldowns](docs/feature-state.md)
+- [Feature authoring guide and cookbooks](docs/feature-authoring.md)
+- [Generated installed feature catalog](docs/feature-catalog.md)
 
 ## External references
 

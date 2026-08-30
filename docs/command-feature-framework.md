@@ -408,9 +408,15 @@ so those representations cannot silently drift.
    Discord commands manage installed-feature configuration. The shared
    `/counter` and `!counter` proof uses a configurable label, atomic increment,
    and actor cooldown without accessing Worker bindings or storage layouts.
-8. **Complete the test kit, scaffold, and contributor guide.** Include
-   cookbooks for native, shared, routed, scheduled, event-driven, and stateful
-   commands.
+8. **Complete the test kit, scaffold, and contributor guide — completed.** The
+   deployment-free test runtime composes real feature contracts while modeling
+   actors, authorization, routes, effects, events, schedules, stored-plan
+   replay, configuration, state, cooldowns, clock, randomness, and logs. The
+   non-overwriting `npm run feature:new -- <name>` scaffold creates one feature
+   module and one test skeleton. The authoring guide provides native, shared,
+   routed, scheduled, event-driven, and stateful cookbooks, while the generated
+   installed-feature catalog and lint freshness check keep contributor
+   documentation tied to registry metadata.
 9. **Stabilize and version the framework API.** Introduce a framework API
    version and documented deprecation rules. Feature modules must not depend on
    internal persistence layouts.

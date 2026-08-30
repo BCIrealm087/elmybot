@@ -5,9 +5,11 @@
 	"type": "module",
 	"scripts": {
 		"discord-register": "node src/platforms/discord/register-commands.js",
+		"feature:docs": "node scripts/generate-feature-docs.js",
+		"feature:new": "node scripts/create-feature.js",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
-		"lint": "eslint .",
+		"lint": "eslint . && node scripts/generate-feature-docs.js --check",
 		"start": "wrangler dev",
 		"test": "vitest"
 	},
