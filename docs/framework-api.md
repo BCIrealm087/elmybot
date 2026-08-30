@@ -19,6 +19,20 @@ import {
 } from "../../framework/index.js";
 ```
 
+Private workspace feature packages use the package facade instead:
+
+```js
+import {
+  defineFeature,
+  frameworkApiVersion
+} from "@elmybot/framework";
+```
+
+Both entries expose the same API v1 objects. The workspace package version uses
+the framework API as its major version (`@elmybot/framework@1.x` implements API
+v1). In this first stage the package is private and delegates to the Worker's
+existing implementation; it is not yet an independently publishable artifact.
+
 `src/framework/index.js` is the stable runtime-authoring boundary. Its v1
 surface consists of:
 
@@ -40,7 +54,8 @@ surface consists of:
 
 Feature tests may additionally import the documented test kit from
 `src/framework/testing.js`. The test kit follows the v1 feature contract but is
-not a production feature dependency.
+not a production feature dependency. Workspace tests use the equivalent
+`@elmybot/framework/testing` export.
 
 All other modules below `src/framework/` are implementation details. In
 particular, `internal.js`, registry composition, service runtimes, storage
@@ -134,6 +149,12 @@ from feature modules into any other `src/` area, including:
 - Discord or Twitch authentication and delivery adapters;
 - Worker bindings and platform request handlers; and
 - framework registry, service-runtime, or adapter internals.
+
+Workspace feature source is stricter: relative imports must stay inside its own
+package, and framework imports must use exactly `@elmybot/framework`.
+`@elmybot/framework/testing` is available only to package tests. Package
+manifests are also checked for API-major peer compatibility and matching feature
+metadata before CI accepts them.
 
 This rule is intentionally mechanical so an internal dependency cannot enter a
 feature merely because review missed it. Native features still receive narrow,

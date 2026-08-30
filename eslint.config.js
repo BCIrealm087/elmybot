@@ -30,7 +30,11 @@ export default [
 		}
 	},
 	{
-		files: ["src/features/*/*.js", "src/features/*/**/*.js"],
+		files: [
+			"src/features/*/*.js",
+			"src/features/*/**/*.js",
+			"packages/features/*/src/**/*.js"
+		],
 		plugins: {
 			"feature-api": featureApiBoundary
 		},
@@ -39,7 +43,12 @@ export default [
 		}
 	},
 	{
-		files: ["test/**/*.js", "scripts/**/*.js", "*.js"],
+		files: [
+			"test/**/*.js",
+			"packages/features/*/test/**/*.js",
+			"scripts/**/*.js",
+			"*.js"
+		],
 		languageOptions: {
 			ecmaVersion: "latest",
 			sourceType: "module",

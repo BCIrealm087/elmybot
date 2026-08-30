@@ -5,9 +5,10 @@
 This document is the design overview and implementation plan. The stable
 normative Framework API v1 contract is in
 `docs/command-feature-framework-contract.md`. The project owner approved that
-contract on 2026-08-30, and implementation steps 1–9 are complete. The public
+contract on 2026-08-30, and implementation steps 1–10 are complete. The public
 entry point, compatibility rules, and deprecation policy are recorded in
-`docs/framework-api.md`. Build-time feature packages remain a future step.
+`docs/framework-api.md`. Step 10 establishes private npm workspaces; independent
+package publication remains a possible later extension.
 
 ## Motivation
 
@@ -424,9 +425,14 @@ so those representations cannot silently drift.
    mechanically prevents feature modules from importing project internals, and
    `docs/framework-api.md` defines compatible changes, API-major changes, the
    deprecation lifecycle, and the current compatibility alias.
-10. **Consider build-time feature packages.** Only after the API is stable,
-    allow separately maintained packages to be added to the explicit installed
-    feature catalog.
+10. **Add the first build-time feature-package form — completed.** Private npm
+    workspaces now expose `@elmybot/framework` and its test kit, while
+    `@elmybot/feature-alive` proves independent feature source, metadata, tests,
+    explicit installation, Worker bundling, and compatibility re-exports. The
+    workspace scaffold creates the complete package shape; validation checks
+    names, exports, framework peer versions, metadata, and feature definitions;
+    and ESLint prevents package source from escaping into Worker internals.
+    Runtime-loaded code and external package publication remain out of scope.
 
 ## Success criteria
 

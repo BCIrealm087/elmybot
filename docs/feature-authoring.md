@@ -6,16 +6,17 @@ Elmybot. The normative API shapes remain in
 The supported entry point, compatibility rules, and deprecation lifecycle are
 defined in [`framework-api.md`](framework-api.md).
 
-The contributor framework is intentionally an in-repository JavaScript API.
+The contributor framework is intentionally a build-time JavaScript API.
 Features are reviewed, tested, explicitly installed, and bundled with the
-Worker. It does not execute uploaded or remotely supplied code.
+Worker. They may live directly under `src/features/` or in a private npm
+workspace package. Elmybot does not execute uploaded or remotely supplied code.
 
-## Quick start
+## Quick start: workspace feature package
 
 From the repository root:
 
 ```sh
-npm run feature:new -- fun-hype
+npm run feature:new -- fun-hype --workspace
 ```
 
 The name must contain at least two lowercase dash-separated words. The scaffold
@@ -23,16 +24,23 @@ converts `fun-hype` to feature ID `fun.hype`, command `hype`, and action kind
 `fun.hype.run.v1`. It creates:
 
 ```text
-src/features/fun-hype/feature.js
-test/features/fun-hype.spec.js
+packages/features/fun-hype/
+  package.json
+  README.md
+  src/feature.js
+  test/feature.spec.js
 ```
 
-The scaffold never overwrites an existing feature or test. It deliberately does
-not edit the installed catalog: installation is the one explicit review point.
-Add the generated feature to `src/features/index.js`:
+The package imports production helpers from `@elmybot/framework` and test
+helpers from `@elmybot/framework/testing`. It starts private and remains part of
+this repository; publishing it is a separate future decision.
+
+The scaffold never overwrites an existing file and does not install the feature
+automatically. Add its exact version to the root `dependencies`, run
+`npm install`, and add it to `src/features/index.js`:
 
 ```js
-import hypeFeature from "./fun-hype/feature.js";
+import hypeFeature from "@elmybot/feature-fun-hype";
 
 export const installedFeatures = Object.freeze([
   // Existing features...
@@ -43,13 +51,30 @@ export const installedFeatures = Object.freeze([
 Then replace the `TODO` behavior and run:
 
 ```sh
-npm test -- --run test/features/fun-hype.spec.js
+npm test -- --run packages/features/fun-hype/test/feature.spec.js
+npm run feature:workspaces
 npm run feature:docs
 npm run lint
 ```
 
-`npm run lint` also verifies that the checked-in
+`npm run feature:workspaces` checks package names, exports, peer compatibility,
+metadata, default feature exports, and root dependency versions. `npm run lint`
+also enforces workspace isolation and verifies that the checked-in
 [`feature-catalog.md`](feature-catalog.md) matches the installed registry.
+
+## Repository-local feature
+
+Use the original scaffold when the feature is intentionally coupled to this
+deployment rather than independently owned:
+
+```sh
+npm run feature:new -- fun-hype
+```
+
+It creates `src/features/fun-hype/feature.js` and
+`test/features/fun-hype.spec.js`. Import that feature by relative path in the
+same explicit installed catalog. The contributor APIs and behavioral contracts
+are otherwise identical.
 
 ## Choose the smallest useful feature shape
 
@@ -69,9 +94,10 @@ helps.
 
 ## Core rules
 
-- Production feature modules import contributor helpers only from
-  `src/framework/index.js`; `npm run lint` rejects imports into project
-  internals.
+- Repository-local features import contributor helpers only from
+  `src/framework/index.js`. Workspace feature source imports only
+  `@elmybot/framework`. `npm run lint` rejects imports into project internals
+  and relative imports that escape a workspace package.
 - Set `apiVersion: frameworkApiVersion` so each manifest declares the stable
   authoring contract it expects.
 - Feature IDs and semantic kinds are namespaced and stable.
@@ -98,6 +124,12 @@ import {
   linkedTestRoute,
   twitchTestGroup
 } from "../../src/framework/testing.js";
+```
+
+Inside a workspace package, use the equivalent package entry:
+
+```js
+import { createFeatureTestRuntime } from "@elmybot/framework/testing";
 ```
 
 `createFeatureTestRuntime(feature)` composes the real feature and action
@@ -390,6 +422,8 @@ configuration commands.
 - Use the test runtime for contributor behavior and existing Worker suites for
   platform ingress or durability changes.
 - Add the feature once to `installedFeatures`.
+- For a workspace feature, keep its package metadata and root dependency
+  version aligned and run `npm run feature:workspaces`.
 - Run `npm run feature:docs` after installation.
 - Run the complete `npm test -- --run` and `npm run lint` checks.
 - Do not add secrets, raw platform tokens, direct external `fetch` calls, or

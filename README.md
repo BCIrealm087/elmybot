@@ -344,14 +344,17 @@ src/
   platforms/
     discord/                       Interaction, command, permission, scheduling, and effect adapters
     twitch/                        OAuth, EventSub, inbox, command, registry, and effect adapters
+packages/
+  framework/                       Private package facade for Framework API v1 and its test kit
+  features/alive/                  Build-time workspace feature-package proof
 docs/                              Detailed architecture and lifecycle contracts
-test/                              Worker, platform, integration, registry, and durability tests
+test/                              Core Worker, platform, integration, registry, and durability tests
 wrangler.jsonc                     Bindings, environments, and append-only migrations
 ```
 
 ## Testing and CI
 
-The complete suite currently contains 208 tests across 19 files. GitHub Actions
+The complete suite currently contains 210 tests across 20 files. GitHub Actions
 runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
@@ -365,8 +368,9 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 ## Writing features
 
 Start with the [feature authoring guide](docs/feature-authoring.md). It includes
-the scaffold command, deployment-free test runtime, and cookbooks for native,
-shared, routed, scheduled, event-driven, and stateful features. The
+the repository-local and recommended workspace-package scaffolds, deployment-free
+test runtime, and cookbooks for native, shared, routed, scheduled, event-driven,
+and stateful features. The
 [installed feature catalog](docs/feature-catalog.md) is generated from registry
 metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
 The [Framework API v1 stability policy](docs/framework-api.md) defines the

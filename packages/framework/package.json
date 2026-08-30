@@ -1,0 +1,10 @@
+{
+  "name": "@elmybot/framework",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./testing": "./testing.js"
+  }
+}

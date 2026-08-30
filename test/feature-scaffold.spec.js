@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   FeatureScaffoldError,
   featureScaffoldTemplates,
-  scaffoldIdentity
+  scaffoldIdentity,
+  workspaceFeatureScaffoldTemplates
 } from "../src/framework/scaffold.js";
 
 describe("Feature scaffold templates", () => {
@@ -31,5 +32,18 @@ describe("Feature scaffold templates", () => {
     for (const name of ["unqualified", "Fun-Hype", "fun_hype", "../fun-hype"]) {
       expect(() => scaffoldIdentity(name)).toThrow(FeatureScaffoldError);
     }
+  });
+
+  it("generates a private workspace feature package", () => {
+    const templates = workspaceFeatureScaffoldTemplates("fun-hype");
+
+    expect(templates.packageName).toBe("@elmybot/feature-fun-hype");
+    expect(JSON.parse(templates.packageSource)).toMatchObject({
+      private: true,
+      peerDependencies: { "@elmybot/framework": "^1.0.0" },
+      elmybot: { frameworkApiVersion: 1, featureId: "fun.hype" }
+    });
+    expect(templates.featureSource).toContain('from "@elmybot/framework"');
+    expect(templates.testSource).toContain('from "@elmybot/framework/testing"');
   });
 });

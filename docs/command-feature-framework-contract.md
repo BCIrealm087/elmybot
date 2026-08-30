@@ -2,7 +2,7 @@
 
 ## Status
 
-**Framework API v1 stable on 2026-08-30; implementation steps 1–9 complete.**
+**Framework API v1 stable on 2026-08-30; implementation steps 1–10 complete.**
 
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
@@ -41,11 +41,19 @@ Ordinary feature modules MUST import authoring APIs only from:
 import { /* public helpers */ } from "../../framework/index.js";
 ```
 
+Build-time workspace feature packages MUST use the equivalent stable package
+entry:
+
+```js
+import { /* public helpers */ } from "@elmybot/framework";
+```
+
 Imports from integration coordinator storage, Durable Object backends,
 platform authentication modules, or internal registry implementations are not
 part of the feature API and MUST fail the automated feature-boundary check.
-`src/framework/testing.js` is the supported test-only companion entry; every
-other framework module is internal to composition, adapters, or tooling.
+`src/framework/testing.js` and `@elmybot/framework/testing` are the supported
+test-only companion entries; every other framework module is internal to
+composition, adapters, or tooling.
 
 ## Identifiers and versions
 
@@ -132,6 +140,11 @@ export const installedFeatures = Object.freeze([
   scheduledTwitchAnnouncementsFeature
 ]);
 ```
+
+A feature may be imported by relative path or from a private build-time
+workspace such as `@elmybot/feature-alive`. Packaging does not imply discovery:
+the package's default `defineFeature()` export MUST still be added explicitly to
+this catalog and bundled before deployment.
 
 The composition root MUST build immutable snapshots for commands, actions,
 routes, events, schedules, and effect adapters. Startup MUST fail before any

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import packagedAliveFeature from "@elmybot/feature-alive";
 import {
   CORE_ACTION_KINDS,
   coreActions,
@@ -27,6 +28,7 @@ import { commands as twitchCommands } from "../src/platforms/twitch/commands.js"
 
 describe("Representative feature migrations", () => {
   it("installs alive as one shared action with two command presentations", () => {
+    expect(installedFeatures).toContain(packagedAliveFeature);
     expect(installedFeatures.map(({ id }) => id)).toContain("core.alive");
     expect(featureRegistry.actions[CORE_ACTION_KINDS.ALIVE]).toMatchObject({
       featureId: "core.alive",

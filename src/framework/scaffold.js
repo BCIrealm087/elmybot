@@ -1,3 +1,5 @@
+import { frameworkApiVersion } from "./api-version.js";
+
 const SLUG_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)+$/;
 
 export class FeatureScaffoldError extends Error {
@@ -105,5 +107,100 @@ export function featureScaffoldTemplates(slug) {
     identity,
     featureSource: featureTemplate(identity),
     testSource: testTemplate(identity)
+  });
+}
+
+function workspaceFeatureTemplate(identity) {
+  return `import {
+  defineAction,
+  defineFeature,
+  discordActionCommand,
+  discordTextResult,
+  frameworkApiVersion,
+  schema
+} from "@elmybot/framework";
+
+export const ${identity.constantName} = "${identity.actionKind}";
+
+export const feature = defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "${identity.featureId}",
+  description: "TODO: describe ${identity.featureId}.",
+  actions: [
+    defineAction({
+      kind: ${identity.constantName},
+      capability: null,
+      supportedOrigins: ["discord"],
+      input: schema.object({}),
+      execute: () => ({
+        output: { message: "TODO: ${identity.commandName}" },
+        effects: []
+      })
+    })
+  ],
+  commands: {
+    discord: [
+      discordActionCommand({
+        name: "${identity.commandName}",
+        description: "TODO: describe this command.",
+        availability: "guild",
+        actionKind: ${identity.constantName},
+        render: discordTextResult
+      })
+    ]
+  }
+});
+
+export default feature;
+`;
+}
+
+function workspaceTestTemplate(identity) {
+  return `import { describe, it } from "vitest";
+import {
+  createFeatureTestRuntime,
+  discordTestGroup
+} from "@elmybot/framework/testing";
+import feature from "../src/feature.js";
+
+describe("${identity.featureId}", () => {
+  it("executes its Discord command", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const result = await runtime.discord.command("${identity.commandName}", {
+      group: discordTestGroup()
+    });
+
+    result.toReply("TODO: ${identity.commandName}");
+  });
+});
+`;
+}
+
+export function workspaceFeatureScaffoldTemplates(slug) {
+  const identity = scaffoldIdentity(slug);
+  const packageName = `@elmybot/feature-${identity.slug}`;
+  return Object.freeze({
+    identity,
+    packageName,
+    featureSource: workspaceFeatureTemplate(identity),
+    testSource: workspaceTestTemplate(identity),
+    packageSource: `${JSON.stringify({
+      name: packageName,
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      exports: { ".": "./src/feature.js" },
+      peerDependencies: {
+        "@elmybot/framework": `^${frameworkApiVersion}.0.0`
+      },
+      elmybot: {
+        kind: "feature",
+        frameworkApiVersion,
+        featureId: identity.featureId
+      }
+    }, null, 2)}\n`,
+    readmeSource:
+      `# \`${packageName}\`\n\n` +
+      `TODO: describe the \`${identity.featureId}\` Elmybot feature.\n`
   });
 }

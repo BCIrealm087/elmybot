@@ -2,7 +2,7 @@ import { createFeatureRegistry } from "../framework/internal.js";
 import { FEATURE_RUNTIME_SERVICES } from "../framework/service-runtime.js";
 import { discordIntegrationEffectHandlers } from "../platforms/discord/integration-effects.js";
 import { twitchIntegrationEffectHandlers } from "../platforms/twitch/integration-effects.js";
-import { aliveFeature } from "./alive/feature.js";
+import aliveFeature from "@elmybot/feature-alive";
 import { announcementsFeature } from "./announcements/feature.js";
 import { discordRoleAccessFeature } from "./discord-role-access/feature.js";
 import { counterFeature } from "./counter/feature.js";
