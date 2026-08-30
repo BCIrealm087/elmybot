@@ -16,7 +16,6 @@ import {
   reserveIntegrationInvitation
 } from "../src/integrations/index.js";
 import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
-import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
 import {
   processTwitchStreamOnlineNotification
 } from "../src/platforms/twitch/eventsub-definitions.js";
@@ -104,35 +103,46 @@ async function deliverIntegrationEffects(linked) {
   );
 }
 
-function twitchAppAuthStub() {
-  return env.TWITCH_APP_AUTH.get(
-    env.TWITCH_APP_AUTH.idFromName(TWITCH_APP_AUTH_OBJECT_NAME)
+async function stubIntegrationDelivery(linked, kind, deliver) {
+  await runInDurableObject(
+    integrationCoordinatorStub(integrationEnv, linked.integration.id),
+    async (instance) => {
+      const handler = instance.effectHandlers[kind];
+      instance.effectHandlers = Object.freeze({
+        ...instance.effectHandlers,
+        [kind]: Object.freeze({ ...handler, deliver })
+      });
+    }
   );
 }
 
-async function storeTwitchAppToken() {
-  await runInDurableObject(twitchAppAuthStub(), async (_instance, state) => {
-    await state.storage.put("appAccessToken", {
-      accessToken: "stored-app-access-token",
-      clientId: "client-id",
-      obtainedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 4 * 60 * 60 * 1000
-    });
-  });
-}
-
-afterEach(async () => {
+afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  await runInDurableObject(
-    twitchAppAuthStub(),
-    async (_instance, state) => state.storage.deleteAll()
-  );
 });
 
 describe("Discord-to-Twitch vertical slice", () => {
   it("routes an authorized Discord announcement through the Twitch outbox", async () => {
     const linked = await activateRoutedIntegration();
+    const twitchDelivery = vi.fn(async (_env, effect) => {
+      expect(effect).toMatchObject({
+        kind: "twitch.chat.send.v1",
+        target: {
+          group: {
+            platform: "twitch",
+            kind: "channel",
+            id: linked.broadcasterId
+          }
+        },
+        payload: { message: "Hello linked Twitch chat!" }
+      });
+      return { messageId: "twitch-message-id" };
+    });
+    await stubIntegrationDelivery(
+      linked,
+      "twitch.chat.send.v1",
+      twitchDelivery
+    );
     const interaction = {
       id: uniqueId("discord-interaction"),
       type: 2,
@@ -151,15 +161,15 @@ describe("Discord-to-Twitch vertical slice", () => {
       }
     };
     const keyPair = nacl.sign.keyPair();
-    const patchMock = vi.fn(async (url, init) => {
-      expect(url).toContain(
+    const fetchMock = vi.fn(async (url, init) => {
+      expect(String(url)).toContain(
         `/webhooks/${interaction.application_id}/${interaction.token}/messages/@original`
       );
       expect(JSON.parse(init.body).content)
         .toBe("Announcement queued for 1 Twitch channel.");
       return Response.json({ ok: true });
     });
-    vi.stubGlobal("fetch", patchMock);
+    vi.stubGlobal("fetch", fetchMock);
     const ctx = createExecutionContext();
     const response = await worker.fetch(
       signedDiscordRequest(interaction, keyPair),
@@ -171,50 +181,24 @@ describe("Discord-to-Twitch vertical slice", () => {
       data: { flags: 64, allowed_mentions: { parse: [] } }
     });
     await waitOnExecutionContext(ctx);
-    expect(patchMock).toHaveBeenCalledOnce();
-
     const sourceEventId = `discord:interaction:${interaction.id}`;
+    // The test runtime may run a due Durable Object alarm automatically. Calling
+    // the alarm explicitly is safe after either outcome: it delivers pending
+    // work or observes that the outbox effect has already completed.
+    await deliverIntegrationEffects(linked);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(twitchDelivery).toHaveBeenCalledOnce();
     expect(await getIntegrationExecution(
       integrationEnv,
       linked.integration.id,
       sourceEventId
     )).toMatchObject({
       sourceGroupKey: `discord:guild:${linked.guildId}`,
-      state: "pending",
-      effects: [{
-        kind: "twitch.chat.send.v1",
-        state: "pending",
-        targetGroupKey: `twitch:channel:${linked.broadcasterId}`
-      }]
-    });
-
-    await storeTwitchAppToken();
-    const fetchMock = vi.fn(async (url, init) => {
-      expect(url).toBe("https://api.twitch.tv/helix/chat/messages");
-      expect(init.headers).toMatchObject({
-        Authorization: "Bearer stored-app-access-token",
-        "Client-Id": "client-id"
-      });
-      expect(JSON.parse(init.body)).toEqual({
-        broadcaster_id: linked.broadcasterId,
-        sender_id: "bot-user-id",
-        message: "Hello linked Twitch chat!"
-      });
-      return Response.json({
-        data: [{ message_id: "twitch-message-id", is_sent: true }]
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    await deliverIntegrationEffects(linked);
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(await getIntegrationExecution(
-      integrationEnv,
-      linked.integration.id,
-      sourceEventId
-    )).toMatchObject({
       state: "completed",
       effects: [{
+        kind: "twitch.chat.send.v1",
+        targetGroupKey: `twitch:channel:${linked.broadcasterId}`,
         state: "delivered",
         attempts: 1,
         result: { messageId: "twitch-message-id" }

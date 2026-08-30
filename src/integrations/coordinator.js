@@ -47,6 +47,7 @@ const PLATFORM_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const MAX_DELIVERY_ATTEMPTS = 5;
 const MAX_EFFECTS_PER_ALARM = 20;
 const MAX_DELIVERY_RESULT_BYTES = 32 * 1024;
+const ATTEMPT_LEASE_MS = 30 * 1000;
 
 export function createEffectHandlerRegistry(...handlerSets) {
   const registry = Object.create(null);
@@ -393,7 +394,7 @@ export class IntegrationCoordinatorBackend {
              last_attempt_at_ms = ?
          WHERE effect_id = ?`,
         attempts,
-        attemptedAtMs,
+        attemptedAtMs + ATTEMPT_LEASE_MS,
         attemptedAtMs,
         current.effect_id
       );
