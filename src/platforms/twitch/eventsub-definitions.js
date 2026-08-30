@@ -1,11 +1,6 @@
 import { logError } from "../../common.js";
+import { executeInstalledFeatureEvent } from "../../actions/index.js";
 import { createDomainEvent } from "../../integrations/contracts.js";
-import {
-	createDiscordMessageEffects,
-	INTEGRATION_ROUTE_KINDS,
-	resolveRoutes,
-	submitRoutedEffects
-} from "../../integrations/index.js";
 import { markTwitchChannelAuthorizationRevoked } from "./channel-auth.js";
 import {
 	isRecognizedTwitchCommandNotification,
@@ -126,24 +121,7 @@ export async function processTwitchStreamOnlineNotification(
 	messageTimestamp
 ) {
 	const event = streamOnlineEvent(payload, messageId, messageTimestamp);
-	const routes = await resolveRoutes(
-		env,
-		event.source.group,
-		INTEGRATION_ROUTE_KINDS.TWITCH_STREAM_ONLINE_TO_DISCORD
-	);
-	const content = `🔴 ${event.payload.broadcasterName} is live on Twitch! ` +
-		`https://www.twitch.tv/${event.payload.broadcasterLogin}`;
-	const effects = createDiscordMessageEffects(routes, {
-		content,
-		sourceEventId: event.sourceEventId,
-		correlationId: event.correlationId
-	});
-	await submitRoutedEffects(env, {
-		source: event.source,
-		sourceEventId: event.sourceEventId,
-		correlationId: event.correlationId,
-		effects
-	});
+	await executeInstalledFeatureEvent(event, env);
 }
 
 async function handleStreamOnlineRevocation({

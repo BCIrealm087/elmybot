@@ -176,7 +176,7 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
   return Object.freeze({
     apiVersion: 1,
     featureId: action.featureId,
-    trigger: Object.freeze({ kind: "command" }),
+    trigger: Object.freeze({ kind: runtimeContext.triggerKind ?? "command" }),
     origin: invocation.origin,
     sourceEventId: invocation.sourceEventId,
     correlationId: invocation.correlationId,

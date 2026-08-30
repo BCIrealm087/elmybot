@@ -305,6 +305,32 @@ export function createCommandInvocation({
   });
 }
 
+export function createEventActionInvocation({
+  kind,
+  origin,
+  args = {},
+  sourceEventId,
+  correlationId = sourceEventId
+}) {
+  const normalizedOrigin = normalizeOrigin(origin, "Event action origin", {
+    actorRequired: false
+  });
+  const normalizedSourceEventId = requireSourceEventId(
+    sourceEventId,
+    "Event action source event ID",
+    normalizedOrigin.group.platform
+  );
+
+  return Object.freeze({
+    schemaVersion: INTEGRATION_CONTRACT_SCHEMA_VERSION,
+    kind: requireVersionedKind(kind, "Event action kind"),
+    origin: normalizedOrigin,
+    args: copyJsonObject(args, "Event action arguments"),
+    sourceEventId: normalizedSourceEventId,
+    correlationId: requireCorrelationId(correlationId, "Event action correlation ID")
+  });
+}
+
 export function createDomainEvent({
   kind,
   source,

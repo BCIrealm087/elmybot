@@ -394,9 +394,13 @@ so those representations cannot silently drift.
    now belong to one installed feature; platform executors submit its results
    through the existing durable coordinator without feature code constructing
    integration envelopes or handling retries.
-6. **Add scheduled-action and event-action adapters.** Include immutable
-   occurrence planning. Migrate `stream.online` and use a randomly scheduled
-   Discord-to-Twitch message as the cross-platform scheduling proof.
+6. **Add scheduled-action and event-action adapters — completed.** Authenticated
+   domain events can now map into installed actions, and `stream.online` uses
+   that path. Scheduled-action definitions capture authorization at creation;
+   every occurrence resolves current routes, persists an immutable action,
+   route, and effect plan, and replays that plan on scheduler retries. The
+   installed `/integration_schedule_twitch` proof repeatedly invokes the same
+   announcement action at bounded-random intervals.
 7. **Add namespaced configuration, state, and cooldowns.** This enables games,
    counters, quotes, points, and other stateful features safely.
 8. **Complete the test kit, scaffold, and contributor guide.** Include

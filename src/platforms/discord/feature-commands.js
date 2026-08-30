@@ -1,10 +1,15 @@
 import { ActionRegistryError } from "../../actions/index.js";
 import { SchemaValidationError } from "../../framework/index.js";
 import { discordOptionDescriptor } from "../../framework/discord.js";
+import { SCHEDULED_ACTION_COMMAND_TYPE } from "../../framework/command-common.js";
 import { ephemeralData } from "./common.js";
 import { executeDiscordAction } from "./actions.js";
 import { CAPABILITIES } from "./discord-permissions.js";
 import { discordGroupConfigFetch } from "./group-config.js";
+import {
+  DiscordFeatureSchedulingError,
+  scheduleDiscordFeatureAction
+} from "./feature-scheduling.js";
 
 function normalizeOptionValue(option, value) {
   const path = option.arg;
@@ -127,6 +132,9 @@ function nativeContext(interaction, env, definition, runtime) {
 }
 
 function userFacingError(error, commandName) {
+  if (error instanceof DiscordFeatureSchedulingError) {
+    return ephemeralData(error.message);
+  }
   if (error instanceof SchemaValidationError) return ephemeralData(error.message);
   if (error instanceof ActionRegistryError && error.code === "action_arguments_invalid") {
     return ephemeralData(error.message);
@@ -137,19 +145,24 @@ function userFacingError(error, commandName) {
   return null;
 }
 
-export function compileDiscordFeatureCommands(definitions, actions) {
+export function compileDiscordFeatureCommands(definitions, actions, schedules = {}) {
   const compiled = Object.create(null);
   for (const definition of Object.values(definitions)) {
+    const schedule = definition.mode === SCHEDULED_ACTION_COMMAND_TYPE
+      ? schedules[definition.scheduleKind]
+      : null;
     const action = definition.mode === "action-command"
       ? actions[definition.actionKind]
-      : null;
+      : schedule ? actions[schedule.actionKind] : null;
     const capability = action?.capability ?? definition.capability ?? null;
     compiled[definition.name] = Object.freeze({
       description: definition.description,
       deferred: definition.deferred,
       ...(definition.mode === "action-command"
         ? { actionKind: definition.actionKind }
-        : {}),
+        : definition.mode === SCHEDULED_ACTION_COMMAND_TYPE
+          ? { scheduleKind: definition.scheduleKind }
+          : {}),
       ...(definition.availability === "guild"
         ? { guild: Object.freeze({ capability }) }
         : {}),
@@ -169,6 +182,17 @@ export function compileDiscordFeatureCommands(definitions, actions) {
               }
             );
             return definition.render(result, Object.freeze({ platform: "discord" }));
+          }
+          if (definition.mode === SCHEDULED_ACTION_COMMAND_TYPE) {
+            return await scheduleDiscordFeatureAction({
+              interaction: runtime.sourceInteraction ?? interaction,
+              env,
+              command: definition,
+              schedule,
+              action,
+              args,
+              authorizedCapability: runtime.authorizedCapability
+            });
           }
           const normalized = definition.input.parse(args, { path: "arguments" });
           return await definition.execute(

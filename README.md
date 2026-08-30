@@ -109,6 +109,7 @@ script. All commands except `/alive` are guild-only.
 | `/integration_dead_letters` | `integration_id` | Inspect failed cross-platform effects |
 | `/integration_retry_effect` | `integration_id`, `idempotency_key` | Retry one dead-lettered effect |
 | `/integration_announce_twitch` | `message` | Send an announcement to linked Twitch channels |
+| `/integration_schedule_twitch` | `message`, optional `min_interval`, `max_interval` | Repeatedly announce to linked Twitch channels at bounded-random intervals |
 | `/integration_unlink` | `integration_id` | Revoke one integration without disconnecting Twitch OAuth |
 
 Scheduling create/view/cancel capabilities allow the server owner, intrinsic
@@ -119,7 +120,8 @@ inspect, configure, recover, or unlink integrations. Announcements allow the
 owner, intrinsic moderators, and configured allowed roles.
 
 Random schedule intervals are expressed in seconds, must remain between 10
-minutes and 24 hours, and default to 2–6 hours. GIF queries are limited to 20
+minutes and 24 hours, and default to 2–6 hours. This applies to local Discord
+random messages and linked Twitch announcements. GIF queries are limited to 20
 characters and are resolved at delivery time.
 
 ### Twitch
@@ -148,7 +150,7 @@ Discord guild and Twitch channel, with three enabled routes:
 |---|---|
 | `discord.announce-to-twitch.v1` | `/integration_announce_twitch` sends to Twitch chat |
 | `twitch.announce-to-discord.v1` | `!announce` sends to Discord |
-| `twitch.stream-online-to-discord.v1` | `stream.online` publishes a Discord notice |
+| `twitch.stream-online-to-discord.v1` | `stream.online` invokes a feature action that publishes a Discord notice |
 
 Routes can be disabled or retargeted independently. A Twitch channel may link
 to multiple Discord guilds. Revoking a link preserves its audit history and

@@ -28,8 +28,13 @@ export {
   discordNativeCommand,
   discordOption,
   discordOptionDescriptor,
+  discordScheduledActionCommand,
   discordTextResult
 } from "./discord.js";
+export {
+  defineEventAction,
+  defineScheduledAction
+} from "./trigger-definitions.js";
 export {
   twitchActionCommand,
   twitchNativeCommand,

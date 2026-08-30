@@ -33,9 +33,10 @@ Two definitions are registered:
 
 - `twitch.chat.message.v1` preserves Twitch-native commands and now exposes the
   authorized `!announce` cross-platform action.
-- `twitch.stream.online.v1` creates a platform-neutral domain event and routes a
-  Discord stream notice through every enabled
-  `twitch.stream-online-to-discord.v1` link route.
+- `twitch.stream.online.v1` creates a platform-neutral domain event. Its
+  installed feature binding maps that event into
+  `twitch.stream-online.publish.v1`, which routes a Discord stream notice
+  through every enabled `twitch.stream-online-to-discord.v1` link route.
 
 To add an EventSub type:
 

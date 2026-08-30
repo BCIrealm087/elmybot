@@ -4,13 +4,19 @@ import { twitchIntegrationEffectHandlers } from "../platforms/twitch/integration
 import { aliveFeature } from "./alive/feature.js";
 import { announcementsFeature } from "./announcements/feature.js";
 import { discordRoleAccessFeature } from "./discord-role-access/feature.js";
+import { streamOnlineFeature } from "./stream-online/feature.js";
+import {
+  scheduledTwitchAnnouncementsFeature
+} from "./scheduled-twitch-announcements/feature.js";
 
 // Feature installation is explicit while legacy registries continue to coexist
 // during the staged migration.
 export const installedFeatures = Object.freeze([
   aliveFeature,
   announcementsFeature,
-  discordRoleAccessFeature
+  discordRoleAccessFeature,
+  streamOnlineFeature,
+  scheduledTwitchAnnouncementsFeature
 ]);
 export const featureRegistry = createFeatureRegistry(installedFeatures, {
   effectAdapters: {

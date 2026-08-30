@@ -1,7 +1,7 @@
 import { featureRegistry } from "../../features/index.js";
 import { mergeCommandDefinitions } from "../../framework/index.js";
 import { CAPABILITIES } from "./discord-permissions.js";
-import { ephemeralData, getOption } from "./common.js";
+import { ephemeralData, formatInterval, getOption } from "./common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import { compileDiscordFeatureCommands } from "./feature-commands.js";
 import { integrationCommands } from "./integration-commands.js";
@@ -143,11 +143,21 @@ const managementCommands = Object.freeze({
 
       const shown = data.jobsPreview.map((job) => {
         const handler = schedulingCommandsByKind[job.kind];
-        const innerContent = handler.extra.composer.innerContent(job);
+        const framework = job.extraData?.framework;
+        const innerContent = handler
+          ? handler.extra.composer.innerContent(job)
+          : framework?.actionArgs?.message ?? job.subject;
+        const channelId = job.extraData?.channelId ?? job.destination?.channelId;
+        const repeat = handler
+          ? handler.extra.composer.repeatDescription(job)
+          : framework?.timing?.type === "bounded-random"
+            ? `randomly (min.: ${formatInterval(framework.timing.minSeconds)} - ` +
+              `max.: ${formatInterval(framework.timing.maxSeconds)})`
+            : framework?.timing?.type ?? "using its feature schedule";
         return `• <t:${job.timestamp}:F> (<t:${job.timestamp}:R>) — ` +
-          `${innerContent} in <#${job.extraData.channelId}>` +
+          `${innerContent}${channelId ? ` in <#${channelId}>` : ""}` +
           (job.repeats
-            ? ` 🔁 ${handler.extra.composer.repeatDescription(job)}`
+            ? ` 🔁 ${repeat}`
             : "") +
           ` — id: \`${job.id}\``;
       }).join("\n");
@@ -231,6 +241,7 @@ export const commands = mergeCommandDefinitions(
   legacyCommands,
   compileDiscordFeatureCommands(
     featureRegistry.commands.discord,
-    featureRegistry.actions
+    featureRegistry.actions,
+    featureRegistry.schedules
   )
 );

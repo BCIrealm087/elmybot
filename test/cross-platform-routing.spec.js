@@ -16,6 +16,10 @@ import {
   reserveIntegrationInvitation
 } from "../src/integrations/index.js";
 import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
+import { commands as discordCommands } from "../src/platforms/discord/commands.js";
+import {
+  SCHEDULED_TWITCH_ANNOUNCEMENT_KIND
+} from "../src/features/scheduled-twitch-announcements/feature.js";
 import {
   processTwitchStreamOnlineNotification
 } from "../src/platforms/twitch/eventsub-definitions.js";
@@ -202,6 +206,133 @@ describe("Discord-to-Twitch vertical slice", () => {
         state: "delivered",
         attempts: 1,
         result: { messageId: "twitch-message-id" }
+      }]
+    });
+  });
+
+  it("persists and replays a bounded-random routed-action occurrence plan", async () => {
+    const linked = await activateRoutedIntegration();
+    await stubIntegrationDelivery(
+      linked,
+      "twitch.chat.send.v1",
+      async () => ({ messageId: "scheduled-twitch-message" })
+    );
+    const interaction = {
+      id: uniqueId("scheduled-interaction"),
+      guild_id: linked.guildId,
+      channel_id: linked.channelId,
+      member: { user: { id: uniqueId("discord-moderator") } },
+      data: {
+        name: "integration_schedule_twitch",
+        options: [
+          { name: "message", value: "A recurring linked announcement" },
+          { name: "min_interval", value: 600 },
+          { name: "max_interval", value: 600 }
+        ]
+      }
+    };
+    const reply = await discordCommands.integration_schedule_twitch.exec(
+      interaction,
+      integrationEnv,
+      "integration_schedule_twitch",
+      {
+        sourceInteraction: interaction,
+        authorizedCapability: "integration.announcement.publish"
+      }
+    );
+    expect(reply.content).toContain("✅ Scheduled job");
+    expect(reply.content).toContain("Repeats randomly");
+
+    const scheduler = integrationEnv.SCHEDULER.get(
+      integrationEnv.SCHEDULER.idFromName(`discord:guild:${linked.guildId}`)
+    );
+    let occurrenceSourceEventId;
+    let persistedPlanJson;
+    await runInDurableObject(scheduler, async (instance, state) => {
+      const row = state.storage.sql.exec(
+        "SELECT id, job_json FROM scheduler_jobs LIMIT 1"
+      ).one();
+      const job = JSON.parse(row.job_json);
+      job.timestamp = Math.floor(Date.now() / 1000) - 1;
+      job.runAtMs = job.timestamp * 1000;
+      job.delivery.nextAttemptAtMs = job.runAtMs;
+      state.storage.sql.exec(
+        `UPDATE scheduler_jobs
+         SET next_attempt_at_ms = ?, run_at_ms = ?, job_json = ?
+         WHERE id = ?`,
+        job.runAtMs,
+        job.runAtMs,
+        JSON.stringify(job),
+        job.id
+      );
+
+      const original = instance.jobHandlers[SCHEDULED_TWITCH_ANNOUNCEMENT_KIND];
+      instance.jobHandlers = Object.freeze({
+        ...instance.jobHandlers,
+        [SCHEDULED_TWITCH_ANNOUNCEMENT_KIND]: Object.freeze({
+          ...original,
+          deliver: async () => {
+            throw new Error("temporary coordinator outage");
+          }
+        })
+      });
+      await instance.alarm();
+
+      const afterFailure = JSON.parse(state.storage.sql.exec(
+        "SELECT job_json FROM scheduler_jobs WHERE id = ?",
+        job.id
+      ).one().job_json);
+      expect(afterFailure.occurrencePlan).toMatchObject({
+        schemaVersion: 1,
+        actionKind: "integration.announcement.publish.v1",
+        actionArgs: { message: "A recurring linked announcement" },
+        routes: [{
+          kind: "discord.announce-to-twitch.v1",
+          targetGroup: { id: linked.broadcasterId }
+        }],
+        effects: [{
+          kind: "twitch.chat.send.v1",
+          payload: { message: "A recurring linked announcement" }
+        }]
+      });
+      occurrenceSourceEventId = afterFailure.occurrencePlan.sourceEventId;
+      persistedPlanJson = JSON.stringify(afterFailure.occurrencePlan);
+
+      afterFailure.delivery.nextAttemptAtMs = Date.now() - 1;
+      state.storage.sql.exec(
+        `UPDATE scheduler_jobs
+         SET next_attempt_at_ms = ?, job_json = ?
+         WHERE id = ?`,
+        afterFailure.delivery.nextAttemptAtMs,
+        JSON.stringify(afterFailure),
+        job.id
+      );
+      instance.jobHandlers = Object.freeze({
+        ...instance.jobHandlers,
+        [SCHEDULED_TWITCH_ANNOUNCEMENT_KIND]: original
+      });
+      await instance.alarm();
+
+      const nextOccurrence = JSON.parse(state.storage.sql.exec(
+        "SELECT job_json FROM scheduler_jobs WHERE id = ?",
+        job.id
+      ).one().job_json);
+      expect(nextOccurrence.timestamp).toBeGreaterThan(job.timestamp);
+      expect(nextOccurrence.occurrencePlan).toBeNull();
+    });
+
+    expect(persistedPlanJson).toContain(occurrenceSourceEventId);
+    await deliverIntegrationEffects(linked);
+    expect(await getIntegrationExecution(
+      integrationEnv,
+      linked.integration.id,
+      occurrenceSourceEventId
+    )).toMatchObject({
+      sourceGroupKey: `discord:guild:${linked.guildId}`,
+      state: "completed",
+      effects: [{
+        kind: "twitch.chat.send.v1",
+        state: "delivered"
       }]
     });
   });

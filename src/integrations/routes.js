@@ -1,17 +1,11 @@
-import { defineRoute } from "../framework/index.js";
 import {
   ANNOUNCEMENT_ROUTE_KINDS,
   announcementsFeature
 } from "../features/announcements/feature.js";
-
-const STREAM_ONLINE_ROUTE_KIND = "twitch.stream-online-to-discord.v1";
-const legacyStreamOnlineRoute = defineRoute({
-  kind: STREAM_ONLINE_ROUTE_KIND,
-  sourcePlatform: "twitch",
-  targetPlatform: "discord",
-  destination: "link-channel",
-  newIntegration: "enabled"
-});
+import {
+  STREAM_ONLINE_ROUTE_KIND,
+  streamOnlineFeature
+} from "../features/stream-online/feature.js";
 
 export const INTEGRATION_ROUTE_KINDS = Object.freeze({
   DISCORD_ANNOUNCE_TO_TWITCH: ANNOUNCEMENT_ROUTE_KINDS.DISCORD_TO_TWITCH,
@@ -21,7 +15,7 @@ export const INTEGRATION_ROUTE_KINDS = Object.freeze({
 
 const defaultRouteCatalog = Object.freeze([
   ...announcementsFeature.routes,
-  legacyStreamOnlineRoute
+  ...streamOnlineFeature.routes
 ]);
 
 export function defaultDiscordTwitchRoutes(channelId) {

@@ -12,9 +12,14 @@ import {
   ACTION_COMMAND_TYPE,
   isCommandDefinition,
   NATIVE_COMMAND_TYPE,
+  SCHEDULED_ACTION_COMMAND_TYPE,
   validateRegisteredCapability
 } from "./command-common.js";
 import { isRouteDefinition } from "./route-definition.js";
+import {
+  isEventActionDefinition,
+  isScheduledActionDefinition
+} from "./trigger-definitions.js";
 
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -89,6 +94,27 @@ function routeKind(route, featureId, index) {
   return route.kind;
 }
 
+function eventKind(event, featureId, index) {
+  if (!isEventActionDefinition(event)) {
+    throw new FeatureRegistryError(
+      `Feature \`${featureId}\` event at index ${index} must use defineEventAction().`,
+      { code: "feature_event_invalid" }
+    );
+  }
+  return event.eventKind;
+}
+
+function scheduleKind(schedule, featureId, index) {
+  if (!isScheduledActionDefinition(schedule)) {
+    throw new FeatureRegistryError(
+      `Feature \`${featureId}\` schedule at index ${index} must use ` +
+      "defineScheduledAction().",
+      { code: "feature_schedule_invalid" }
+    );
+  }
+  return schedule.kind;
+}
+
 function addUnique(target, key, value, description, code) {
   if (Object.prototype.hasOwnProperty.call(target, key)) {
     throw new FeatureRegistryError(`Duplicate ${description}: \`${key}\`.`, {
@@ -143,6 +169,8 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
   const rawActions = Object.create(null);
   const actions = Object.create(null);
   const routes = Object.create(null);
+  const events = Object.create(null);
+  const schedules = Object.create(null);
   const adapters = collectEffectAdapters(effectAdapters);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
     platform,
@@ -180,6 +208,20 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
       route,
       "feature route kind",
       "duplicate_feature_route"
+    ));
+    feature.events.forEach((event, index) => addUnique(
+      events,
+      eventKind(event, feature.id, index),
+      event,
+      "feature event kind",
+      "duplicate_feature_event"
+    ));
+    feature.schedules.forEach((schedule, index) => addUnique(
+      schedules,
+      scheduleKind(schedule, feature.id, index),
+      schedule,
+      "feature schedule kind",
+      "duplicate_feature_schedule"
     ));
     if (PLATFORMS.some((platform) => feature.effectAdapters[platform].length > 0)) {
       throw new FeatureRegistryError(
@@ -246,6 +288,50 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
     actions[kind] = bindFeatureActionDefinition(action, featureId);
   }
 
+  for (const event of Object.values(events)) {
+    const action = actions[event.actionKind];
+    if (!action) {
+      throw new FeatureRegistryError(
+        `Feature event \`${event.eventKind}\` refers to an uninstalled action ` +
+        `\`${event.actionKind}\`.`,
+        { code: "feature_event_action_unknown" }
+      );
+    }
+    const sourcePlatform = event.eventKind.split(".")[0];
+    if (!action.supportedOrigins.includes(sourcePlatform)) {
+      throw new FeatureRegistryError(
+        `Feature event \`${event.eventKind}\` refers to an action that does not ` +
+        `support ${sourcePlatform}.`,
+        { code: "feature_event_action_origin_unsupported" }
+      );
+    }
+    if (action.capability !== null) {
+      throw new FeatureRegistryError(
+        `Feature event \`${event.eventKind}\` cannot invoke a protected action ` +
+        "without a trusted event authorization policy.",
+        { code: "feature_event_action_protected" }
+      );
+    }
+  }
+
+  for (const schedule of Object.values(schedules)) {
+    const action = actions[schedule.actionKind];
+    if (!action) {
+      throw new FeatureRegistryError(
+        `Feature schedule \`${schedule.kind}\` refers to an uninstalled action ` +
+        `\`${schedule.actionKind}\`.`,
+        { code: "feature_schedule_action_unknown" }
+      );
+    }
+    if (!action.supportedOrigins.includes(schedule.sourcePlatform)) {
+      throw new FeatureRegistryError(
+        `Feature schedule \`${schedule.kind}\` refers to an action that does not ` +
+        `support ${schedule.sourcePlatform}.`,
+        { code: "feature_schedule_action_origin_unsupported" }
+      );
+    }
+  }
+
   for (const [platform, definitions] of Object.entries(commands)) {
     for (const command of Object.values(definitions)) {
       if (command.mode === ACTION_COMMAND_TYPE) {
@@ -272,6 +358,28 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
           throw new FeatureRegistryError(
             `Protected Discord command \`${command.name}\` must be guild-only.`,
             { code: "feature_command_protected_global" }
+          );
+        }
+      } else if (command.mode === SCHEDULED_ACTION_COMMAND_TYPE) {
+        const schedule = schedules[command.scheduleKind];
+        if (!schedule) {
+          throw new FeatureRegistryError(
+            `${platform} command \`${command.name}\` refers to an uninstalled schedule ` +
+            `\`${command.scheduleKind}\`.`,
+            { code: "feature_command_schedule_unknown" }
+          );
+        }
+        if (schedule.sourcePlatform !== platform) {
+          throw new FeatureRegistryError(
+            `${platform} command \`${command.name}\` refers to a schedule for ` +
+            `${schedule.sourcePlatform}.`,
+            { code: "feature_command_schedule_platform_unsupported" }
+          );
+        }
+        if (platform !== "discord" || command.availability !== "guild") {
+          throw new FeatureRegistryError(
+            `Scheduled command \`${command.name}\` must be a guild-only Discord command.`,
+            { code: "feature_command_schedule_availability_invalid" }
           );
         }
       } else if (command.mode === NATIVE_COMMAND_TYPE) {
@@ -302,6 +410,8 @@ export function createFeatureRegistry(features, { effectAdapters = {} } = {}) {
     featuresById: Object.freeze(featuresById),
     actions: Object.freeze(actions),
     routes: Object.freeze(routes),
+    events: Object.freeze(events),
+    schedules: Object.freeze(schedules),
     effectAdapters: Object.freeze(adapters),
     commands: Object.freeze(Object.fromEntries(PLATFORMS.map((platform) => [
       platform,

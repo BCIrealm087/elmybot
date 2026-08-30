@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   createFeatureRegistry,
   defineAction,
+  defineEventAction,
   defineFeature,
   defineRoute,
+  defineScheduledAction,
   discordActionCommand,
   discordNativeCommand,
   FEATURE_FRAMEWORK_API_VERSION,
@@ -19,7 +21,8 @@ import {
 } from "../src/actions/registry.js";
 import {
   createActionDefinition,
-  createCommandInvocation
+  createCommandInvocation,
+  createEventActionInvocation
 } from "../src/integrations/index.js";
 
 function action(kind) {
@@ -34,6 +37,8 @@ function feature({
   id = "test.feature",
   actions = [],
   routes = [],
+  events = [],
+  schedules = [],
   discord = [],
   twitch = []
 } = {}) {
@@ -43,6 +48,8 @@ function feature({
     description: `Feature ${id}`,
     actions,
     routes,
+    events,
+    schedules,
     commands: { discord, twitch }
   });
 }
@@ -254,6 +261,103 @@ describe("Command and feature framework", () => {
       payload: { message: "hello" },
       integration: { id: "integration-1" }
     });
+  });
+
+  it("catalogs event and scheduled-action bindings against installed actions", () => {
+    const twitchAction = defineAction({
+      kind: "test.event.handle.v1",
+      supportedOrigins: ["twitch"],
+      execute: () => ({ output: {}, effects: [] })
+    });
+    const discordAction = defineAction({
+      kind: "test.schedule.handle.v1",
+      supportedOrigins: ["discord"],
+      execute: () => ({ output: {}, effects: [] })
+    });
+    const event = defineEventAction({
+      eventKind: "twitch.test.received.v1",
+      actionKind: twitchAction.kind,
+      mapPayload: ({ payload }) => payload
+    });
+    const schedule = defineScheduledAction({
+      kind: "discord.test.random.v1",
+      sourcePlatform: "discord",
+      actionKind: discordAction.kind,
+      timing: "bounded-random",
+      authorization: "grant-at-creation"
+    });
+    const registry = createFeatureRegistry([feature({
+      actions: [twitchAction, discordAction],
+      events: [event],
+      schedules: [schedule]
+    })]);
+
+    expect(registry.events[event.eventKind]).toBe(event);
+    expect(registry.schedules[schedule.kind]).toBe(schedule);
+    expect(Object.isFrozen(registry.events)).toBe(true);
+    expect(Object.isFrozen(registry.schedules)).toBe(true);
+  });
+
+  it("rejects raw trigger definitions, missing actions, and protected actorless events", () => {
+    expect(() => createFeatureRegistry([feature({
+      events: [{ eventKind: "twitch.raw.event.v1" }]
+    })])).toThrow("must use defineEventAction");
+
+    const missing = defineScheduledAction({
+      kind: "discord.test.missing.v1",
+      sourcePlatform: "discord",
+      actionKind: "test.missing.action.v1",
+      timing: "bounded-random",
+      authorization: "grant-at-creation"
+    });
+    expect(() => createFeatureRegistry([feature({ schedules: [missing] })]))
+      .toThrow("refers to an uninstalled action");
+
+    const protectedAction = defineAction({
+      kind: "test.protected.event.v1",
+      capability: "framework.moderators",
+      supportedOrigins: ["twitch"],
+      execute: () => ({ output: {}, effects: [] })
+    });
+    const protectedEvent = defineEventAction({
+      eventKind: "twitch.protected.event.v1",
+      actionKind: protectedAction.kind,
+      mapPayload: () => ({})
+    });
+    expect(() => createFeatureRegistry([feature({
+      actions: [protectedAction],
+      events: [protectedEvent]
+    })])).toThrow("cannot invoke a protected action");
+  });
+
+  it("exposes the event trigger kind to an actorless feature action", async () => {
+    const triggeredAction = defineAction({
+      kind: "test.event.trigger.v1",
+      supportedOrigins: ["twitch"],
+      execute: (ctx) => ({
+        output: { trigger: ctx.trigger.kind, actor: ctx.origin.actor },
+        effects: []
+      })
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [triggeredAction] })
+    ]);
+    const invocation = createEventActionInvocation({
+      kind: triggeredAction.kind,
+      origin: {
+        group: { platform: "twitch", kind: "channel", id: "channel-1" },
+        actor: null
+      },
+      sourceEventId: "twitch:eventsub:event-1",
+      correlationId: "twitch:eventsub:event-1"
+    });
+    const result = await executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      { triggerKind: "event" }
+    );
+
+    expect(result.output).toEqual({ trigger: "event", actor: null });
   });
 
   it("rejects duplicate feature IDs, actions, and same-platform commands", () => {

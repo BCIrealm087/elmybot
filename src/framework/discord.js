@@ -2,6 +2,7 @@ import { schema } from "./argument-schema.js";
 import {
   ACTION_COMMAND_TYPE,
   NATIVE_COMMAND_TYPE,
+  SCHEDULED_ACTION_COMMAND_TYPE,
   markCommandDefinition,
   normalizeCommandIdentity,
   requireActionKind,
@@ -180,6 +181,38 @@ export function discordNativeCommand({
     input: requireObjectSchema(input),
     execute
   }, "discord", NATIVE_COMMAND_TYPE);
+}
+
+export function discordScheduledActionCommand({
+  name,
+  description,
+  availability,
+  deferred = true,
+  scheduleKind,
+  options = [],
+  mapSchedule,
+  ...unknown
+}) {
+  const unknownFields = Object.keys(unknown);
+  if (unknownFields.length > 0) {
+    throw new TypeError(
+      `Unsupported Discord scheduled-action command field: \`${unknownFields[0]}\`.`
+    );
+  }
+  if (typeof deferred !== "boolean") throw new TypeError("Discord deferred is invalid.");
+  if (typeof mapSchedule !== "function") {
+    throw new TypeError("Discord scheduled-action mapSchedule must be a function.");
+  }
+  return markCommandDefinition({
+    platform: "discord",
+    mode: SCHEDULED_ACTION_COMMAND_TYPE,
+    ...normalizeCommandIdentity({ name, description }),
+    availability: requireAvailability(availability),
+    deferred,
+    scheduleKind: requireActionKind(scheduleKind),
+    options: normalizeOptions(options),
+    mapSchedule
+  }, "discord", SCHEDULED_ACTION_COMMAND_TYPE);
 }
 
 export function discordTextResult(result) {

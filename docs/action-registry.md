@@ -117,3 +117,26 @@ context. It does not need to enter the action registry. The
 `discord.role-access` feature demonstrates this path without exposing Worker
 bindings or configuration storage to feature code. Existing low-level action
 sets remain available during the staged migration.
+
+## Event and schedule triggers
+
+Feature actions are not limited to commands. `defineEventAction()` maps an
+authenticated, normalized `DomainEvent` to action arguments. Twitch
+`stream.online` is the first installed example: the EventSub transport still
+owns signature verification, admission, durable inbox processing, and payload
+normalization, while the feature owns the resulting route and Discord effect.
+
+`defineScheduledAction()` and `discordScheduledActionCommand()` provide the
+durable scheduling bridge. The command adapter validates action arguments and
+captures the already-authorized capability, group, actor, and acceptance time.
+Every occurrence uses a source ID shaped like
+`discord:schedule:<job-id>:occurrence:<unix-seconds>` and invokes the installed
+action with `trigger.kind === "schedule"`.
+
+Before any coordinator submission, the scheduler stores the occurrence's
+action arguments, resolved routes, normalized effects, origin, source ID, and
+correlation ID. A scheduler retry replays that exact plan rather than resolving
+routes or running feature logic again. A later recurrence clears the old plan
+and resolves current integration state. `/integration_schedule_twitch` is the
+first proof and reuses `integration.announcement.publish.v1`; it contains no
+coordinator, OAuth, or Twitch delivery code.

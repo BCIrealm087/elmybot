@@ -32,7 +32,9 @@ export function createJobHandlerRegistry(...handlerSets) {
       if (
         typeof handler?.deliver !== "function" ||
         typeof handler?.calcScheduleTime !== "function" ||
-        typeof handler?.validateJob !== "function"
+        typeof handler?.validateJob !== "function" ||
+        (handler.prepareOccurrence !== undefined &&
+          typeof handler.prepareOccurrence !== "function")
       ) {
         throw new Error(`Invalid scheduling handler for job kind: \`${kind}\`.`);
       }
@@ -40,7 +42,8 @@ export function createJobHandlerRegistry(...handlerSets) {
       registry[kind] = Object.freeze({
         deliver: handler.deliver,
         calcScheduleTime: handler.calcScheduleTime,
-        validateJob: handler.validateJob
+        validateJob: handler.validateJob,
+        prepareOccurrence: handler.prepareOccurrence ?? null
       });
     }
   }
@@ -526,6 +529,7 @@ const requestHandlers = {
           repeats: job.repeats,
           createdBy: job.createdBy ?? null,
           sourceEventId: job.sourceEventId,
+          occurrencePlan: null,
           delivery: pendingDelivery(runAtMs)
         };
         insertJob(state.storage.sql, scheduledJob);
@@ -641,7 +645,13 @@ export class GroupSchedulerBackend {
               code: "unknown_job_type"
             });
           }
-          await handler.deliver(this.env, claimedJob);
+          let executableJob = claimedJob;
+          if (handler.prepareOccurrence && executableJob.occurrencePlan === null) {
+            const plan = await handler.prepareOccurrence(this.env, executableJob);
+            executableJob = this.persistOccurrencePlan(executableJob, plan);
+            if (!executableJob) continue;
+          }
+          await handler.deliver(this.env, executableJob);
         } catch (error) {
           this.failOccurrence(claimedJob, error);
           continue;
@@ -683,6 +693,19 @@ export class GroupSchedulerBackend {
         lastAttemptAtMs: attemptedAtMs
       };
       updateJob(this.state.storage.sql, current);
+      return current;
+    });
+  }
+
+  persistOccurrencePlan(job, plan) {
+    serializedByteLength(plan, "Scheduling occurrence plan", MAX_JOB_BYTES);
+    return this.state.storage.transactionSync(() => {
+      const current = findJob(this.state.storage.sql, job.id);
+      if (!current || current.timestamp !== job.timestamp) return null;
+      if (current.occurrencePlan === null || current.occurrencePlan === undefined) {
+        current.occurrencePlan = plan;
+        updateJob(this.state.storage.sql, current);
+      }
       return current;
     });
   }
@@ -765,6 +788,7 @@ export class GroupSchedulerBackend {
           ...current,
           timestamp: nextUnix,
           runAtMs: nextMs,
+          occurrencePlan: null,
           delivery: pendingDelivery(nextMs)
         });
       }

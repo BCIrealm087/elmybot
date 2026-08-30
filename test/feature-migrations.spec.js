@@ -9,6 +9,14 @@ import {
   ANNOUNCEMENT_ROUTE_KINDS
 } from "../src/features/announcements/feature.js";
 import {
+  SCHEDULED_TWITCH_ANNOUNCEMENT_KIND
+} from "../src/features/scheduled-twitch-announcements/feature.js";
+import {
+  STREAM_ONLINE_ACTION_KIND,
+  STREAM_ONLINE_EVENT_KIND,
+  STREAM_ONLINE_ROUTE_KIND
+} from "../src/features/stream-online/feature.js";
+import {
   featureRegistry,
   installedFeatures
 } from "../src/features/index.js";
@@ -64,7 +72,7 @@ describe("Representative feature migrations", () => {
       supportedOrigins: ["discord", "twitch"]
     });
     expect(Object.keys(featureRegistry.routes)).toEqual(
-      Object.values(ANNOUNCEMENT_ROUTE_KINDS)
+      expect.arrayContaining(Object.values(ANNOUNCEMENT_ROUTE_KINDS))
     );
     expect(featureRegistry.commands.discord.integration_announce_twitch)
       .toMatchObject({ mode: "action-command", actionKind: ANNOUNCEMENT_ACTION_KIND });
@@ -74,5 +82,30 @@ describe("Representative feature migrations", () => {
       .toBe(ANNOUNCEMENT_ACTION_KIND);
     expect(twitchCommands.announce.actionKind).toBe(ANNOUNCEMENT_ACTION_KIND);
     expect(integrationActions).toEqual({});
+  });
+
+  it("installs stream events and bounded-random action schedules", () => {
+    expect(featureRegistry.events[STREAM_ONLINE_EVENT_KIND]).toMatchObject({
+      actionKind: STREAM_ONLINE_ACTION_KIND
+    });
+    expect(featureRegistry.routes[STREAM_ONLINE_ROUTE_KIND]).toMatchObject({
+      sourcePlatform: "twitch",
+      targetPlatform: "discord"
+    });
+    expect(featureRegistry.schedules[SCHEDULED_TWITCH_ANNOUNCEMENT_KIND])
+      .toMatchObject({
+        actionKind: ANNOUNCEMENT_ACTION_KIND,
+        timing: "bounded-random",
+        authorization: "grant-at-creation"
+      });
+    expect(featureRegistry.commands.discord.integration_schedule_twitch)
+      .toMatchObject({
+        mode: "scheduled-action-command",
+        scheduleKind: SCHEDULED_TWITCH_ANNOUNCEMENT_KIND
+      });
+    expect(discordCommands.integration_schedule_twitch).toMatchObject({
+      scheduleKind: SCHEDULED_TWITCH_ANNOUNCEMENT_KIND,
+      guild: { capability: "integration.announcement.publish" }
+    });
   });
 });

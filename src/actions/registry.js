@@ -2,6 +2,7 @@ import {
   createActionDefinition,
   createActionResult,
   createCommandInvocation,
+  createEventActionInvocation,
   INTEGRATION_CONTRACT_SCHEMA_VERSION,
   IntegrationContractError
 } from "../integrations/contracts.js";
@@ -46,7 +47,7 @@ export function createActionRegistry(...actionSets) {
   return Object.freeze(registry);
 }
 
-function normalizedInvocation(input) {
+function normalizedInvocation(input, triggerKind) {
   if (input?.schemaVersion !== INTEGRATION_CONTRACT_SCHEMA_VERSION) {
     throw new ActionRegistryError("Unsupported command invocation schema version.", {
       status: 422,
@@ -54,7 +55,9 @@ function normalizedInvocation(input) {
     });
   }
   try {
-    return createCommandInvocation(input);
+    return triggerKind === "event"
+      ? createEventActionInvocation(input)
+      : createCommandInvocation(input);
   } catch (cause) {
     if (cause instanceof IntegrationContractError) {
       throw new ActionRegistryError(cause.message, {
@@ -81,8 +84,40 @@ function normalizedResult(value, actionKind) {
   }
 }
 
+function validateFeatureEffects(action, result, context) {
+  const declared = new Set(action.uses.effects);
+  for (const effect of result.effects) {
+    if (!declared.has(effect.kind)) {
+      throw new ActionRegistryError(
+        `Action \`${action.kind}\` returned undeclared effect \`${effect.kind}\`.`,
+        { status: 500, code: "feature_action_effect_undeclared" }
+      );
+    }
+    const adapter = context.effectAdapters?.[effect.kind];
+    if (!adapter || adapter.platform !== effect.target.group.platform) {
+      throw new ActionRegistryError(
+        `Action \`${action.kind}\` returned an effect without a compatible adapter.`,
+        { status: 500, code: "feature_action_effect_adapter_invalid" }
+      );
+    }
+    if (effect.integration === null) {
+      throw new ActionRegistryError(
+        `Action \`${action.kind}\` returned an unrouted effect.`,
+        { status: 500, code: "feature_action_effect_unrouted" }
+      );
+    }
+  }
+}
+
 export async function executeAction(registry, input, context = {}) {
-  let invocation = normalizedInvocation(input);
+  const triggerKind = context.triggerKind ?? "command";
+  if (!["command", "event", "schedule"].includes(triggerKind)) {
+    throw new ActionRegistryError("Unsupported action trigger kind.", {
+      status: 500,
+      code: "action_trigger_unsupported"
+    });
+  }
+  let invocation = normalizedInvocation(input, triggerKind);
   const action = registry[invocation.kind];
   if (!action) {
     throw new ActionRegistryError(
@@ -133,11 +168,14 @@ export async function executeAction(registry, input, context = {}) {
     }
   }
 
-  const value = isBoundFeatureActionDefinition(action)
+  const featureAction = isBoundFeatureActionDefinition(action);
+  const value = featureAction
     ? await action.execute(
       createFeatureActionContext(action, invocation, context),
       invocation.args
     )
     : await action.execute(invocation, Object.freeze({ ...context }));
-  return normalizedResult(value, action.kind);
+  const result = normalizedResult(value, action.kind);
+  if (featureAction) validateFeatureEffects(action, result, context);
+  return result;
 }

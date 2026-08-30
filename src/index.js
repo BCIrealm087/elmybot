@@ -1,6 +1,7 @@
 import { handleDiscordRequest } from "./platforms/discord/index.js";
 import { handleTwitchRequest } from "./platforms/twitch/index.js";
 import { discordSchedulingHandlers } from "./platforms/discord/commands.js";
+import { featureSchedulingHandlers } from "./actions/index.js";
 import {
   createJobHandlerRegistry,
   GroupSchedulerBackend
@@ -18,7 +19,8 @@ import { createTwitchEventSubRegistry } from "./platforms/twitch/eventsub-regist
 import { TwitchEventSubServiceBackend } from "./platforms/twitch/eventsub-service.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
-  discordSchedulingHandlers
+  discordSchedulingHandlers,
+  featureSchedulingHandlers
 );
 const integrationEffectHandlers = createEffectHandlerRegistry(
   discordIntegrationEffectHandlers,

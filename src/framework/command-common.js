@@ -8,6 +8,7 @@ import {
 export const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 export const ACTION_COMMAND_TYPE = "action-command";
 export const NATIVE_COMMAND_TYPE = "native-command";
+export const SCHEDULED_ACTION_COMMAND_TYPE = "scheduled-action-command";
 export const TWITCH_PARSER_TYPE = "twitch-parser";
 
 export function normalizeCommandIdentity({ name, description }) {
@@ -63,7 +64,8 @@ export function markCommandDefinition(value, platform, mode) {
 export function isCommandDefinition(value, platform, mode = null) {
   if (mode) return isFrameworkDefinition(value, `${platform}:${mode}`);
   return isFrameworkDefinition(value, `${platform}:${ACTION_COMMAND_TYPE}`) ||
-    isFrameworkDefinition(value, `${platform}:${NATIVE_COMMAND_TYPE}`);
+    isFrameworkDefinition(value, `${platform}:${NATIVE_COMMAND_TYPE}`) ||
+    isFrameworkDefinition(value, `${platform}:${SCHEDULED_ACTION_COMMAND_TYPE}`);
 }
 
 export function markTwitchParser(value) {

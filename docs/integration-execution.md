@@ -6,10 +6,13 @@ durability boundary between deciding what should happen and contacting Discord,
 Twitch, or another platform.
 
 The route runner resolves active versioned routes, creates target effects, and
-groups them by integration. Twitch `!announce`, Twitch `stream.online`, and
-Discord `/integration_announce_twitch` are the first callers. They submit one
-`IntegrationExecution` per linked integration without owning retry,
-deduplication, or platform delivery code.
+groups them by integration. Twitch `!announce`, Twitch `stream.online`, Discord
+`/integration_announce_twitch`, and scheduled
+`/integration_schedule_twitch` occurrences are the first callers. They submit
+one `IntegrationExecution` per linked integration without owning retry,
+deduplication, or platform delivery code. Scheduled occurrences first persist
+their complete route and effect plan in the scheduler so a scheduler-level
+retry replays identical coordinator input.
 
 ## Acceptance flow
 

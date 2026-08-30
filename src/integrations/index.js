@@ -3,6 +3,7 @@ export {
   createActionResult,
   createCommandInvocation,
   createDomainEvent,
+  createEventActionInvocation,
   createEffect,
   createIntegrationExecution,
   createIntegrationRef,
