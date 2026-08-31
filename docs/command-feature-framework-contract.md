@@ -4,6 +4,10 @@
 
 **Framework API v1 stable on 2026-08-30; implementation steps 1–10 complete.**
 
+Ordinary command contributors should start with
+[`feature-quickstart.md`](feature-quickstart.md). This contract is the detailed
+reference for framework maintainers and API reviewers.
+
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
 semantics. Examples use the stable public API. The compatibility and

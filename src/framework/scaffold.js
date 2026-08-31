@@ -201,6 +201,8 @@ export function workspaceFeatureScaffoldTemplates(slug) {
     }, null, 2)}\n`,
     readmeSource:
       `# \`${packageName}\`\n\n` +
-      `TODO: describe the \`${identity.featureId}\` Elmybot feature.\n`
+      `TODO: describe the \`${identity.featureId}\` Elmybot feature.\n\n` +
+      "Follow the [first-feature quickstart]" +
+      "(../../../docs/feature-quickstart.md) for installation and testing.\n"
   });
 }

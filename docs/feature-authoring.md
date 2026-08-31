@@ -1,7 +1,12 @@
-# Feature authoring guide
+# Feature authoring reference
 
-This guide is the practical entry point for adding commands and interactions to
-Elmybot. The normative API shapes remain in
+Adding your first command? Start with
+[`feature-quickstart.md`](feature-quickstart.md). It contains the shortest
+scaffold-to-test path and tells you which section to open only when your feature
+needs it. This page is the detailed pattern reference; it is not intended to be
+read front to back.
+
+The normative API shapes remain in
 [`command-feature-framework-contract.md`](command-feature-framework-contract.md).
 The supported entry point, compatibility rules, and deprecation lifecycle are
 defined in [`framework-api.md`](framework-api.md).
@@ -11,7 +16,7 @@ Features are reviewed, tested, explicitly installed, and bundled with the
 Worker. They may live directly under `src/features/` or in a private npm
 workspace package. Elmybot does not execute uploaded or remotely supplied code.
 
-## Quick start: workspace feature package
+## Workspace scaffold reference
 
 From the repository root:
 

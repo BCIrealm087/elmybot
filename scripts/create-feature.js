@@ -126,6 +126,7 @@ async function main() {
     } else {
       console.log("Next: import the feature in src/features/index.js and add it to installedFeatures.");
     }
+    console.log("Guide: docs/feature-quickstart.md");
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Feature scaffold failed.");
     process.exitCode = 1;

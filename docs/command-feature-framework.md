@@ -425,10 +425,11 @@ so those representations cannot silently drift.
    actors, authorization, routes, effects, events, schedules, stored-plan
    replay, configuration, state, cooldowns, clock, randomness, and logs. The
    non-overwriting `npm run feature:new -- <name>` scaffold creates one local
-   feature module and one test skeleton. The authoring guide provides native, shared,
-   routed, scheduled, event-driven, and stateful cookbooks, while the generated
-   installed-feature catalog and lint freshness check keep contributor
-   documentation tied to registry metadata.
+   feature module and one test skeleton. A short first-feature quickstart owns
+   the scaffold-to-test path and routes authors by need; the authoring reference
+   provides native, shared, routed, scheduled, event-driven, and stateful
+   cookbooks. The generated installed-feature catalog and lint freshness check
+   keep contributor documentation tied to registry metadata.
 9. **Stabilize and version the framework API — completed.** Feature manifests
    bind to exported `frameworkApiVersion`; unsupported versions fail with a
    machine-readable compatibility error. `src/framework/index.js` now exposes

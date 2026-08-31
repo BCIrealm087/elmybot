@@ -378,3 +378,50 @@ GitHub Actions [run 33430856141](https://github.com/BCIrealm087/elmybot/actions/
 completed successfully for implementation commit `33d8fa06`: the locked
 install, all 224 tests, lint and generated-document checks, tracked-source
 syntax checks, and the non-deploying Wrangler Worker dry run passed.
+
+## Follow-up: a progressive contributor documentation path
+
+The fourth recommended improvement changes where a hobby contributor begins,
+not the framework behavior. The previous practical entry point was a 530-line
+authoring guide whose opening immediately linked the 1,040-line normative
+contract and the API stability policy. All of those documents were useful, but
+their presentation made them feel like prerequisite reading for a small
+command.
+
+The new [`feature-quickstart.md`](feature-quickstart.md) is a self-contained
+first-feature path. It covers five steps: scaffold, select an optional pattern,
+install explicitly, test through the feature runtime, and run the contributor
+checks. It deliberately contains no complete framework specification. A table
+routes the author directly to one relevant cookbook when the feature needs
+shared platforms, Twitch parsing, state, conditional access, native behavior,
+routes, schedules, or events.
+
+The old guide is now labeled the feature authoring reference and explicitly
+says it is not meant to be read front to back. The root README points first to
+the quickstart. The framework policy and contract send ordinary feature authors
+back to it, while identifying themselves as compatibility and maintainer
+references. Running the scaffold prints the quickstart path, and every newly
+generated workspace README carries the same link, so the recommended next step
+is visible at the moment a contributor needs it.
+
+**Assessment:** this is substantially less cumbersome for a hobby programmer.
+The first decision is now “does the generated Discord command already fit?”;
+only a feature that answers no has to choose another document. The quickstart
+still exposes the two manual installation edits—root `package.json` and
+`src/features/index.js`—because hiding them would make the explicit-install
+model harder to understand. At 146 lines it is not a tiny checklist, but it is
+less than one third of the detailed reference and contains the complete normal
+path rather than sending the reader through architecture history. The clearest
+remaining documentation decision is improvement 5: explaining when platform
+state should stay independent and when an integration should intentionally
+share it.
+
+### Progressive-documentation verification record
+
+The scaffold-template test passed 1 file and 4 tests, including coverage that a
+new workspace README links to the first-feature quickstart. The complete local
+suite passed 21 files and 224 tests. ESLint, the public feature-boundary check,
+workspace-package validation, generated-catalog freshness, and tracked
+JavaScript syntax checks also passed. The new quickstart's local document and
+source targets, including every linked cookbook heading, were checked in the
+working tree.

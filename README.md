@@ -357,8 +357,8 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-The complete suite currently contains 210 tests across 20 files. GitHub Actions
-runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
+GitHub Actions runs the complete suite for pushes to
+`codex-feature-experiment`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -370,10 +370,12 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 
 ## Writing features
 
-Start with the [feature authoring guide](docs/feature-authoring.md). It includes
-the repository-local and recommended workspace-package scaffolds, deployment-free
-test runtime, and cookbooks for native, shared, routed, scheduled, event-driven,
-stateful, and conditionally authorized features. The
+For a first command, start with [Your first Elmybot feature](docs/feature-quickstart.md).
+It covers the shortest scaffold, install, test, and verification path, then
+links to extra material by feature need. Use the longer
+[feature authoring reference](docs/feature-authoring.md) for deployment-free
+test-runtime details and complete native, shared, routed, scheduled,
+event-driven, stateful, and conditionally authorized cookbooks. The
 [installed feature catalog](docs/feature-catalog.md) is generated from registry
 metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
 The [Framework API v1 stability policy](docs/framework-api.md) defines the
@@ -388,6 +390,8 @@ npm run feature:workspaces
 
 ## Detailed documentation
 
+- [First-feature quickstart](docs/feature-quickstart.md)
+- [Feature authoring reference and cookbooks](docs/feature-authoring.md)
 - [Cross-platform contracts](docs/cross-platform-contracts.md)
 - [Action registry](docs/action-registry.md)
 - [Integration linking and routes](docs/integration-linking.md)
@@ -395,7 +399,6 @@ npm run feature:workspaces
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state, and cooldowns](docs/feature-state.md)
-- [Feature authoring guide and cookbooks](docs/feature-authoring.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

@@ -45,5 +45,6 @@ describe("Feature scaffold templates", () => {
     });
     expect(templates.featureSource).toContain('from "@elmybot/framework"');
     expect(templates.testSource).toContain('from "@elmybot/framework/testing"');
+    expect(templates.readmeSource).toContain("docs/feature-quickstart.md");
   });
 });

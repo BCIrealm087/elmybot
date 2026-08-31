@@ -4,6 +4,10 @@
 
 **Framework API v1 is stable as of 2026-08-30.**
 
+If you are adding a feature without changing the framework API, start with
+[`feature-quickstart.md`](feature-quickstart.md). Return here only when you need
+the supported-export, compatibility, or deprecation rules.
+
 This policy covers the JavaScript API used by reviewed feature modules bundled
 with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
