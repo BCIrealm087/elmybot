@@ -1,12 +1,12 @@
 # Codex working instructions
 
-This branch, `codex-ironing`, was created from `master` to begin a Codex-assisted stabilization, cleanup, and polishing phase for Elmybot.
+This branch, `codex-feature-experiment`, was created from `master` for the current Codex-assisted feature-framework experimentation and implementation work.
 
 For the current effort:
 
-- Work only on `codex-ironing`.
-- Do not commit or push changes directly to `master`, `codex-twitch-integration`, `codex-platform-separation`, or any other branch.
-- Before making changes, verify that the active branch is `codex-ironing`.
+- Work only on `codex-feature-experiment`.
+- Do not commit or push changes directly to `master`, `codex-ironing`, `codex-twitch-integration`, `codex-platform-separation`, or any other branch.
+- Before making changes, verify that the active branch is `codex-feature-experiment`.
 - Focus on small, scoped fixes, cleanup, maintainability improvements, documentation, and stronger verification while preserving the existing Discord and Twitch behavior and the shared platform-independent foundations.
 - For work on the contributor-facing command/feature framework, consult `docs/command-feature-framework.md` for the design and staged plan and `docs/command-feature-framework-contract.md` for the approved normative API. The contract was approved on 2026-08-30, but an API is not implemented merely because it is documented; follow the staged implementation status.
 - Framework API v1 is stable. Consult `docs/framework-api.md` for its supported entry points, compatibility rules, and deprecation policy. Production feature modules must import project APIs only from `src/framework/index.js` or other feature modules; do not bypass the enforced boundary to depend on persistence, platform, registry, adapter, or service-runtime internals.
