@@ -1,4 +1,5 @@
 import { jsonResponse, logError } from "../common.js";
+import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 
 // Durable Object environment: indexed job storage + alarms.
 
@@ -15,6 +16,9 @@ const MAX_EXTRA_DATA_BYTES = 32 * 1024;
 const MAX_JOB_BYTES = 64 * 1024;
 
 export function createJobHandlerRegistry(...handlerSets) {
+  // Registries are immutable snapshots by contract. Scheduler instances may
+  // safely retain one for their lifetime without adapters replacing handlers
+  // after validation or while an alarm is running.
   const registry = Object.create(null);
 
   for (const handlerSet of handlerSets) {
@@ -28,7 +32,9 @@ export function createJobHandlerRegistry(...handlerSets) {
       if (
         typeof handler?.deliver !== "function" ||
         typeof handler?.calcScheduleTime !== "function" ||
-        typeof handler?.validateJob !== "function"
+        typeof handler?.validateJob !== "function" ||
+        (handler.prepareOccurrence !== undefined &&
+          typeof handler.prepareOccurrence !== "function")
       ) {
         throw new Error(`Invalid scheduling handler for job kind: \`${kind}\`.`);
       }
@@ -36,7 +42,8 @@ export function createJobHandlerRegistry(...handlerSets) {
       registry[kind] = Object.freeze({
         deliver: handler.deliver,
         calcScheduleTime: handler.calcScheduleTime,
-        validateJob: handler.validateJob
+        validateJob: handler.validateJob,
+        prepareOccurrence: handler.prepareOccurrence ?? null
       });
     }
   }
@@ -78,6 +85,12 @@ const MAX_JOBS_PER_ALARM = 20;
 const MAX_DEAD_LETTERS = 100;
 const MAX_DEAD_LETTERS_PREVIEW = 5;
 const MAX_SCHEDULE_SOURCES = 10_000;
+const DELIVERED_PRUNE_BATCH_SIZE = 250;
+const SOURCE_PRUNE_INTERVAL = 100;
+const SOURCE_PRUNE_BATCH_SIZE = 250;
+const LEGACY_DELIVERED_STORAGE_KEY = "delivered";
+const DELIVERED_MIGRATION_KEY = "delivered_ledger_migrated";
+const MAX_OCCURRENCE_KEY_LENGTH = 250;
 
 function isPlainObject(value) {
   return typeof value === "object" && value !== null &&
@@ -233,6 +246,16 @@ function initializeSchedulerTables(state) {
     );
     CREATE INDEX IF NOT EXISTS scheduler_sources_created
       ON scheduler_sources (created_at_ms, source_event_id);
+    CREATE TABLE IF NOT EXISTS scheduler_deliveries (
+      occurrence_key TEXT PRIMARY KEY,
+      delivered_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS scheduler_deliveries_expiry
+      ON scheduler_deliveries (delivered_at_ms, occurrence_key);
+    CREATE TABLE IF NOT EXISTS scheduler_maintenance (
+      maintenance_key TEXT PRIMARY KEY,
+      value_int INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS scheduler_dead_letters (
       dead_letter_id INTEGER PRIMARY KEY AUTOINCREMENT,
       failed_at_ms INTEGER NOT NULL,
@@ -296,20 +319,132 @@ async function setNextAlarm(state) {
     ORDER BY next_attempt_at_ms, run_at_ms, id
     LIMIT 1
   `).toArray()[0];
-  if (next) await state.storage.setAlarm(next.next_attempt_at_ms);
-  else await state.storage.deleteAlarm();
+  if (next) {
+    await state.storage.setAlarm(Math.max(next.next_attempt_at_ms, Date.now()));
+  } else await state.storage.deleteAlarm();
 }
 
 function deliveryKey(job) {
   return `${job.id}:${job.timestamp}`;
 }
 
-function pruneDelivered(delivered, nowMs) {
-  for (const [key, deliveredAtMs] of Object.entries(delivered)) {
-    if (typeof deliveredAtMs !== "number" || deliveredAtMs < nowMs - DELIVERED_TTL_MS) {
-      delete delivered[key];
+function deliveredOccurrence(sql, occurrenceKey) {
+  return Boolean(sql.exec(
+    "SELECT 1 AS present FROM scheduler_deliveries WHERE occurrence_key = ?",
+    occurrenceKey
+  ).toArray()[0]);
+}
+
+function recordDeliveredOccurrence(sql, occurrenceKey, deliveredAtMs) {
+  sql.exec(
+    `INSERT OR IGNORE INTO scheduler_deliveries
+      (occurrence_key, delivered_at_ms)
+     VALUES (?, ?)`,
+    occurrenceKey,
+    deliveredAtMs
+  );
+}
+
+function pruneDeliveredOccurrences(sql, nowMs) {
+  const expired = sql.exec(
+    `SELECT occurrence_key
+     FROM scheduler_deliveries
+     WHERE delivered_at_ms < ?
+     ORDER BY delivered_at_ms ASC, occurrence_key ASC
+     LIMIT ?`,
+    nowMs - DELIVERED_TTL_MS,
+    DELIVERED_PRUNE_BATCH_SIZE
+  ).toArray();
+  if (expired.length === 0) return 0;
+  sql.exec(
+    `DELETE FROM scheduler_deliveries
+     WHERE occurrence_key IN (
+       SELECT occurrence_key
+       FROM scheduler_deliveries
+       WHERE delivered_at_ms < ?
+       ORDER BY delivered_at_ms ASC, occurrence_key ASC
+       LIMIT ?
+     )`,
+    nowMs - DELIVERED_TTL_MS,
+    DELIVERED_PRUNE_BATCH_SIZE
+  );
+  return expired.length;
+}
+
+function maybePruneScheduleSources(sql) {
+  // Called immediately after inserting scheduler_sources. Its rowid provides a
+  // write-free maintenance cadence; pruning therefore adds no counter write to
+  // ordinary scheduling requests.
+  const insertionSequence = sql.exec(
+    "SELECT last_insert_rowid() AS sequence"
+  ).one().sequence;
+  if (insertionSequence % SOURCE_PRUNE_INTERVAL !== 0) return 0;
+  const expired = sql.exec(
+    `SELECT source_event_id
+     FROM scheduler_sources
+     WHERE (created_at_ms, source_event_id) < (
+       SELECT created_at_ms, source_event_id
+       FROM scheduler_sources
+       ORDER BY created_at_ms DESC, source_event_id DESC
+       LIMIT 1 OFFSET ?
+     )
+     ORDER BY created_at_ms ASC, source_event_id ASC
+     LIMIT ?`,
+    MAX_SCHEDULE_SOURCES - 1,
+    SOURCE_PRUNE_BATCH_SIZE
+  ).toArray();
+  if (expired.length === 0) return 0;
+  sql.exec(
+    `DELETE FROM scheduler_sources
+     WHERE source_event_id IN (
+       SELECT source_event_id
+       FROM scheduler_sources
+       WHERE (created_at_ms, source_event_id) < (
+         SELECT created_at_ms, source_event_id
+         FROM scheduler_sources
+         ORDER BY created_at_ms DESC, source_event_id DESC
+         LIMIT 1 OFFSET ?
+       )
+       ORDER BY created_at_ms ASC, source_event_id ASC
+       LIMIT ?
+     )`,
+    MAX_SCHEDULE_SOURCES - 1,
+    SOURCE_PRUNE_BATCH_SIZE
+  );
+  return expired.length;
+}
+
+function maintenanceValue(sql, key) {
+  return sql.exec(
+    `SELECT value_int
+     FROM scheduler_maintenance
+     WHERE maintenance_key = ?`,
+    key
+  ).toArray()[0]?.value_int ?? null;
+}
+
+function markMaintenanceComplete(sql, key) {
+  sql.exec(
+    `INSERT INTO scheduler_maintenance (maintenance_key, value_int)
+     VALUES (?, 1)
+     ON CONFLICT(maintenance_key) DO UPDATE SET value_int = 1`,
+    key
+  );
+}
+
+function validLegacyDeliveryEntries(value) {
+  if (!isPlainObject(value)) return [];
+  const entries = [];
+  for (const [occurrenceKey, deliveredAtMs] of Object.entries(value)) {
+    if (
+      occurrenceKey.length <= MAX_OCCURRENCE_KEY_LENGTH &&
+      Number.isSafeInteger(deliveredAtMs) &&
+      deliveredAtMs > 0
+    ) {
+      entries.push([occurrenceKey, deliveredAtMs]);
     }
   }
+  return entries;
 }
 
 const requestHandlers = {
@@ -330,7 +465,8 @@ const requestHandlers = {
         subject: job.subject,
         repeats: job.repeats,
         extraData: job.extraData,
-        kind: job.kind
+        kind: job.kind,
+        delivery: job.delivery
       }));
 
       return jsonResponse({ totalJobs, jobsPreview });
@@ -393,6 +529,7 @@ const requestHandlers = {
           repeats: job.repeats,
           createdBy: job.createdBy ?? null,
           sourceEventId: job.sourceEventId,
+          occurrencePlan: null,
           delivery: pendingDelivery(runAtMs)
         };
         insertJob(state.storage.sql, scheduledJob);
@@ -411,15 +548,7 @@ const requestHandlers = {
           response.createdAtMs,
           JSON.stringify(response)
         );
-        state.storage.sql.exec(`
-          DELETE FROM scheduler_sources
-          WHERE source_event_id NOT IN (
-            SELECT source_event_id
-            FROM scheduler_sources
-            ORDER BY created_at_ms DESC, source_event_id DESC
-            LIMIT ?
-          )
-        `, MAX_SCHEDULE_SOURCES);
+        maybePruneScheduleSources(state.storage.sql);
 
         return response;
       });
@@ -481,19 +610,20 @@ export class GroupSchedulerBackend {
   }
 
   async alarm() {
-    let delivered = (await this.state.storage.get("delivered")) ?? {};
-    if (!isPlainObject(delivered)) delivered = {};
-    pruneDelivered(delivered, Date.now());
+    const startedAtMs = Date.now();
+    await this.migrateLegacyDeliveredLedger();
+    pruneDeliveredOccurrences(this.state.storage.sql, Date.now());
 
     try {
       for (let processed = 0; processed < MAX_JOBS_PER_ALARM; processed++) {
+        if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
         const job = firstJob(this.state.storage.sql);
         const nowMs = Date.now();
         if (!job || deliveryAttemptAt(job) > nowMs) break;
 
         const handler = this.jobHandlers[job.kind];
         const key = deliveryKey(job);
-        if (delivered[key] !== undefined) {
+        if (deliveredOccurrence(this.state.storage.sql, key)) {
           if (!handler) {
             await this.failOccurrence(job, new DeliveryError(
               "No delivery handler is registered for this job type.",
@@ -515,25 +645,38 @@ export class GroupSchedulerBackend {
               code: "unknown_job_type"
             });
           }
-          await handler.deliver(this.env, claimedJob);
+          let executableJob = claimedJob;
+          if (handler.prepareOccurrence && executableJob.occurrencePlan === null) {
+            const plan = await handler.prepareOccurrence(this.env, executableJob);
+            executableJob = this.persistOccurrencePlan(executableJob, plan);
+            if (!executableJob) continue;
+          }
+          await handler.deliver(this.env, executableJob);
         } catch (error) {
           this.failOccurrence(claimedJob, error);
           continue;
         }
 
-        delivered[key] = Date.now();
-        pruneDelivered(delivered, delivered[key]);
-        await this.state.storage.put("delivered", delivered);
+        // Persist the marker before advancing or deleting the job. If the
+        // latter step fails, the next alarm completes without sending again.
+        recordDeliveredOccurrence(this.state.storage.sql, key, Date.now());
         this.completeOccurrence(claimedJob, handler);
       }
     } finally {
-      pruneDelivered(delivered, Date.now());
-      try {
-        await this.state.storage.put("delivered", delivered);
-      } finally {
-        await setNextAlarm(this.state);
-      }
+      await setNextAlarm(this.state);
     }
+  }
+
+  async migrateLegacyDeliveredLedger() {
+    if (maintenanceValue(this.state.storage.sql, DELIVERED_MIGRATION_KEY) === 1) return;
+    const delivered = await this.state.storage.get(LEGACY_DELIVERED_STORAGE_KEY);
+    this.state.storage.transactionSync(() => {
+      for (const [occurrenceKey, deliveredAtMs] of validLegacyDeliveryEntries(delivered)) {
+        recordDeliveredOccurrence(this.state.storage.sql, occurrenceKey, deliveredAtMs);
+      }
+      markMaintenanceComplete(this.state.storage.sql, DELIVERED_MIGRATION_KEY);
+    });
+    await this.state.storage.delete(LEGACY_DELIVERED_STORAGE_KEY);
   }
 
   claimOccurrence(job, attemptedAtMs) {
@@ -550,6 +693,19 @@ export class GroupSchedulerBackend {
         lastAttemptAtMs: attemptedAtMs
       };
       updateJob(this.state.storage.sql, current);
+      return current;
+    });
+  }
+
+  persistOccurrencePlan(job, plan) {
+    serializedByteLength(plan, "Scheduling occurrence plan", MAX_JOB_BYTES);
+    return this.state.storage.transactionSync(() => {
+      const current = findJob(this.state.storage.sql, job.id);
+      if (!current || current.timestamp !== job.timestamp) return null;
+      if (current.occurrencePlan === null || current.occurrencePlan === undefined) {
+        current.occurrencePlan = plan;
+        updateJob(this.state.storage.sql, current);
+      }
       return current;
     });
   }
@@ -632,6 +788,7 @@ export class GroupSchedulerBackend {
           ...current,
           timestamp: nextUnix,
           runAtMs: nextMs,
+          occurrencePlan: null,
           delivery: pendingDelivery(nextMs)
         });
       }

@@ -92,6 +92,86 @@ describe('Platform-independent worker behavior', () => {
     expect(await response.json()).toEqual({ value: [] });
   });
 
+  it('isolates bounded feature config, atomic state, and cooldowns by namespace', async () => {
+    const stub = configStubFor(uniqueId('feature-group'));
+    const post = async (operation, body) => {
+      const response = await stub.fetch(
+        `https://config/internal/framework/${operation}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      return { response, data: await response.json() };
+    };
+
+    expect((await post('config/set', {
+      featureId: 'test.one',
+      key: 'label',
+      value: { text: 'Wins', enabled: true },
+    })).data).toEqual({ ok: true });
+    expect((await post('config/get', {
+      featureId: 'test.one',
+      key: 'label',
+    })).data).toEqual({ value: { text: 'Wins', enabled: true } });
+    expect((await post('config/get', {
+      featureId: 'test.two',
+      key: 'label',
+    })).data).toEqual({ value: null });
+
+    expect((await post('state/increment', {
+      featureId: 'test.one',
+      key: 'score',
+      amount: 2,
+    })).data).toEqual({ value: 2 });
+    expect((await post('state/increment', {
+      featureId: 'test.one',
+      key: 'score',
+    })).data).toEqual({ value: 3 });
+    expect((await post('state/delete', {
+      featureId: 'test.one',
+      key: 'score',
+    })).data).toEqual({ deleted: true });
+    await Promise.all(Array.from({ length: 10 }, () => post('state/increment', {
+      featureId: 'test.one',
+      key: 'concurrent',
+    })));
+    expect((await post('state/get', {
+      featureId: 'test.one',
+      key: 'concurrent',
+    })).data).toEqual({ value: 10 });
+
+    const cooldown = {
+      featureId: 'test.one',
+      actionKind: 'test.one.run.v1',
+      scopeKey: 'discord:user-1',
+      seconds: 30,
+    };
+    expect((await post('cooldown/claim', cooldown)).data).toEqual({
+      allowed: true,
+      retryAfterSeconds: 0,
+    });
+    expect((await post('cooldown/claim', cooldown)).data).toMatchObject({
+      allowed: false,
+      retryAfterSeconds: expect.any(Number),
+    });
+    expect((await post('cooldown/claim', {
+      ...cooldown,
+      scopeKey: 'discord:user-2',
+    })).data).toEqual({ allowed: true, retryAfterSeconds: 0 });
+
+    const invalid = await post('state/get', {
+      featureId: 'test.one',
+      key: '../other',
+    });
+    expect(invalid.response.status).toBe(422);
+    expect(invalid.data.userFacingError).toContain('key is invalid');
+
+    const publicList = await stub.fetch('https://config/list');
+    expect(await publicList.json()).toEqual({ totalEntries: 0, keys: [] });
+  });
+
   it('constructs an immutable job registry and rejects duplicate kinds', () => {
     const handler = {
       deliver: async () => {},
@@ -101,13 +181,18 @@ describe('Platform-independent worker behavior', () => {
     const kind = 'test.message.send.v1';
     const registry = createJobHandlerRegistry({ [kind]: handler });
 
-    expect(Object.isFrozen(registry)).toBe(true);
-    expect(Object.isFrozen(registry[kind])).toBe(true);
     expect(registry[kind]).toMatchObject(handler);
+    expect(() => {
+      registry[kind].deliver = async () => 'replacement';
+    }).toThrow(TypeError);
+    expect(() => {
+      registry['test.other.v1'] = handler;
+    }).toThrow(TypeError);
+    expect(registry[kind].deliver).toBe(handler.deliver);
+    expect(registry['test.other.v1']).toBeUndefined();
     expect(() => createJobHandlerRegistry(
       { [kind]: handler },
       { [kind]: handler },
     )).toThrow(`Duplicate scheduling job kind: \`${kind}\`.`);
   });
 });
-

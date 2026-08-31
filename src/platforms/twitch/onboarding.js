@@ -94,6 +94,42 @@ export function renderTwitchConnectPage() {
 	});
 }
 
+export function renderTwitchIntegrationConnectPage() {
+	return pageResponse({
+		title: "Link Twitch to Discord",
+		body: `
+    <p class="eyebrow">Elmybot integration</p>
+    <h1>Link Twitch to Discord</h1>
+    <p>A Discord server manager invited your Twitch channel to join a cross-platform integration.</p>
+    <ul>
+      <li>Sign in as the Twitch broadcaster to prove control of the channel.</li>
+      <li>Twitch will request only the <strong>channel:bot</strong> permission.</li>
+      <li>The link can be revoked from Discord or by disconnecting Elmybot from Twitch.</li>
+      <li>This invitation can be used once.</li>
+    </ul>
+    <form method="post" action="/twitch/integrations/connect">
+      <input id="invite" name="invite" type="hidden">
+      <button id="connect" type="submit" disabled>Continue with Twitch</button>
+    </form>
+    <p id="notice" class="notice" role="alert" aria-live="polite"></p>
+    <noscript><p class="notice">JavaScript is required to open this invitation securely.</p></noscript>
+    <p class="fine-print">The invitation code is removed from the address bar before continuing.</p>`,
+		script: `
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const token = params.get("invite");
+    const invite = document.getElementById("invite");
+    const button = document.getElementById("connect");
+    const notice = document.getElementById("notice");
+    history.replaceState(null, "", window.location.pathname);
+    if (/^[0-9a-f]{64}$/.test(token || "")) {
+      invite.value = token;
+      button.disabled = false;
+    } else {
+      notice.textContent = "This invitation link is incomplete or invalid.";
+    }`
+	});
+}
+
 export function renderTwitchOnboardingSuccess(channel) {
 	return pageResponse({
 		title: "Elmybot connected",
@@ -101,6 +137,21 @@ export function renderTwitchOnboardingSuccess(channel) {
     <p class="eyebrow success">Connection complete</p>
     <h1>Elmybot is ready</h1>
     <p>Twitch channel <strong>${escapeHtml(channel)}</strong> is authorized. The chat subscription will be checked automatically, so you can close this tab.</p>`
+	});
+}
+
+export function renderTwitchIntegrationSuccess(channel, integration, pending = false) {
+	return pageResponse({
+		title: pending ? "Elmybot link pending" : "Elmybot integration linked",
+		body: pending
+			? `
+    <p class="eyebrow success">Authorization complete</p>
+    <h1>The link is being finalized</h1>
+    <p>Twitch channel <strong>${escapeHtml(channel)}</strong> is authorized. Elmybot will retry the Discord link automatically, so you can close this tab.</p>`
+			: `
+    <p class="eyebrow success">Integration complete</p>
+    <h1>Twitch and Discord are linked</h1>
+    <p>Twitch channel <strong>${escapeHtml(channel)}</strong> joined integration <strong>${escapeHtml(integration?.id)}</strong>. You can close this tab.</p>`
 	});
 }
 

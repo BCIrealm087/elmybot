@@ -9,6 +9,23 @@ export function jsonResponse(obj, status = 200) {
 }
 
 export const EXTERNAL_REQUEST_TIMEOUT_MS = 10_000;
+export const MAX_SIGNED_WEBHOOK_BODY_BYTES = 256 * 1024;
+
+const textEncoder = new TextEncoder();
+
+export function declaredRequestBodyTooLarge(request, maxBytes) {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength === null || !/^\d+$/.test(contentLength.trim())) return false;
+  try {
+    return BigInt(contentLength.trim()) > BigInt(maxBytes);
+  } catch {
+    return false;
+  }
+}
+
+export function encodedTextTooLarge(value, maxBytes) {
+  return textEncoder.encode(value).byteLength > maxBytes;
+}
 
 export function withExternalRequestTimeout(init = {}) {
   if (init.signal) return init;

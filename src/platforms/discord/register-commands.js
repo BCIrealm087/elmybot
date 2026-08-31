@@ -3,6 +3,7 @@
 import "dotenv/config";
 
 import { commands } from "./commands.js";
+import { createDiscordCommandDescriptors } from "./feature-commands.js";
 import { putDiscordCommands } from "./register-commands-request.js";
 
 const args = process.argv.slice(2);
@@ -39,10 +40,6 @@ if (envMissing.length > 0) {
  * Global slash commands visible in every server the bot is installed in.
  * See https://discord.com/developers/docs/interactions/application-commands
  */
-const commandDescriptors = Object.entries(commands).map(([name, { description="No description provided", options }])=>({
-  name,
-  description,
-  options
-}));
+const commandDescriptors = createDiscordCommandDescriptors(commands);
 
 await putDiscordCommands({ appId, token, commandDescriptors });

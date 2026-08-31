@@ -7,6 +7,8 @@ import {
   waitOnExecutionContext,
 } from 'cloudflare:test';
 import worker from '../src/index.js';
+import { ALARM_DRAIN_TIME_BUDGET_MS } from '../src/alarm-drain.js';
+import { MAX_SIGNED_WEBHOOK_BODY_BYTES } from '../src/common.js';
 import { SCHEDULER_JOB_SCHEMA_VERSION } from '../src/message-scheduling/index.js';
 import { commands, DISCORD_JOB_KINDS } from '../src/platforms/discord/commands.js';
 import {
@@ -140,73 +142,37 @@ function legacyConfigStubFor(guildId) {
   return env.CONFIG.get(env.CONFIG.idFromName(guildId));
 }
 
-function storedMessageJob({
-  id = uniqueId('job'),
+async function scheduleTestJob(stub, {
+  sourceId = uniqueId('job'),
   guildId = uniqueId('guild'),
   channelId = uniqueId('channel'),
   subject = 'scheduled message',
   runAtMs = Date.now() - 1000,
-  attempts = 0,
 } = {}) {
-  return {
-    schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
-    id,
-    platform: 'discord',
-    kind: DISCORD_JOB_KINDS.SEND_AT,
-    groupKey: `discord:guild:${guildId}`,
-    destination: { channelId },
-    subject,
-    timestamp: Math.floor(runAtMs / 1000),
-    runAtMs,
-    extraData: {
-      guildId,
-      channelId,
-      gif: null,
-    },
-    repeats: false,
-    createdBy: null,
-    sourceEventId: `discord:${id}`,
-    delivery: {
-      state: 'pending',
-      attempts,
-      nextAttemptAtMs: runAtMs,
-      lastAttemptAtMs: null,
-      lastError: null,
-    },
-  };
-}
-
-function replaceStoredJobs(state, jobs) {
-  state.storage.transactionSync(() => {
-    state.storage.sql.exec('DELETE FROM scheduler_jobs');
-    for (const job of jobs) {
-      state.storage.sql.exec(
-        `INSERT INTO scheduler_jobs
-          (id, next_attempt_at_ms, run_at_ms, job_json)
-         VALUES (?, ?, ?, ?)`,
-        job.id,
-        job.delivery.nextAttemptAtMs,
-        job.runAtMs,
-        JSON.stringify(job),
-      );
-    }
+  const timestamp = Math.floor(runAtMs / 1000);
+  const response = await stub.fetch('https://do/schedule', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      schemaVersion: SCHEDULER_JOB_SCHEMA_VERSION,
+      platform: 'discord',
+      kind: DISCORD_JOB_KINDS.SEND_AT,
+      groupKey: `discord:guild:${guildId}`,
+      destination: { channelId },
+      subject,
+      timestamp,
+      extraData: {
+        guildId,
+        channelId,
+        gif: null,
+      },
+      repeats: false,
+      createdBy: null,
+      sourceEventId: `discord:${sourceId}`,
+    }),
   });
-}
-
-function readStoredJobs(state) {
-  return state.storage.sql.exec(`
-    SELECT job_json
-    FROM scheduler_jobs
-    ORDER BY next_attempt_at_ms, run_at_ms, id
-  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
-}
-
-function readDeadLetters(state) {
-  return state.storage.sql.exec(`
-    SELECT job_json
-    FROM scheduler_dead_letters
-    ORDER BY failed_at_ms, dead_letter_id
-  `).toArray().map(({ job_json: jobJson }) => JSON.parse(jobJson));
+  expect(response.status).toBe(200);
+  return response.json();
 }
 
 afterEach(() => {
@@ -240,6 +206,42 @@ describe('Discord platform', () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toBe('Bad Request');
+  });
+
+  it('rejects a declared oversized Discord body before reading it', async () => {
+    const request = new Request('https://example.com/discord', {
+      method: 'POST',
+      headers: {
+        'Content-Length': String(MAX_SIGNED_WEBHOOK_BODY_BYTES + 1),
+        'X-Signature-Ed25519': '00'.repeat(64),
+        'X-Signature-Timestamp': `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: '{}',
+    });
+    const textSpy = vi.spyOn(request, 'text');
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe('Payload Too Large');
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects the actual encoded Discord body size before signature verification', async () => {
+    const request = new Request('https://example.com/discord', {
+      method: 'POST',
+      headers: {
+        'Content-Length': '1',
+        'X-Signature-Ed25519': '00'.repeat(64),
+        'X-Signature-Timestamp': `${Math.floor(Date.now() / 1000)}`,
+      },
+      body: 'é'.repeat(Math.floor(MAX_SIGNED_WEBHOOK_BODY_BYTES / 2) + 1),
+    });
+
+    const response = await worker.fetch(request, env, createExecutionContext());
+
+    expect(response.status).toBe(413);
+    expect(await response.text()).toBe('Payload Too Large');
   });
 
   it('returns 401 when signature is invalid', async () => {
@@ -302,10 +304,14 @@ describe('Discord platform', () => {
   it('routes /alive and returns immediate interaction response', async () => {
     const kp = nacl.sign.keyPair();
     const body = JSON.stringify({
+      id: 'alive-interaction',
       type: 2,
       data: { name: 'alive' },
       token: 't',
       application_id: 'a',
+      guild_id: 'alive-guild',
+      channel_id: 'alive-channel',
+      member: { user: { id: 'alive-user' } },
     });
     const request = makeSignedDiscordRequest({ body, secretKey: kp.secretKey });
 
@@ -316,20 +322,14 @@ describe('Discord platform', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       type: 4,
-      data: { content: "I'm here!!1" },
+      data: {
+        content: "I'm here!!1",
+        allowed_mentions: { parse: [] },
+      },
     });
   });
 
-  it('uses explicit capabilities for every guild command', async () => {
-    expect(commands.config_show_value.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_list_entries.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_allow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.config_disallow_role.guild.capability).toBe(CAPABILITIES.CONFIG_MANAGE);
-    expect(commands.sayat.guild.capability).toBe(CAPABILITIES.SCHEDULE_CREATE);
-    expect(commands.doat_list.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
-    expect(commands.doat_dead_letters.guild.capability).toBe(CAPABILITIES.SCHEDULE_VIEW);
-    expect(commands.doat_cancel.guild.capability).toBe(CAPABILITIES.SCHEDULE_CANCEL);
-
+  it('defaults unknown command capabilities to deny', async () => {
     const missingPolicy = await checkPermissions({}, {}, {
       capability: 'missing.capability',
     });
@@ -338,6 +338,125 @@ describe('Discord platform', () => {
       configured: false,
       ok: false,
     });
+  });
+
+  it('manages namespaced feature config and enforces counter cooldowns', async () => {
+    const guildId = uniqueId('feature-guild');
+    const setInteraction = buildSlashInteraction({
+      name: 'feature_config_set',
+      guildId,
+      options: [
+        { name: 'feature', value: 'fun.counter' },
+        { name: 'key', value: 'label' },
+        { name: 'json_value', value: '"Cheers"' },
+      ],
+    });
+    expect(commands.feature_config_set.guild).toEqual({
+      capability: CAPABILITIES.CONFIG_MANAGE,
+    });
+    await expect(commands.feature_config_set.exec(setInteraction, env))
+      .resolves.toMatchObject({ flags: 64, content: expect.stringContaining('fun.counter.label') });
+
+    const first = buildSlashInteraction({
+      name: 'counter',
+      guildId,
+      userId: uniqueId('counter-user'),
+    });
+    await expect(commands.counter.exec(first, env, 'counter', {
+      sourceInteraction: first,
+    })).resolves.toEqual({
+      content: 'Cheers: 1',
+      allowed_mentions: { parse: [] },
+    });
+    await expect(commands.counter.exec(first, env, 'counter', {
+      sourceInteraction: first,
+    })).resolves.toMatchObject({
+      flags: 64,
+      content: expect.stringContaining('Try /counter again'),
+    });
+
+    const second = buildSlashInteraction({
+      name: 'counter',
+      guildId,
+      userId: uniqueId('counter-user'),
+    });
+    await expect(commands.counter.exec(second, env, 'counter', {
+      sourceInteraction: second,
+    })).resolves.toMatchObject({ content: 'Cheers: 2' });
+  });
+
+  it.each([
+    ['config_show_value', [{ name: 'entry', value: 'allowedRoles' }]],
+    ['config_list_entries', []],
+    ['config_allow_role', [{ name: 'role', value: '12345' }]],
+    ['config_disallow_role', [{ name: 'role', value: '12345' }]],
+    ['feature_config_show', [
+      { name: 'feature', value: 'fun.counter' },
+      { name: 'key', value: 'label' },
+    ]],
+  ])('denies configured scheduling roles access to /%s', async (name, options) => {
+    const guildId = uniqueId('guild');
+    const roleId = uniqueId('role');
+    const memberId = uniqueId('member');
+    const { patches } = mockDiscordApi({ ownerId: uniqueId('owner') });
+    await configStubFor(guildId).fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: roleId }),
+    });
+
+    const { ctx } = await dispatchInteraction(buildSlashInteraction({
+      name,
+      options,
+      guildId,
+      userId: memberId,
+      roles: [roleId],
+    }));
+    await waitOnExecutionContext(ctx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].content).toContain('Only members that fall into one of');
+    expect(patches[0].content).not.toContain('allowed server role');
+  });
+
+  it.each([
+    [
+      'sayat',
+      () => [
+        { name: 'timestamp', value: Math.floor(Date.now() / 1000) + 3600 },
+        { name: 'message', value: 'authorized message' },
+      ],
+      '✅ Scheduled job',
+    ],
+    ['doat_list', () => [], 'No scheduled jobs.'],
+    ['doat_dead_letters', () => [], 'No recent failed scheduled-message deliveries.'],
+    [
+      'doat_cancel',
+      () => [{ name: 'job_id', value: 'missing-job-id' }],
+      'No job found: `missing-job-id`',
+    ],
+  ])('allows configured scheduling roles to execute /%s', async (name, options, expectedContent) => {
+    const guildId = uniqueId('guild');
+    const roleId = uniqueId('role');
+    const memberId = uniqueId('member');
+    const { patches } = mockDiscordApi({ ownerId: uniqueId('owner') });
+    await configStubFor(guildId).fetch('https://config/append-to', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'allowedRoles', value: roleId }),
+    });
+
+    const { ctx } = await dispatchInteraction(buildSlashInteraction({
+      name,
+      options: options(),
+      guildId,
+      userId: memberId,
+      roles: [roleId],
+    }));
+    await waitOnExecutionContext(ctx);
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0].content).toContain(expectedContent);
   });
 
   it('authorizes intrinsic moderators without fetching the guild owner', async () => {
@@ -561,12 +680,7 @@ describe('Discord platform', () => {
     expect(listData.jobsPreview).toHaveLength(2);
     expect(listData.jobsPreview.map((job) => job.id)).toEqual([soonerJob.id, laterJob.id]);
     expect(listData.jobsPreview.map((job) => job.subject)).toEqual(['sooner', 'later']);
-    await runInDurableObject(stub, async (_, state) => {
-      expect(state.storage.sql.exec(
-        'SELECT COUNT(*) AS count FROM scheduler_jobs',
-      ).one().count).toBe(2);
-      expect(await state.storage.get('jobs')).toBeUndefined();
-    });
+    expect(listData.totalJobs).toBe(2);
 
     const cancelResponse = await stub.fetch('https://do/cancel', {
       method: 'POST',
@@ -620,6 +734,58 @@ describe('Discord platform', () => {
       id: first.id,
       kind: DISCORD_JOB_KINDS.SEND_AT,
       subject: 'only once',
+    });
+  });
+
+  it('prunes scheduling sources incrementally after each 100 insertions', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    await runInDurableObject(stub, async (_instance, state) => {
+      state.storage.sql.exec(`
+        WITH digits(value) AS (
+          VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+        ), source_numbers(value) AS (
+          SELECT ones.value + tens.value * 10 + hundreds.value * 100 +
+                 thousands.value * 1000
+          FROM digits ones
+          CROSS JOIN digits tens
+          CROSS JOIN digits hundreds
+          CROSS JOIN digits thousands
+        )
+        INSERT INTO scheduler_sources
+          (source_event_id, created_at_ms, response_json)
+        SELECT printf('discord:retained-source-%04d', value), value, '{}'
+        FROM source_numbers
+      `);
+      for (let index = 0; index < 99; index++) {
+        state.storage.sql.exec(
+          `INSERT INTO scheduler_sources
+            (source_event_id, created_at_ms, response_json)
+           VALUES (?, ?, '{}')`,
+          `discord:excess-source-${index}`,
+          10_000 + index
+        );
+      }
+    });
+
+    const scheduled = await scheduleTestJob(stub, {
+      sourceId: 'new-source-after-retention-limit',
+      guildId,
+      runAtMs: Date.now() + 60_000,
+    });
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS total FROM scheduler_sources'
+      ).one().total).toBe(10_000);
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_sources
+         WHERE source_event_id = 'discord:retained-source-0000'`
+      ).one().total).toBe(0);
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_sources
+         WHERE source_event_id = ?`,
+        scheduled.sourceEventId
+      ).one().total).toBe(1);
     });
   });
 
@@ -1089,6 +1255,8 @@ describe('Discord platform', () => {
     const channelId = uniqueId('channel');
     const stub = schedulerStubFor(guildId);
     const sentMessages = [];
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
       expect(init.signal).toBeInstanceOf(AbortSignal);
@@ -1096,29 +1264,136 @@ describe('Discord platform', () => {
       return jsonResponse({ id: uniqueId('message') });
     }));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      const dueAtMs = Date.now() - 1_000;
-      replaceStoredJobs(state, Array.from({ length: 21 }, (_, index) => (
-        storedMessageJob({
-          id: `batch-job-${String(index).padStart(2, '0')}`,
-          guildId,
-          channelId,
-          subject: `batch-message-${index}`,
-          runAtMs: dueAtMs,
-        })
-      )));
+    const dueAtMs = nowMs + 1_000;
+    for (let index = 0; index < 21; index++) {
+      await scheduleTestJob(stub, {
+        sourceId: `batch-job-${String(index).padStart(2, '0')}`,
+        guildId,
+        channelId,
+        subject: `batch-message-${index}`,
+        runAtMs: dueAtMs,
+      });
+    }
 
-      await instance.alarm();
+    nowMs = dueAtMs + 1_000;
+    await runInDurableObject(stub, async (instance) => instance.alarm());
 
-      expect(sentMessages).toHaveLength(20);
-      const remaining = readStoredJobs(state);
-      expect(remaining).toHaveLength(1);
-      expect(remaining[0].id).toBe('batch-job-20');
+    expect(sentMessages).toHaveLength(20);
+    const remainingResponse = await stub.fetch('https://do/list');
+    const remainingData = await remainingResponse.json();
+    expect(remainingData.totalJobs).toBe(1);
+    expect(remainingData.jobsPreview).toHaveLength(1);
+    const [remaining] = remainingData.jobsPreview;
+    expect(new Set([...sentMessages, remaining.subject])).toEqual(
+      new Set(Array.from({ length: 21 }, (_, index) => `batch-message-${index}`)),
+    );
+    await runInDurableObject(stub, async (_instance, state) => {
       const nextAlarm = await state.storage.getAlarm();
       expect(nextAlarm).toBeGreaterThanOrEqual(
-        remaining[0].delivery.nextAttemptAtMs,
+        remaining.delivery.nextAttemptAtMs,
       );
       expect(nextAlarm).toBeLessThanOrEqual(Date.now() + 1_000);
+      await state.storage.deleteAlarm();
+    });
+  });
+
+  it('stores delivered occurrences as indexed SQLite rows instead of one value', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: uniqueId('message') })));
+    const job = await scheduleTestJob(stub, { guildId });
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT occurrence_key, delivered_at_ms
+         FROM scheduler_deliveries WHERE occurrence_key = ?`,
+        `${job.id}:${job.timestamp}`
+      ).toArray()).toEqual([{
+        occurrence_key: `${job.id}:${job.timestamp}`,
+        delivered_at_ms: expect.any(Number),
+      }]);
+      expect(await state.storage.get('delivered')).toBeUndefined();
+    });
+  });
+
+  it('migrates the legacy delivery value and bounds expired ledger pruning', async () => {
+    const guildId = uniqueId('guild');
+    const stub = schedulerStubFor(guildId);
+    const nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockReturnValue(nowMs);
+    const fetchMock = vi.fn(async () => jsonResponse({ id: uniqueId('message') }));
+    vi.stubGlobal('fetch', fetchMock);
+    const job = await scheduleTestJob(stub, { guildId });
+    const legacyOccurrenceKey = `${job.id}:${job.timestamp}`;
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await state.storage.put('delivered', {
+        [legacyOccurrenceKey]: nowMs,
+        invalid: 'not-a-timestamp',
+      });
+      for (let index = 0; index < 251; index++) {
+        state.storage.sql.exec(
+          `INSERT INTO scheduler_deliveries
+            (occurrence_key, delivered_at_ms) VALUES (?, ?)`,
+          `expired-job-${index}`,
+          nowMs - 15 * 24 * 60 * 60 * 1000
+        );
+      }
+
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_deliveries
+         WHERE occurrence_key LIKE 'expired-job-%'`
+      ).one().total).toBe(1);
+      expect(state.storage.sql.exec(
+        `SELECT delivered_at_ms FROM scheduler_deliveries
+         WHERE occurrence_key = ?`,
+        legacyOccurrenceKey
+      ).one().delivered_at_ms).toBe(nowMs);
+      expect(await state.storage.get('delivered')).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(state.storage.sql.exec(
+        'SELECT COUNT(*) AS total FROM scheduler_jobs'
+      ).one().total).toBe(0);
+
+      await instance.alarm();
+      expect(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM scheduler_deliveries
+         WHERE occurrence_key LIKE 'expired-job-%'`
+      ).one().total).toBe(0);
+    });
+  });
+
+  it('stops an alarm at its time budget and immediately re-arms due work', async () => {
+    const guildId = uniqueId('guild');
+    const channelId = uniqueId('channel');
+    const stub = schedulerStubFor(guildId);
+    const sentMessages = [];
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
+    vi.stubGlobal('fetch', vi.fn(async (_input, init = {}) => {
+      sentMessages.push(JSON.parse(init.body).content);
+      nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+      return jsonResponse({ id: uniqueId('message') });
+    }));
+
+    for (let index = 0; index < 2; index++) {
+      await scheduleTestJob(stub, {
+        sourceId: `timed-job-${index}`,
+        guildId,
+        channelId,
+        subject: `timed-message-${index}`,
+        runAtMs: nowMs - 1_000,
+      });
+    }
+
+    await runInDurableObject(stub, async (instance) => instance.alarm());
+
+    expect(sentMessages).toHaveLength(1);
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(1);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBe(nowMs);
       await state.storage.deleteAlarm();
     });
   });
@@ -1143,41 +1418,23 @@ describe('Discord platform', () => {
       throw new Error(`Unexpected external fetch: ${url}`);
     }));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      const nowMs = Date.now();
-      replaceStoredJobs(state, [
-        storedMessageJob({
-          id: 'terminal-job',
-          guildId,
-          channelId: failedChannelId,
-          runAtMs: nowMs - 2000,
-        }),
-        storedMessageJob({
-          id: 'later-job',
-          guildId,
-          channelId: liveChannelId,
-          runAtMs: nowMs - 1000,
-        }),
-      ]);
+    const nowMs = Date.now();
+    const terminalJob = await scheduleTestJob(stub, {
+      sourceId: 'terminal-job',
+      guildId,
+      channelId: failedChannelId,
+      runAtMs: nowMs - 2000,
+    });
+    await scheduleTestJob(stub, {
+      sourceId: 'later-job',
+      guildId,
+      channelId: liveChannelId,
+      runAtMs: nowMs - 1000,
+    });
 
+    await runInDurableObject(stub, async (instance) => {
       await instance.alarm();
-
-      expect(readStoredJobs(state)).toEqual([]);
       expect(sentChannels).toEqual([liveChannelId]);
-
-      const deadLetters = readDeadLetters(state);
-      expect(deadLetters).toHaveLength(1);
-      expect(deadLetters[0]).toMatchObject({
-        id: 'terminal-job',
-        delivery: {
-          state: 'dead_letter',
-          attempts: 1,
-          lastError: {
-            code: 'discord_http_error',
-            metadata: { status: 404 },
-          },
-        },
-      });
 
       const log = JSON.parse(consoleError.mock.calls[0][0]);
       expect(log).toMatchObject({
@@ -1186,7 +1443,7 @@ describe('Discord platform', () => {
         correlationId: 'discord:terminal-job',
         groupId: guildId,
         jobKind: DISCORD_JOB_KINDS.SEND_AT,
-        jobId: 'terminal-job',
+        jobId: terminalJob.id,
         attempt: 1,
         retryable: false,
         error: {
@@ -1197,6 +1454,9 @@ describe('Discord platform', () => {
       });
     });
 
+    const jobsResponse = await stub.fetch('https://do/list');
+    expect((await jobsResponse.json()).totalJobs).toBe(0);
+
     const deadLettersResponse = await stub.fetch('https://do/dead-letters');
     expect(deadLettersResponse.status).toBe(200);
     const deadLettersData = await deadLettersResponse.json();
@@ -1204,7 +1464,7 @@ describe('Discord platform', () => {
     expect(deadLettersData.deadLettersPreview).toHaveLength(1);
     expect(deadLettersData.deadLettersPreview[0]).toMatchObject({
       job: {
-        id: 'terminal-job',
+        id: terminalJob.id,
         delivery: {
           state: 'dead_letter',
           lastError: { code: 'discord_http_error' },
@@ -1218,7 +1478,7 @@ describe('Discord platform', () => {
     }, env);
     expect(commandResult.flags).toBe(64);
     expect(commandResult.content).toContain('Failed scheduled deliveries (1 total, showing 1)');
-    expect(commandResult.content).toContain('terminal-job');
+    expect(commandResult.content).toContain(terminalJob.id);
     expect(commandResult.content).toContain('discord_http_error');
   });
 
@@ -1245,31 +1505,31 @@ describe('Discord platform', () => {
       jsonResponse({ message: 'Temporary failure' }, 503)
     )));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      replaceStoredJobs(state, [
-        storedMessageJob({ id: 'retry-job', guildId }),
-      ]);
+    const retryJob = await scheduleTestJob(stub, {
+      sourceId: 'retry-job',
+      guildId,
+    });
+    const beforeAlarm = Date.now();
+    await runInDurableObject(stub, async (instance) => instance.alarm());
 
-      const beforeAlarm = Date.now();
-      await instance.alarm();
-
-      const jobs = readStoredJobs(state);
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0]).toMatchObject({
-        id: 'retry-job',
-        delivery: {
-          state: 'retry_wait',
-          attempts: 1,
-          lastError: {
-            code: 'discord_http_error',
-            metadata: { status: 503 },
-          },
+    const jobs = (await (await stub.fetch('https://do/list')).json()).jobsPreview;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      id: retryJob.id,
+      delivery: {
+        state: 'retry_wait',
+        attempts: 1,
+        lastError: {
+          code: 'discord_http_error',
+          metadata: { status: 503 },
         },
-      });
-      expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
-        beforeAlarm + 30_000,
-      );
+      },
+    });
+    expect(jobs[0].delivery.nextAttemptAtMs).toBeGreaterThanOrEqual(
+      beforeAlarm + 30_000,
+    );
 
+    await runInDurableObject(stub, async (_instance, state) => {
       const nextAlarm = await state.storage.getAlarm();
       expect(nextAlarm).toBe(jobs[0].delivery.nextAttemptAtMs);
       await state.storage.deleteAlarm();
@@ -1279,33 +1539,39 @@ describe('Discord platform', () => {
   it('dead-letters retryable failures after the fifth attempt', async () => {
     const guildId = uniqueId('guild');
     const stub = schedulerStubFor(guildId);
+    let nowMs = 2_000_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     vi.stubGlobal('fetch', vi.fn(async () => (
       jsonResponse({ message: 'Temporary failure' }, 503)
     )));
 
-    await runInDurableObject(stub, async (instance, state) => {
-      replaceStoredJobs(state, [
-        storedMessageJob({
-          id: 'exhausted-job',
-          guildId,
-          attempts: 4,
-        }),
-      ]);
+    const exhaustedJob = await scheduleTestJob(stub, {
+      sourceId: 'exhausted-job',
+      guildId,
+      runAtMs: nowMs - 1000,
+    });
 
-      await instance.alarm();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await runInDurableObject(stub, async (instance) => instance.alarm());
+      if (attempt < 5) {
+        const list = await (await stub.fetch('https://do/list')).json();
+        expect(list.totalJobs).toBe(1);
+        expect(list.jobsPreview[0].delivery.attempts).toBe(attempt);
+        nowMs = list.jobsPreview[0].delivery.nextAttemptAtMs;
+      }
+    }
 
-      expect(readStoredJobs(state)).toEqual([]);
-      const deadLetters = readDeadLetters(state);
-      expect(deadLetters).toHaveLength(1);
-      expect(deadLetters[0]).toMatchObject({
-        id: 'exhausted-job',
-        delivery: {
-          state: 'dead_letter',
-          attempts: 5,
-          lastError: { code: 'discord_http_error' },
-        },
-      });
+    expect((await (await stub.fetch('https://do/list')).json()).totalJobs).toBe(0);
+    const deadLetters = await (await stub.fetch('https://do/dead-letters')).json();
+    expect(deadLetters.totalDeadLetters).toBe(1);
+    expect(deadLetters.deadLettersPreview[0].job).toMatchObject({
+      id: exhaustedJob.id,
+      delivery: {
+        state: 'dead_letter',
+        attempts: 5,
+        lastError: { code: 'discord_http_error' },
+      },
     });
   });
 

@@ -2,7 +2,10 @@ import { commands } from "./commands.js";
 import { jsonResponse, ephemeralData, ephemeral } from "./common.js";
 import { PERM_STRINGS, checkPermissions } from "./discord-permissions.js";
 import {
+  declaredRequestBodyTooLarge,
+  encodedTextTooLarge,
   logError,
+  MAX_SIGNED_WEBHOOK_BODY_BYTES,
   unknownErrorMessage,
   withExternalRequestTimeout
 } from "../../common.js";
@@ -120,28 +123,39 @@ class CommandUserFacingError extends Error {
 
 async function handleCommand(interaction, env, command) {
   let commandResult;
+  let authorizedCapability = null;
   const def = command.definition;
   const correlationId = `discord:${interaction.id ?? crypto.randomUUID()}`;
+  const sourceInteraction = interaction;
   try {
     if (def.guild) {
       // Guild-only commands rely on guild-scoped Durable Objects and
       // guild-specific permission evaluation.
       if (!interaction.guild_id) throw new CommandUserFacingError("Use this command inside a server.");
       const capability = def.guild.capability;
-      if (typeof capability !== "string" || capability.length === 0) {
-        throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+      if (capability !== null) {
+        if (typeof capability !== "string" || capability.length === 0) {
+          throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+        }
+        const permStatus = await checkPermissions(interaction, env, { capability });
+        if (!permStatus.configured) {
+          throw new CommandUserFacingError("Error: permissions for this command have not been set.");
+        }
+        if (!permStatus.ok) throw new CommandUserFacingError(
+          `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
+        );
+        authorizedCapability = capability;
       }
-      const permStatus = await checkPermissions(interaction, env, { capability });
-      if (!permStatus.configured) {
-        throw new CommandUserFacingError("Error: permissions for this command have not been set.");
-      }
-      if (!permStatus.ok) throw new CommandUserFacingError(
-        `Only members that fall into one of \`[${permStatus.allowedGroups.map(v=>PERM_STRINGS[v].toUpperCase()).join(", ")}]\` can use this command.`
-      );
     } else {
-      interaction.guild_id = undefined; // commands without explicit guild descriptor should lose access to guild functionality
+      // Commands without an explicit guild descriptor receive a shallow copy
+      // without guild access. The source adapter separately retains the
+      // authenticated origin needed to build a platform-neutral invocation.
+      interaction = { ...interaction, guild_id: undefined };
     }
-    commandResult = await def.exec(interaction, env, command.name);
+    commandResult = await def.exec(interaction, env, command.name, {
+      sourceInteraction,
+      authorizedCapability
+    });
   } catch (e) {
     if (e instanceof CommandUserFacingError) {
       commandResult = ephemeralData(e.message);
@@ -163,12 +177,18 @@ export async function handleDiscordRequest(request, env, ctx) {
   // Optional health
   if (request.method === "GET") return new Response("OK");
   if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+  if (declaredRequestBodyTooLarge(request, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
 
   const signature = request.headers.get("X-Signature-Ed25519");
   const timestamp = request.headers.get("X-Signature-Timestamp");
   if (!signature || !timestamp) return new Response("Bad Request", { status: 400 });
 
   const bodyText = await request.text();
+  if (encodedTextTooLarge(bodyText, MAX_SIGNED_WEBHOOK_BODY_BYTES)) {
+    return new Response("Payload Too Large", { status: 413 });
+  }
 
   const ok = await verifyDiscordRequest({
     publicKeyHex: env.PUBLIC_KEY,

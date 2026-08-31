@@ -11,6 +11,8 @@ import {
 } from "./channel-auth.js";
 import {
 	renderTwitchConnectPage,
+	renderTwitchIntegrationConnectPage,
+	renderTwitchIntegrationSuccess,
 	renderTwitchOnboardingError,
 	renderTwitchOnboardingSuccess
 } from "./onboarding.js";
@@ -80,7 +82,10 @@ async function finishTwitchOAuth(request, env) {
 	});
 }
 
-function requestTwitchChannelOAuthStart(env, invitationToken) {
+function requestTwitchChannelOAuthStart(env, {
+	invitationToken,
+	integrationInvitationToken
+} = {}) {
 	return twitchChannelOAuthCoordinatorStub(env).fetch(
 		"https://twitch-channel-oauth/oauth/start",
 		{
@@ -91,7 +96,10 @@ function requestTwitchChannelOAuthStart(env, invitationToken) {
 				callbackUrl: twitchPublicUrl(env, "/twitch"),
 				clientId: env.TWITCH_CLIENT_ID,
 				clientSecret: env.TWITCH_CLIENT_SECRET,
-				...(invitationToken === undefined ? {} : { invitationToken })
+				...(invitationToken === undefined ? {} : { invitationToken }),
+				...(integrationInvitationToken === undefined
+					? {}
+					: { integrationInvitationToken })
 			})
 		}
 	);
@@ -139,13 +147,49 @@ async function beginInvitedTwitchChannelOAuth(request, env) {
 	} catch {
 		return renderTwitchOnboardingError("This invitation is invalid or expired.");
 	}
-	const response = await requestTwitchChannelOAuthStart(env, invitationToken);
+	const response = await requestTwitchChannelOAuthStart(env, { invitationToken });
 	if (!response.ok) {
 		await response.text();
 		return renderTwitchOnboardingError(
 			response.status >= 500
 				? "Channel onboarding is temporarily unavailable. Please try again later."
 				: "This invitation is invalid, expired, or has already been used.",
+			response.status >= 500 ? 503 : 400
+		);
+	}
+	const result = await response.json();
+	return new Response(null, {
+		status: 303,
+		headers: {
+			"cache-control": "no-store",
+			location: result.authorizationUrl,
+			"referrer-policy": "no-referrer"
+		}
+	});
+}
+
+async function beginInvitedTwitchIntegrationOAuth(request, env) {
+	if (!env.TWITCH_CHANNEL_OAUTH || !env.INTEGRATION_REGISTRY) {
+		return renderTwitchOnboardingError(
+			"Integration linking is temporarily unavailable.",
+			503
+		);
+	}
+	let integrationInvitationToken;
+	try {
+		integrationInvitationToken = (await request.formData()).get("invite");
+	} catch {
+		return renderTwitchOnboardingError("This integration invitation is invalid or expired.");
+	}
+	const response = await requestTwitchChannelOAuthStart(env, {
+		integrationInvitationToken
+	});
+	if (!response.ok) {
+		await response.text();
+		return renderTwitchOnboardingError(
+			response.status >= 500
+				? "Integration linking is temporarily unavailable. Please try again later."
+				: "This integration invitation is invalid, expired, or has already been used.",
 			response.status >= 500 ? 503 : 400
 		);
 	}
@@ -193,6 +237,18 @@ async function finishTwitchChannelOAuth(request, env) {
 	}
 	const result = await response.json();
 	const channel = result.authorization?.login || result.authorization?.broadcasterUserId;
+	if (result.integrationError) {
+		return renderTwitchOnboardingError(
+			"The Twitch channel was authorized, but the Discord integration invitation could not be completed. Ask a server manager to create a new invitation."
+		);
+	}
+	if (result.integration || result.integrationPending) {
+		return renderTwitchIntegrationSuccess(
+			channel,
+			result.integration,
+			result.integrationPending
+		);
+	}
 	return renderTwitchOnboardingSuccess(channel);
 }
 
@@ -262,6 +318,13 @@ export async function handleTwitchManagementRoute(
 	if (url.pathname === "/twitch/channels/connect") {
 		if (request.method === "GET") return renderTwitchConnectPage();
 		if (request.method === "POST") return beginInvitedTwitchChannelOAuth(request, env);
+		return new Response("Method Not Allowed", { status: 405 });
+	}
+	if (url.pathname === "/twitch/integrations/connect") {
+		if (request.method === "GET") return renderTwitchIntegrationConnectPage();
+		if (request.method === "POST") {
+			return beginInvitedTwitchIntegrationOAuth(request, env);
+		}
 		return new Response("Method Not Allowed", { status: 405 });
 	}
 	if (url.pathname === "/twitch/channels/oauth/start") {

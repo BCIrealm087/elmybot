@@ -7,11 +7,17 @@ import {
 	getTwitchAppAccessToken,
 	handleTwitchAppAuthStatus
 } from "./app-auth.js";
+import {
+	requireTwitchEventSubDefinition,
+	TwitchEventSubRegistryError
+} from "./eventsub-registry.js";
 
 export const TWITCH_EVENTSUB_SERVICE_NAME = "twitch:eventsub-service";
 
 const EVENTSUB_SUBSCRIPTIONS_URL = "https://api.twitch.tv/helix/eventsub/subscriptions";
-const MAX_LIST_PAGES = 100;
+const MAX_LIST_PAGES = 5;
+const MAX_RECONCILIATION_MUTATIONS = 10;
+const RECONCILIATION_TIME_BUDGET_MS = 5_000;
 const LIST_FILTER_NAMES = Object.freeze([
 	"status",
 	"type",
@@ -36,6 +42,38 @@ function noStoreJson(value, status = 200) {
 	const response = jsonResponse(value, status);
 	response.headers.set("cache-control", "no-store");
 	return response;
+}
+
+function createReconciliationBudget() {
+	return {
+		startedAtMs: Date.now(),
+		operations: 0,
+		mutations: 0
+	};
+}
+
+async function startReconciliationOperation(budget) {
+	if (!budget) return;
+	if (
+		budget.operations > 0 &&
+		Date.now() - budget.startedAtMs >= RECONCILIATION_TIME_BUDGET_MS
+	) {
+		throw new TwitchEventSubServiceError(
+			"Twitch EventSub reconciliation exceeded its time budget.",
+			{ status: 502, code: "twitch_eventsub_reconciliation_time_budget" }
+		);
+	}
+	budget.operations += 1;
+}
+
+async function claimReconciliationMutation(budget) {
+	if (budget.mutations >= MAX_RECONCILIATION_MUTATIONS) {
+		throw new TwitchEventSubServiceError(
+			"Twitch EventSub reconciliation exceeded its mutation limit.",
+			{ status: 502, code: "twitch_eventsub_reconciliation_mutation_limit" }
+		);
+	}
+	budget.mutations += 1;
 }
 
 function requiredString(value, name) {
@@ -136,14 +174,65 @@ function cloneExternalResponse(response, bodyText) {
 	});
 }
 
-function createSubscriptionBody(channel, credentials) {
+function selectedDefinitions(registry, kinds) {
+	if (!Array.isArray(kinds) || kinds.length === 0) {
+		throw new TwitchEventSubServiceError(
+			"At least one EventSub definition kind is required."
+		);
+	}
+	try {
+		return kinds.map((kind) => requireTwitchEventSubDefinition(registry, kind));
+	} catch (cause) {
+		if (cause instanceof TwitchEventSubRegistryError) {
+			throw new TwitchEventSubServiceError(cause.message, {
+				status: 422,
+				code: "twitch_eventsub_definition_unsupported",
+				cause
+			});
+		}
+		throw cause;
+	}
+}
+
+function definitionCondition(definition, channel, credentials) {
+	const condition = definition.condition({ channel, credentials });
+	if (
+		typeof condition !== "object" ||
+		condition === null ||
+		Array.isArray(condition) ||
+		condition.broadcaster_user_id !== channel.broadcasterUserId
+	) {
+		throw new TwitchEventSubServiceError(
+			`EventSub definition \`${definition.kind}\` returned an invalid condition.`,
+			{ status: 500, code: "twitch_eventsub_definition_invalid" }
+		);
+	}
+	if (
+		definition.needsBotUserId &&
+		condition.user_id !== credentials.botUserId
+	) {
+		throw new TwitchEventSubServiceError(
+			`EventSub definition \`${definition.kind}\` did not bind the bot user.`,
+			{ status: 500, code: "twitch_eventsub_definition_invalid" }
+		);
+	}
+	return condition;
+}
+
+function sameCondition(left, right) {
+	const leftKeys = Object.keys(left ?? {}).sort();
+	const rightKeys = Object.keys(right ?? {}).sort();
+	return leftKeys.length === rightKeys.length &&
+		leftKeys.every((key, index) =>
+			key === rightKeys[index] && left[key] === right[key]
+		);
+}
+
+function createSubscriptionBody(definition, channel, credentials) {
 	return {
-		type: "channel.chat.message",
-		version: "1",
-		condition: {
-			broadcaster_user_id: channel.broadcasterUserId,
-			user_id: credentials.botUserId
-		},
+		type: definition.type,
+		version: definition.version,
+		condition: definitionCondition(definition, channel, credentials),
 		transport: {
 			method: "webhook",
 			callback: channel.callbackUrl,
@@ -152,9 +241,10 @@ function createSubscriptionBody(channel, credentials) {
 	};
 }
 
-export class TwitchEventSubService {
-	constructor(_state, env) {
+export class TwitchEventSubServiceBackend {
+	constructor(_state, env, registry) {
 		this.env = env;
+		this.registry = registry;
 		this.channelOperations = new Map();
 	}
 
@@ -174,7 +264,8 @@ export class TwitchEventSubService {
 		}
 	}
 
-	async eventSubRequest(credentials, request) {
+	async eventSubRequest(credentials, request, budget = null) {
+		await startReconciliationOperation(budget);
 		let accessToken = await this.appAccessToken(credentials);
 		let response = await rawEventSubRequest({
 			...request,
@@ -206,7 +297,7 @@ export class TwitchEventSubService {
 		}
 	}
 
-	async listSubscriptions(credentials, filters = {}) {
+	async listSubscriptions(credentials, filters = {}, budget = null) {
 		const appliedFilters = LIST_FILTER_NAMES.filter((name) =>
 			typeof filters[name] === "string" && filters[name].length > 0
 		);
@@ -224,17 +315,21 @@ export class TwitchEventSubService {
 				url.searchParams.set(name, filters[name]);
 			}
 		}
-		return this.eventSubRequest(credentials, { method: "GET", url: url.href });
+		return this.eventSubRequest(
+			credentials,
+			{ method: "GET", url: url.href },
+			budget
+		);
 	}
 
-	async matchingChatSubscriptions(channel, credentials) {
+	async matchingSubscriptions(channel, credentials, definitions, budget) {
 		const subscriptions = [];
 		let cursor = null;
 		for (let page = 0; page < MAX_LIST_PAGES; page++) {
 			const response = await this.listSubscriptions(credentials, {
 				user_id: channel.broadcasterUserId,
 				...(cursor ? { after: cursor } : {})
-			});
+			}, budget);
 			if (!response.ok) {
 				await response.text();
 				throw new TwitchEventSubServiceError(
@@ -259,9 +354,11 @@ export class TwitchEventSubService {
 				});
 			}
 			subscriptions.push(...result.data.filter((subscription) =>
-				subscription?.type === "channel.chat.message" &&
 				subscription?.condition?.broadcaster_user_id === channel.broadcasterUserId &&
-				subscription?.condition?.user_id === credentials.botUserId
+				definitions.some((definition) =>
+					subscription?.type === definition.type &&
+					(subscription?.version ?? "1") === definition.version
+				)
 			));
 			cursor = result.pagination?.cursor;
 			if (typeof cursor !== "string" || cursor.length === 0) return subscriptions;
@@ -272,13 +369,14 @@ export class TwitchEventSubService {
 		});
 	}
 
-	async deleteSubscription(id, credentials) {
+	async deleteSubscription(id, credentials, budget) {
+		await claimReconciliationMutation(budget);
 		const url = new URL(EVENTSUB_SUBSCRIPTIONS_URL);
 		url.searchParams.set("id", id);
 		const response = await this.eventSubRequest(credentials, {
 			method: "DELETE",
 			url: url.href
-		});
+		}, budget);
 		if (response.status !== 204) {
 			await response.text();
 			throw new TwitchEventSubServiceError(
@@ -288,21 +386,28 @@ export class TwitchEventSubService {
 		}
 	}
 
-	async createChatSubscription(channel, credentials) {
+	async createSubscription(definition, channel, credentials, budget = null) {
+		if (budget) await claimReconciliationMutation(budget);
 		return this.eventSubRequest(credentials, {
 			method: "POST",
 			url: EVENTSUB_SUBSCRIPTIONS_URL,
-			body: createSubscriptionBody(channel, credentials)
-		});
+			body: createSubscriptionBody(definition, channel, credentials)
+		}, budget);
 	}
 
-	async removeChatSubscriptions(channel, credentials) {
+	async removeSubscriptions(channel, credentials, definitions) {
 		return this.withChannelOperation(channel.broadcasterUserId, async () => {
-			const subscriptions = await this.matchingChatSubscriptions(channel, credentials);
+			const budget = createReconciliationBudget();
+			const subscriptions = await this.matchingSubscriptions(
+				channel,
+				credentials,
+				definitions,
+				budget
+			);
 			let removedSubscriptions = 0;
 			for (const subscription of subscriptions) {
 				if (typeof subscription?.id === "string" && subscription.id.length > 0) {
-					await this.deleteSubscription(subscription.id, credentials);
+					await this.deleteSubscription(subscription.id, credentials, budget);
 					removedSubscriptions += 1;
 				}
 			}
@@ -310,53 +415,99 @@ export class TwitchEventSubService {
 		});
 	}
 
-	async ensureChatSubscription(channel, credentials) {
+	async ensureSubscriptions(channel, credentials, definitions) {
 		return this.withChannelOperation(channel.broadcasterUserId, async () => {
-			const subscriptions = await this.matchingChatSubscriptions(channel, credentials);
-			const healthy = subscriptions.find((subscription) =>
-				subscription?.transport?.method === "webhook" &&
-				subscription?.transport?.callback === channel.callbackUrl &&
-				HEALTHY_SUBSCRIPTION_STATUSES.has(subscription.status)
+			const budget = createReconciliationBudget();
+			const subscriptions = await this.matchingSubscriptions(
+				channel,
+				credentials,
+				definitions,
+				budget
 			);
-			if (healthy) {
-				return {
-					result: "existing",
-					subscriptionId: healthy.id ?? null,
-					status: healthy.status
-				};
-			}
-			for (const subscription of subscriptions) {
-				if (typeof subscription?.id === "string" && subscription.id.length > 0) {
-					await this.deleteSubscription(subscription.id, credentials);
-				}
-			}
-			const response = await this.createChatSubscription(channel, credentials);
-			if (response.status === 409) {
-				await response.text();
-				return {
-					result: "already_exists",
-					subscriptionId: null,
-					status: "unknown"
-				};
-			}
-			if (response.status !== 202) {
-				await response.text();
-				throw new TwitchEventSubServiceError(
-					`Twitch rejected EventSub creation with status ${response.status}.`,
-					{ status: 502, code: "twitch_eventsub_create_rejected" }
+			const reconciled = [];
+			for (const definition of definitions) {
+				const expectedCondition = definitionCondition(
+					definition,
+					channel,
+					credentials
 				);
+				const matching = subscriptions.filter((subscription) =>
+					subscription.type === definition.type &&
+					(subscription.version ?? "1") === definition.version
+				);
+				const healthy = matching.find((subscription) =>
+					subscription?.transport?.method === "webhook" &&
+					subscription?.transport?.callback === channel.callbackUrl &&
+					sameCondition(subscription.condition, expectedCondition) &&
+					HEALTHY_SUBSCRIPTION_STATUSES.has(subscription.status)
+				);
+				for (const subscription of matching) {
+					if (
+						subscription !== healthy &&
+						typeof subscription?.id === "string" &&
+						subscription.id.length > 0
+					) {
+						await this.deleteSubscription(
+							subscription.id,
+							credentials,
+							budget
+						);
+					}
+				}
+				if (healthy) {
+					reconciled.push({
+						kind: definition.kind,
+						result: "existing",
+						subscriptionId: healthy.id ?? null,
+						status: healthy.status
+					});
+					continue;
+				}
+
+				const response = await this.createSubscription(
+					definition,
+					channel,
+					credentials,
+					budget
+				);
+				if (response.status === 409) {
+					await response.text();
+					reconciled.push({
+						kind: definition.kind,
+						result: "already_exists",
+						subscriptionId: null,
+						status: "unknown"
+					});
+					continue;
+				}
+				if (response.status !== 202) {
+					await response.text();
+					throw new TwitchEventSubServiceError(
+						`Twitch rejected EventSub creation with status ${response.status}.`,
+						{ status: 502, code: "twitch_eventsub_create_rejected" }
+					);
+				}
+				let result;
+				try {
+					result = await response.json();
+				} catch {
+					result = null;
+				}
+				reconciled.push({
+					kind: definition.kind,
+					result: "created",
+					subscriptionId: result?.data?.[0]?.id ?? null,
+					status: result?.data?.[0]?.status ??
+						"webhook_callback_verification_pending"
+				});
 			}
-			let result;
-			try {
-				result = await response.json();
-			} catch {
-				result = null;
-			}
+			const first = reconciled[0];
+			const results = new Set(reconciled.map((entry) => entry.result));
 			return {
-				result: "created",
-				subscriptionId: result?.data?.[0]?.id ?? null,
-				status: result?.data?.[0]?.status ??
-					"webhook_callback_verification_pending"
+				result: results.size === 1 ? first.result : "reconciled",
+				subscriptionId: first.subscriptionId,
+				status: first.status,
+				subscriptions: reconciled
 			};
 		});
 	}
@@ -377,22 +528,41 @@ export class TwitchEventSubService {
 				return cloneExternalResponse(response, await response.text());
 			}
 			const channel = validateChannel(input?.channel);
-			if (url.pathname === "/subscriptions/chat/remove") {
-				const credentials = validateCredentials(input?.credentials, { needsBot: true });
-				return noStoreJson(await this.removeChatSubscriptions(channel, credentials));
+			const definitions = selectedDefinitions(this.registry, input?.kinds);
+			const needsBot = definitions.some((definition) => definition.needsBotUserId);
+			if (url.pathname === "/subscriptions/remove") {
+				const credentials = validateCredentials(input?.credentials, { needsBot });
+				return noStoreJson(await this.removeSubscriptions(
+					channel,
+					credentials,
+					definitions
+				));
 			}
 			const credentials = validateCredentials(input?.credentials, {
-				needsBot: true,
+				needsBot,
 				needsWebhookSecret: true
 			});
-			if (url.pathname === "/subscriptions/chat/create") {
+			if (url.pathname === "/subscriptions/create") {
+				if (definitions.length !== 1) {
+					throw new TwitchEventSubServiceError(
+						"Creating a subscription requires exactly one definition kind."
+					);
+				}
 				return this.withChannelOperation(channel.broadcasterUserId, async () => {
-					const response = await this.createChatSubscription(channel, credentials);
+					const response = await this.createSubscription(
+						definitions[0],
+						channel,
+						credentials
+					);
 					return cloneExternalResponse(response, await response.text());
 				});
 			}
-			if (url.pathname === "/subscriptions/chat/ensure") {
-				return noStoreJson(await this.ensureChatSubscription(channel, credentials));
+			if (url.pathname === "/subscriptions/ensure") {
+				return noStoreJson(await this.ensureSubscriptions(
+					channel,
+					credentials,
+					definitions
+				));
 			}
 			return new Response("Not found", { status: 404 });
 		} catch (error) {

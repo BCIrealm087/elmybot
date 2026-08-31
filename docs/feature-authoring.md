@@ -1,0 +1,442 @@
+# Feature authoring guide
+
+This guide is the practical entry point for adding commands and interactions to
+Elmybot. The normative API shapes remain in
+[`command-feature-framework-contract.md`](command-feature-framework-contract.md).
+The supported entry point, compatibility rules, and deprecation lifecycle are
+defined in [`framework-api.md`](framework-api.md).
+
+The contributor framework is intentionally a build-time JavaScript API.
+Features are reviewed, tested, explicitly installed, and bundled with the
+Worker. They may live directly under `src/features/` or in a private npm
+workspace package. Elmybot does not execute uploaded or remotely supplied code.
+
+## Quick start: workspace feature package
+
+From the repository root:
+
+```sh
+npm run feature:new -- fun-hype --workspace
+```
+
+The name must contain at least two lowercase dash-separated words. The scaffold
+converts `fun-hype` to feature ID `fun.hype`, command `hype`, and action kind
+`fun.hype.run.v1`. It creates:
+
+```text
+packages/features/fun-hype/
+  package.json
+  README.md
+  src/feature.js
+  test/feature.spec.js
+```
+
+The package imports production helpers from `@elmybot/framework` and test
+helpers from `@elmybot/framework/testing`. It starts private and remains part of
+this repository; publishing it is a separate future decision.
+
+The scaffold never overwrites an existing file and does not install the feature
+automatically. Add its exact version to the root `dependencies` without
+removing the existing entries:
+
+```json
+{
+  "dependencies": {
+    "@elmybot/feature-fun-hype": "0.1.0"
+  }
+}
+```
+
+Run `npm install` from the repository root to update `package-lock.json` and
+create the workspace link. Then add the feature's default export to the
+explicit catalog in `src/features/index.js`:
+
+```js
+import hypeFeature from "@elmybot/feature-fun-hype";
+
+export const installedFeatures = Object.freeze([
+  // Existing features...
+  hypeFeature
+]);
+```
+
+Then replace the `TODO` behavior and run:
+
+```sh
+npm test -- --run packages/features/fun-hype/test/feature.spec.js
+npm run feature:workspaces
+npm run feature:docs
+npm run lint
+```
+
+`npm run feature:workspaces` checks package names, exports, peer compatibility,
+metadata, default feature exports, and root dependency versions. `npm run lint`
+also enforces workspace isolation and verifies that the checked-in
+[`feature-catalog.md`](feature-catalog.md) matches the installed registry.
+
+## Repository-local feature
+
+Use the original scaffold when the feature is intentionally coupled to this
+deployment rather than independently owned:
+
+```sh
+npm run feature:new -- fun-hype
+```
+
+It creates `src/features/fun-hype/feature.js` and
+`test/features/fun-hype.spec.js`. Import that feature by relative path in the
+same explicit installed catalog. The contributor APIs and behavioral contracts
+are otherwise identical.
+
+## Choose the smallest useful feature shape
+
+| Need | Recommended shape |
+| --- | --- |
+| Discord- or Twitch-specific presentation | Native command |
+| Same semantic behavior on both platforms | One action with two command adapters |
+| Send something to a linked platform | Action + route + routed effect |
+| Run automatically from an authenticated event | Event binding + action |
+| Run later or repeatedly | Schedule definition + action |
+| Remember scores, quotes, or counters | Action using namespaced state |
+
+Do not force platform-specific behavior into a shared abstraction. A Discord
+command that needs role selection or a Discord-only response shape can remain a
+Discord native command. Extract an action only when sharing the semantic intent
+helps.
+
+## Core rules
+
+- Repository-local features import contributor helpers only from
+  `src/framework/index.js`. Workspace feature source imports only
+  `@elmybot/framework`. `npm run lint` rejects imports into project internals
+  and relative imports that escape a workspace package.
+- Set `apiVersion: frameworkApiVersion` so each manifest declares the stable
+  authoring contract it expects.
+- Feature IDs and semantic kinds are namespaced and stable.
+- Versioned action, route, event, effect, and schedule kinds end in `.v1`, `.v2`,
+  and so on.
+- Commands validate into semantic arguments before feature code runs.
+- Protected action commands inherit the action capability.
+- Actions declare every route, effect, and optional service they may use.
+- Feature code receives no `env`, OAuth token, request, webhook payload, Durable
+  Object ID, SQL handle, coordinator envelope, or retry loop.
+- Effects describe intended platform outcomes. The coordinator owns durable
+  delivery and retry.
+- Configuration and state keys match `^[a-z][a-z0-9_-]{0,63}$`.
+
+## The feature test kit
+
+Import test helpers from the test-only module:
+
+```js
+import {
+  createFeatureTestRuntime,
+  discordTestActor,
+  discordTestGroup,
+  linkedTestRoute,
+  twitchTestGroup
+} from "../../src/framework/testing.js";
+```
+
+Inside a workspace package, use the equivalent package entry:
+
+```js
+import { createFeatureTestRuntime } from "@elmybot/framework/testing";
+```
+
+`createFeatureTestRuntime(feature)` composes the real feature and action
+registries. It therefore catches duplicate names, missing actions, unknown
+capabilities, undeclared services, bad routes, and incompatible effects before
+the test executes a command.
+
+The runtime replaces only external infrastructure with deterministic in-memory
+facilities:
+
+| Facility | Test API |
+| --- | --- |
+| Discord command | `runtime.discord.command(name, input)` |
+| Twitch command | `runtime.twitch.command(name, input)` |
+| Domain event | `runtime.event(kind, input)` |
+| Configuration | `runtime.config.set(group, featureId, key, value)` |
+| State inspection | `runtime.state.get(group, featureId, key)` |
+| Clock | `runtime.clock.now()` and `runtime.clock.advance(...)` |
+| Scheduled occurrences | `runtime.schedules.runDue()` |
+| Stored-plan replay | `runtime.schedules.replay(plan)` |
+| Current routes | `runtime.routes.set(routes)` |
+| Feature logs | `runtime.logs.all()` |
+
+Command and trigger results expose `reply`, `output`, `effects`, `schedules`,
+and `occurrencePlan`. Small assertion helpers keep the common cases readable:
+
+```js
+result.toReply("Hype queued!");
+result.toEmitTwitchChat("Let's go!");
+result.toEmitDiscordMessage("The stream is live!");
+result.toSchedule("discord.fun.hype-random.v1");
+```
+
+Actors carry explicit capabilities. Public actors default to
+`framework.members`; protected tests should state the grant being exercised:
+
+```js
+const moderator = discordTestActor({
+  id: "moderator-1",
+  capabilities: ["framework.members", "framework.moderators"]
+});
+```
+
+Convenience helpers are also available: `discordTestModerator()`,
+`discordTestManager()`, `twitchTestModerator()`, and
+`twitchTestBroadcaster()`.
+
+The harness does not replace platform ingress or durability integration tests.
+Use the existing Worker tests when verifying signatures, raw Discord/Twitch
+payload parsing, SQL migrations, alarms, coordinator retries, or real delivery
+adapter behavior.
+
+## Cookbook 1: platform-native command
+
+Use a native command when the behavior or response is intentionally tied to one
+platform. This Discord-only example does not need an action:
+
+```js
+import {
+  access,
+  defineFeature,
+  discordNativeCommand,
+  frameworkApiVersion,
+  schema
+} from "../../framework/index.js";
+
+export default defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "discord.secret-handshake",
+  description: "A Discord-only moderator handshake.",
+  commands: {
+    discord: [
+      discordNativeCommand({
+        name: "handshake",
+        description: "Perform the moderator handshake.",
+        availability: "guild",
+        capability: access.moderators,
+        input: schema.object({}),
+        execute(ctx) {
+          return ctx.response.text("🤝 Handshake complete.", { ephemeral: true });
+        }
+      })
+    ]
+  }
+});
+```
+
+Test it with `discordTestModerator()`. Also assert that `discordTestActor()` is
+denied when access is important.
+
+## Cookbook 2: shared Discord and Twitch command
+
+Put shared intent in one action, then give each platform its own presentation:
+
+```js
+const KIND = "fun.cheer.run.v1";
+
+export default defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "fun.cheer",
+  description: "Cheers from either platform.",
+  actions: [
+    defineAction({
+      kind: KIND,
+      capability: null,
+      supportedOrigins: ["discord", "twitch"],
+      input: schema.object({}),
+      execute: () => ({ output: { message: "Let's go!" }, effects: [] })
+    })
+  ],
+  commands: {
+    discord: [discordActionCommand({
+      name: "cheer",
+      description: "Cheer.",
+      availability: "global",
+      actionKind: KIND,
+      render: discordTextResult
+    })],
+    twitch: [twitchActionCommand({
+      name: "cheer",
+      description: "Cheer.",
+      actionKind: KIND,
+      parse: twitchNoArgs(),
+      render: twitchTextResult
+    })]
+  }
+});
+```
+
+One runtime can execute both adapters and prove they reach the same action.
+
+## Cookbook 3: routed cross-platform command
+
+Declare the link direction and effect dependency in metadata. The action only
+resolves current routes and returns effects:
+
+```js
+const ROUTE = "discord.fun-hype-to-twitch.v1";
+const ACTION = "integration.fun-hype.publish.v1";
+
+const feature = defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "integrations.fun-hype",
+  description: "Sends Discord hype to linked Twitch chats.",
+  routes: [defineRoute({
+    kind: ROUTE,
+    sourcePlatform: "discord",
+    targetPlatform: "twitch",
+    destination: "none",
+    newIntegration: "enabled",
+    existingIntegration: "disabled"
+  })],
+  actions: [defineAction({
+    kind: ACTION,
+    capability: access.moderators,
+    supportedOrigins: ["discord"],
+    input: schema.object({
+      message: schema.string({ minLength: 1, maxLength: 500, trim: true })
+    }),
+    uses: {
+      routes: [ROUTE],
+      effects: ["twitch.chat.send.v1"]
+    },
+    async execute(ctx, { message }) {
+      const routes = await ctx.routes.resolve(ROUTE);
+      return {
+        output: { message: `Queued for ${routes.length} channel(s).` },
+        effects: routes.map((route) =>
+          ctx.effects.twitch.chat(route, { message })
+        )
+      };
+    }
+  })]
+});
+```
+
+In the test, create Discord and Twitch groups plus a `linkedTestRoute()`, give
+the actor the moderator capability, invoke the Discord command, and call
+`toEmitTwitchChat()`.
+
+## Cookbook 4: scheduled action
+
+A schedule points to an action; it does not contain delivery code. The command
+maps presentation arguments into action arguments and timing:
+
+```js
+defineScheduledAction({
+  kind: "discord.fun.hype-random.v1",
+  sourcePlatform: "discord",
+  actionKind: "integration.fun-hype.publish.v1",
+  timing: "bounded-random",
+  authorization: "grant-at-creation"
+});
+
+discordScheduledActionCommand({
+  name: "hype_random",
+  description: "Repeat hype at bounded random intervals.",
+  availability: "guild",
+  scheduleKind: "discord.fun.hype-random.v1",
+  options: [/* message, min_interval, max_interval */],
+  mapSchedule(args) {
+    return {
+      actionArgs: { message: args.message },
+      timing: {
+        type: "bounded-random",
+        minSeconds: args.min_interval,
+        maxSeconds: args.max_interval
+      },
+      repeats: true
+    };
+  }
+});
+```
+
+Test creation with `toSchedule()`. Advance deterministic time, call
+`runtime.schedules.runDue()`, and inspect the occurrence effects and immutable
+`occurrencePlan`. `runtime.schedules.replay(plan)` verifies that replay uses the
+stored plan without running feature logic again.
+
+Production bounded-random schedules currently require 600–86,400 seconds.
+
+## Cookbook 5: event-driven action
+
+Transport code authenticates and normalizes the domain event. The feature maps
+that event to an ordinary action:
+
+```js
+defineEventAction({
+  eventKind: "twitch.channel.celebration.v1",
+  actionKind: "twitch.celebration.publish.v1",
+  mapPayload: (event) => ({
+    title: event.payload.title
+  })
+});
+```
+
+The target action can use the same route/effect API as a command action. Test
+without constructing a raw EventSub webhook:
+
+```js
+const result = await runtime.event("twitch.channel.celebration.v1", {
+  group: twitchGroup,
+  payload: { title: "We did it!" }
+});
+
+result.toEmitDiscordMessage("We did it!");
+```
+
+Add or change the platform EventSub definition separately when a genuinely new
+authenticated domain event is required.
+
+## Cookbook 6: stateful command
+
+Declare services and a cooldown in the action. Feature code cannot select a
+different group or feature namespace:
+
+```js
+defineAction({
+  kind: "fun.streak.increment.v1",
+  capability: null,
+  supportedOrigins: ["discord", "twitch"],
+  uses: { services: ["config", "state", "random"] },
+  cooldown: { scope: "actor", seconds: 30 },
+  input: schema.object({}),
+  async execute(ctx) {
+    const label = await ctx.config.get("label") ?? "Streak";
+    const value = await ctx.state.increment("value");
+    const bonus = ctx.random.integer({ min: 0, max: 2 });
+    return {
+      output: { message: `${label}: ${value + bonus}` },
+      effects: []
+    };
+  }
+});
+```
+
+Seed operator configuration with `runtime.config.set(...)`, execute the command,
+and inspect durable state through `runtime.state.get(...)`. Invoke twice as the
+same actor to test the cooldown, then advance the fake clock or use a different
+actor.
+
+See [`feature-state.md`](feature-state.md) for production limits and operator
+configuration commands.
+
+## Before opening a pull request
+
+- Keep the feature module focused on one coherent capability.
+- Test the successful path, authorization denial where applicable, validation,
+  and no-route behavior for cross-platform actions.
+- Use the test runtime for contributor behavior and existing Worker suites for
+  platform ingress or durability changes.
+- Add the feature once to `installedFeatures`.
+- For a workspace feature, keep its package metadata and root dependency
+  version aligned and run `npm run feature:workspaces`.
+- Run `npm run feature:docs` after installation.
+- Run the complete `npm test -- --run` and `npm run lint` checks.
+- Do not add secrets, raw platform tokens, direct external `fetch` calls, or
+  storage-layout knowledge to feature code.

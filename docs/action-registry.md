@@ -1,0 +1,147 @@
+# Platform-neutral action registry
+
+The action registry is the semantic boundary between a platform command and
+Elmybot behavior. Discord and Twitch still authenticate, parse, acknowledge,
+and render their own requests. They pass only a normalized `CommandInvocation`
+to the registry.
+
+The registry currently demonstrates both a local action and a routed action:
+
+| Native command | Shared action | Semantic output |
+| --- | --- | --- |
+| Discord `/alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
+| Twitch `!alive` | `core.health.check.v1` | `{ message: "I'm here!!1" }` |
+| Twitch `!announce <message>` | `integration.announcement.publish.v1` | Acknowledgement plus one Discord effect per configured route |
+| Discord `/integration_announce_twitch` | `integration.announcement.publish.v1` | Acknowledgement plus one Twitch effect per configured route |
+
+This proves that one action can be exposed through different native command
+systems without making either platform conform to the other's transport.
+
+## Registry contract
+
+`createActionRegistry` builds an immutable runtime snapshot from one or more
+action sets. Startup fails if:
+
+- a kind is registered twice;
+- a registry key differs from its action definition's kind; or
+- a definition violates the versioned action contract.
+
+`executeAction` then:
+
+1. normalizes and validates the `CommandInvocation`;
+2. resolves its versioned action kind;
+3. confirms that the source platform is supported;
+4. applies the action's capability policy when it has one;
+5. executes the action; and
+6. normalizes its `ActionResult`.
+
+Unknown actions and unsupported origins fail before executor code runs.
+
+## Authorization behavior
+
+`capability: null` means that the action is intentionally public. The alive
+health check uses this form.
+
+A capability-protected action fails closed unless the caller supplies an
+`authorize` policy. The policy receives the required capability and normalized
+invocation, including the authenticated actor and platform claims. Returning
+anything other than `true` denies execution.
+
+The registry does not treat claims as capabilities. The Twitch adapter's
+explicit policy permits `integration.announcement.publish` only when the
+authenticated EventSub actor has a `twitch.broadcaster` or
+`twitch.moderator` claim. The Discord adapter accepts that capability only after
+the signed interaction passes the command router's owner, moderator, or
+configured-role policy. Display names and message text never grant authority.
+
+## Action results
+
+Every executor returns a JSON-safe, immutable `ActionResult`:
+
+```js
+{
+  schemaVersion: 1,
+  output: { message: "I'm here!!1" },
+  effects: []
+}
+```
+
+`output` is semantic action output. A platform adapter decides how to render it:
+Discord turns the alive message into interaction response data, while Twitch
+sends it through the existing chat transport.
+
+`effects` contains normalized effect envelopes when an action requests durable
+external work. Alive has no effects and does not require an integration or the
+outbox. Announce resolves every enabled `twitch.announce-to-discord.v1` route,
+creates a `discord.message.send.v1` effect for each, groups the results by
+integration, and submits them to the corresponding durable coordinator.
+The same action resolves `discord.announce-to-twitch.v1` for Discord ingress
+and emits `twitch.chat.send.v1` effects. Platform limits stay in their adapters:
+Discord content permits 2000 characters, while Twitch chat permits 500.
+
+## Platform adapters
+
+Discord action ingress derives:
+
+- a guild group when the command came from a guild, otherwise a DM channel;
+- the authenticated interaction user; and
+- `discord:interaction:<interaction ID>` as the source event ID.
+
+Twitch action ingress derives:
+
+- the broadcaster's channel group;
+- the EventSub `chatter_user_id`;
+- broadcaster and moderator evidence from authoritative IDs and badges; and
+- `twitch:eventsub:<notification ID>` as the source event ID.
+
+Raw Discord interaction tokens, Twitch payloads, environment bindings, and
+platform response shapes do not enter the action invocation.
+
+## Adding an action
+
+For contributor-facing behavior, create either a repository-local feature
+module or a private workspace package with `defineFeature()`. Declare its
+semantic action with `defineAction()` and expose it through the Discord or
+Twitch action-command helpers. Workspace source imports the public API from
+`@elmybot/framework`; local source imports `src/framework/index.js`. Add the
+reviewed feature to the explicit catalog in `src/features/index.js` and give it
+a focused test. A workspace package must also be installed at its exact version
+in the root `dependencies` and lockfile so a clean Worker build resolves the
+same reviewed source.
+
+The framework then validates its argument schema, capability, supported
+origins, action references, route and effect dependencies, and command
+collisions while composing the existing immutable registries. The installed
+`integrations.announcements` feature is the routed example: it declares both
+directions, resolves only routes permitted by the action, and uses controlled
+effect factories. Platform executors submit the normalized effects through the
+durable integration coordinator after action validation succeeds.
+
+Platform-only behavior uses the native command helper and a controlled platform
+context. It does not need to enter the action registry. The
+`discord.role-access` feature demonstrates this path without exposing Worker
+bindings or configuration storage to feature code. Existing low-level action
+sets remain available during the staged migration.
+
+## Event and schedule triggers
+
+Feature actions are not limited to commands. `defineEventAction()` maps an
+authenticated, normalized `DomainEvent` to action arguments. Twitch
+`stream.online` is the first installed example: the EventSub transport still
+owns signature verification, admission, durable inbox processing, and payload
+normalization, while the feature owns the resulting route and Discord effect.
+
+`defineScheduledAction()` and `discordScheduledActionCommand()` provide the
+durable scheduling bridge. The command adapter validates action arguments and
+captures the already-authorized capability, group, actor, and acceptance time.
+Every occurrence uses a source ID shaped like
+`discord:schedule:<job-id>:occurrence:<unix-seconds>` and invokes the installed
+action with `trigger.kind === "schedule"`.
+
+Before any coordinator submission, the scheduler stores the occurrence's
+action arguments, resolved routes, normalized effects, origin, source ID, and
+correlation ID. A scheduler retry replays that exact plan rather than resolving
+routes or running feature logic again. A later recurrence clears the old plan
+and resolves current integration state. `/integration_schedule_twitch` is the
+first proof and reuses `integration.announcement.publish.v1`; it contains no
+coordinator, OAuth, or Twitch delivery code.

@@ -3,13 +3,24 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
+	"workspaces": [
+		"packages/framework",
+		"packages/features/*"
+	],
 	"scripts": {
 		"discord-register": "node src/platforms/discord/register-commands.js",
+		"feature:docs": "node scripts/generate-feature-docs.js",
+		"feature:new": "node scripts/create-feature.js",
+		"feature:workspaces": "node scripts/check-workspace-features.js",
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
-		"lint": "eslint .",
+		"lint": "eslint . && node scripts/check-feature-api-boundary.js && node scripts/check-workspace-features.js && node scripts/generate-feature-docs.js --check",
 		"start": "wrangler dev",
 		"test": "vitest"
+	},
+	"dependencies": {
+		"@elmybot/feature-alive": "1.0.0",
+		"@elmybot/framework": "1.0.0"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.1.0",

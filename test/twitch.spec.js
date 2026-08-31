@@ -7,16 +7,20 @@ import {
 	waitOnExecutionContext
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { MAX_SIGNED_WEBHOOK_BODY_BYTES } from "../src/common.js";
 import { TWITCH_APP_AUTH_OBJECT_NAME } from "../src/platforms/twitch/app-auth.js";
 import { TWITCH_AUTH_OBJECT_NAME } from "../src/platforms/twitch/auth.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 import {
+	handleTwitchChannelHealth,
 	TWITCH_CHANNEL_REGISTRY_NAME
 } from "../src/platforms/twitch/channel-registry.js";
 import {
 	ensureTwitchChatSubscription,
 	twitchEventSubManagerObjectName
 } from "../src/platforms/twitch/eventsub.js";
+import { twitchEventSubInboxStub } from "../src/platforms/twitch/eventsub-inbox.js";
+import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
 
 const encoder = new TextEncoder();
 let twitchMessageIdCounter = 0;
@@ -135,6 +139,24 @@ function successfulTwitchChatResponse(messageId = "sent-message-id") {
 	});
 }
 
+describe("Twitch feature commands", () => {
+	it("uses per-channel state and returns a friendly cooldown response", async () => {
+		const event = {
+			broadcaster_user_id: `counter-channel-${++twitchMessageIdCounter}`,
+			chatter_user_id: "counter-user",
+			badges: []
+		};
+		await expect(twitchCommands.counter.exec(event, env, {
+			messageId: `counter-message-${++twitchMessageIdCounter}`,
+			argsText: ""
+		})).resolves.toBe("Counter: 1");
+		await expect(twitchCommands.counter.exec(event, env, {
+			messageId: `counter-message-${++twitchMessageIdCounter}`,
+			argsText: ""
+		})).resolves.toContain("Try !counter again");
+	});
+});
+
 async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) {
 	const request = await makeSignedTwitchRequest({
 		body: JSON.stringify({
@@ -144,6 +166,7 @@ async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) 
 			},
 			event: {
 				broadcaster_user_id: broadcasterUserId,
+				chatter_user_id: "chatter-id",
 				message: { text: "!alive" }
 			}
 		})
@@ -250,6 +273,46 @@ describe("Twitch EventSub worker", () => {
 		expect(await response.text()).toBe("Invalid signature");
 	});
 
+	it("rejects a declared oversized EventSub body before reading it", async () => {
+		const request = new Request("https://example.com/twitch", {
+			method: "POST",
+			headers: {
+				"Content-Length": String(MAX_SIGNED_WEBHOOK_BODY_BYTES + 1),
+				"Twitch-Eventsub-Message-Id": "oversized-declared",
+				"Twitch-Eventsub-Message-Timestamp": new Date().toISOString(),
+				"Twitch-Eventsub-Message-Signature": `sha256=${"00".repeat(32)}`,
+				"Twitch-Eventsub-Message-Type": "notification"
+			},
+			body: "{}"
+		});
+		const textSpy = vi.spyOn(request, "text");
+
+		const response = await worker.fetch(request, eventSubEnv, createExecutionContext());
+
+		expect(response.status).toBe(413);
+		expect(await response.text()).toBe("Payload Too Large");
+		expect(textSpy).not.toHaveBeenCalled();
+	});
+
+	it("rejects the actual encoded EventSub body size before signature verification", async () => {
+		const request = new Request("https://example.com/twitch", {
+			method: "POST",
+			headers: {
+				"Content-Length": "1",
+				"Twitch-Eventsub-Message-Id": "oversized-actual",
+				"Twitch-Eventsub-Message-Timestamp": new Date().toISOString(),
+				"Twitch-Eventsub-Message-Signature": `sha256=${"00".repeat(32)}`,
+				"Twitch-Eventsub-Message-Type": "notification"
+			},
+			body: "é".repeat(Math.floor(MAX_SIGNED_WEBHOOK_BODY_BYTES / 2) + 1)
+		});
+
+		const response = await worker.fetch(request, eventSubEnv, createExecutionContext());
+
+		expect(response.status).toBe(413);
+		expect(await response.text()).toBe("Payload Too Large");
+	});
+
 	it("routes !alive and sends its reply to Twitch chat", async () => {
 		const secret = "eventsub-secret";
 		const request = await makeSignedTwitchRequest({
@@ -257,6 +320,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -304,6 +368,7 @@ describe("Twitch EventSub worker", () => {
 			},
 			event: {
 				broadcaster_user_id: broadcasterUserId,
+				chatter_user_id: "chatter-id",
 				message: { text: "!alive" }
 			}
 		});
@@ -336,12 +401,15 @@ describe("Twitch EventSub worker", () => {
 		expect(secondResponse.status).toBe(204);
 		expect(fetchMock).toHaveBeenCalledOnce();
 		await runInDurableObject(
-			twitchEventSubManagerStub(broadcasterUserId),
+			twitchEventSubInboxStub(env, broadcasterUserId),
 			async (_instance, state) => {
 				const rows = state.storage.sql.exec(
-					"SELECT message_id FROM eventsub_seen_messages"
+					"SELECT message_id, status FROM eventsub_inbox"
 				).toArray();
-				expect(rows).toEqual([{ message_id: "duplicate-notification-id" }]);
+				expect(rows).toEqual([{
+					message_id: "duplicate-notification-id",
+					status: "completed"
+				}]);
 			}
 		);
 	});
@@ -353,6 +421,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -404,6 +473,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -453,6 +523,7 @@ describe("Twitch EventSub worker", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "broadcaster-id",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			}),
@@ -627,29 +698,45 @@ describe("Twitch EventSub worker", () => {
 		});
 	});
 
-	it("acknowledges non-command chat messages without sending a reply", async () => {
+	it("acknowledges irrelevant chat messages without durable admission", async () => {
 		const secret = "eventsub-secret";
-		const request = await makeSignedTwitchRequest({
-			body: JSON.stringify({
-				subscription: { type: "channel.chat.message" },
-				event: {
-					broadcaster_user_id: "broadcaster-id",
-					message: { text: "hello" }
-				}
-			}),
-			secret
-		});
+		const broadcasterUserId = "filtered-chat-broadcaster";
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
-		const response = await worker.fetch(
-			request,
-			{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
-			createExecutionContext()
-		);
+		for (const messageText of ["hello", "!unknown"]) {
+			const request = await makeSignedTwitchRequest({
+				body: JSON.stringify({
+					subscription: {
+						type: "channel.chat.message",
+						condition: { broadcaster_user_id: broadcasterUserId }
+					},
+					event: {
+						broadcaster_user_id: broadcasterUserId,
+						message: { text: messageText }
+					}
+				}),
+				secret
+			});
+			const response = await worker.fetch(
+				request,
+				{ ...oauthEnv, TWITCH_EVENTSUB_SECRET: secret },
+				createExecutionContext()
+			);
+			expect(response.status).toBe(204);
+		}
 
-		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+		await runInDurableObject(
+			twitchEventSubInboxStub(env, broadcasterUserId),
+			async (_instance, state) => {
+				const rows = state.storage.sql.exec(
+					"SELECT COUNT(*) AS count FROM eventsub_inbox"
+				).toArray();
+				expect(rows[0].count).toBe(0);
+				expect(await state.storage.getAlarm()).toBeNull();
+			}
+		);
 	});
 });
 
@@ -757,6 +844,32 @@ describe("Twitch EventSub management", () => {
 			data: [{ id: "subscription-id", status: "webhook_callback_verification_pending" }]
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("rejects EventSub kinds that are not installed in this deployment", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const response = await worker.fetch(
+			new Request("https://example.com/twitch/eventsub/subscriptions", {
+				method: "POST",
+				headers: {
+					Authorization: "Bearer setup-token",
+					"content-type": "application/json"
+				},
+				body: JSON.stringify({
+					broadcasterUserId: "broadcaster-id",
+					kind: "twitch.stream.offline.v1"
+				})
+			}),
+			eventSubEnv,
+			createExecutionContext()
+		);
+
+		expect(response.status).toBe(422);
+		expect(await response.json()).toMatchObject({
+			code: "twitch_eventsub_definition_unsupported"
+		});
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("lists EventSub subscriptions and preserves supported filters", async () => {
@@ -878,6 +991,7 @@ describe("Twitch EventSub management", () => {
 				subscription: { type: "channel.chat.message" },
 				event: {
 					broadcaster_user_id: "shared-token-broadcaster",
+					chatter_user_id: "chatter-id",
 					message: { text: "!alive" }
 				}
 			})
@@ -968,6 +1082,125 @@ describe("Twitch EventSub management", () => {
 
 		expect(response.status).toBe(200);
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("caps EventSub reconciliation list pagination", async () => {
+		let listRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "pagination-app-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			expect(init.method).toBe("GET");
+			listRequests += 1;
+			return Response.json({
+				data: [],
+				pagination: { cursor: `page-${listRequests}` }
+			});
+		}));
+
+		await expect(ensureTwitchChatSubscription({
+			broadcasterUserId: "pagination-limit-broadcaster",
+			callbackUrl: "https://example.com/twitch"
+		}, eventSubEnv)).rejects.toMatchObject({
+			code: "twitch_eventsub_pagination_limit"
+		});
+		expect(listRequests).toBe(5);
+	});
+
+	it("stops EventSub reconciliation between requests at its time budget", async () => {
+		let nowMs = 2_100_000_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+		await storeTwitchAppToken();
+		let listRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+			expect(init.method).toBe("GET");
+			listRequests += 1;
+			nowMs += 5_000;
+			return Response.json({
+				data: [],
+				pagination: { cursor: "another-page" }
+			});
+		}));
+
+		await expect(ensureTwitchChatSubscription({
+			broadcasterUserId: "time-budget-broadcaster",
+			callbackUrl: "https://example.com/twitch"
+		}, eventSubEnv)).rejects.toMatchObject({
+			code: "twitch_eventsub_reconciliation_time_budget"
+		});
+		expect(listRequests).toBe(1);
+	});
+
+	it("caps reconciliation mutations and resumes safely on retry", async () => {
+		const broadcasterUserId = "mutation-limit-broadcaster";
+		const remainingIds = new Set(
+			Array.from({ length: 11 }, (_, index) => `stale-subscription-${index}`)
+		);
+		let deleteRequests = 0;
+		let createRequests = 0;
+		vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+			if (input === "https://id.twitch.tv/oauth2/token") {
+				return Response.json({
+					access_token: "mutation-app-token",
+					expires_in: 3600,
+					token_type: "bearer"
+				});
+			}
+			if (init.method === "GET") {
+				return Response.json({
+					data: Array.from(remainingIds, (id) => ({
+						id,
+						type: "channel.chat.message",
+						version: "1",
+						status: "enabled",
+						condition: {
+							broadcaster_user_id: broadcasterUserId,
+							user_id: "bot-user-id"
+						},
+						transport: {
+							method: "webhook",
+							callback: "https://old.example/twitch"
+						}
+					})),
+					pagination: {}
+				});
+			}
+			if (init.method === "DELETE") {
+				deleteRequests += 1;
+				remainingIds.delete(new URL(input).searchParams.get("id"));
+				return new Response(null, { status: 204 });
+			}
+			expect(init.method).toBe("POST");
+			createRequests += 1;
+			return Response.json({
+				data: [{
+					id: "replacement-subscription",
+					status: "webhook_callback_verification_pending"
+				}]
+			}, { status: 202 });
+		}));
+		const channel = {
+			broadcasterUserId,
+			callbackUrl: "https://example.com/twitch"
+		};
+
+		await expect(ensureTwitchChatSubscription(channel, eventSubEnv))
+			.rejects.toMatchObject({
+				code: "twitch_eventsub_reconciliation_mutation_limit"
+			});
+		expect(deleteRequests).toBe(10);
+		expect(remainingIds.size).toBe(1);
+		expect(createRequests).toBe(0);
+
+		await expect(ensureTwitchChatSubscription(channel, eventSubEnv))
+			.resolves.toMatchObject({ result: "created" });
+		expect(deleteRequests).toBe(11);
+		expect(remainingIds.size).toBe(0);
+		expect(createRequests).toBe(1);
 	});
 
 	it("serializes EventSub mutations for the same broadcaster", async () => {
@@ -1134,7 +1367,7 @@ describe("Twitch EventSub management", () => {
 		);
 
 		const response = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=25", {
+			new Request("https://example.com/twitch/channels/health?limit=20", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			eventSubEnv,
@@ -1173,7 +1406,7 @@ describe("Twitch EventSub management", () => {
 		expect(unauthorized.status).toBe(401);
 
 		const response = await worker.fetch(
-			new Request("https://example.com/twitch/channels/health?limit=26", {
+			new Request("https://example.com/twitch/channels/health?limit=21", {
 				headers: { Authorization: "Bearer setup-token" }
 			}),
 			eventSubEnv,
@@ -1183,6 +1416,55 @@ describe("Twitch EventSub management", () => {
 		expect(await response.json()).toMatchObject({
 			code: "twitch_channel_registry_error"
 		});
+	});
+
+	it("bounds channel health fan-out concurrency", async () => {
+		let activeComponentRequests = 0;
+		let maxActiveComponentRequests = 0;
+		let componentRequests = 0;
+		const componentFetch = async (url) => {
+			componentRequests += 1;
+			activeComponentRequests += 1;
+			maxActiveComponentRequests = Math.max(
+				maxActiveComponentRequests,
+				activeComponentRequests
+			);
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			activeComponentRequests -= 1;
+			return url.endsWith("channel-auth/status")
+				? Response.json({ authorized: true })
+				: Response.json({ configured: true, channel: { lastResult: "existing" } });
+		};
+		const channels = Array.from({ length: 10 }, (_, index) => ({
+			broadcasterUserId: `bounded-health-${index}`,
+			authorizationMode: "broadcaster_oauth",
+			login: `bounded-health-${index}`
+		}));
+		const namespace = (fetch) => ({
+			idFromName: (name) => name,
+			get: () => ({ fetch })
+		});
+		const response = await handleTwitchChannelHealth(
+			new Request("https://example.com/twitch/channels/health?limit=20"),
+			{
+				TWITCH_CHANNEL_REGISTRY: namespace(async () => Response.json({
+					total: channels.length,
+					channels,
+					nextCursor: null
+				})),
+				TWITCH_EVENTSUB_MANAGER: namespace(componentFetch),
+				TWITCH_CHANNEL_AUTH: namespace(componentFetch)
+			}
+		);
+
+		expect(response.status).toBe(200);
+		const result = await response.json();
+		expect(result.count).toBe(channels.length);
+		expect(result.channels.map((channel) => channel.broadcasterUserId)).toEqual(
+			channels.map((channel) => channel.broadcasterUserId)
+		);
+		expect(componentRequests).toBe(20);
+		expect(maxActiveComponentRequests).toBe(8);
 	});
 
 	it("paginates the central channel registry with opaque membership metadata", async () => {
@@ -1325,15 +1607,19 @@ describe("Twitch EventSub management", () => {
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
 		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		let status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			configured: false,
+			channel: {
 				broadcasterUserId,
 				authorizationMode: "broadcaster_oauth",
 				enabled: false,
 				lastResult: "deconfigured",
 				removedSubscriptions: 1
-			});
-			expect(await state.storage.getAlarm()).toBeNull();
+			},
+			alarmAtMs: null
 		});
 
 		const recoveryResponse = await stub.fetch("https://twitch-eventsub-manager/recover", {
@@ -1348,9 +1634,12 @@ describe("Twitch EventSub management", () => {
 		});
 		expect(recoveryResponse.status).toBe(202);
 		expect(await recoveryResponse.json()).toEqual({ queued: false });
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-			expect(await state.storage.getAlarm()).toBeNull();
+		status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: null,
+			alarmAtMs: null
 		});
 	});
 
@@ -1397,18 +1686,40 @@ describe("Twitch EventSub management", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		const status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			configured: true,
+			channel: {
 				broadcasterUserId,
 				lastResult: "created",
 				lastSubscriptionId: "recreated-subscription-id",
+				lastSubscriptions: [
+					{
+						kind: "twitch.chat.message.v1",
+						result: "created",
+						subscriptionId: "recreated-subscription-id"
+					},
+					{
+						kind: "twitch.stream.online.v1",
+						result: "created",
+						subscriptionId: "recreated-subscription-id"
+					}
+				],
 				consecutiveFailures: 0
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
+		expect(status.alarmAtMs).toBeGreaterThanOrEqual(
+			status.channel.lastReconciledAtMs + 55 * 60 * 1000
+		);
+		expect(status.alarmAtMs).toBeLessThanOrEqual(
+			status.channel.lastReconciledAtMs + 60 * 60 * 1000
+		);
 		const registryResponse = await twitchChannelRegistryStub().fetch(
-			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=25"
+			"https://twitch-channel-registry/channels?cursor=missing-channel-h&limit=20"
 		);
 		const registryPage = await registryResponse.json();
 		expect(registryPage.channels).toContainEqual(expect.objectContaining({
@@ -1464,16 +1775,19 @@ describe("Twitch EventSub recovery", () => {
 		expect(duplicateResponse.status).toBe(204);
 		expect(warnSpy).toHaveBeenCalledOnce();
 		const stub = twitchEventSubManagerStub();
-		await runInDurableObject(stub, async (instance, state) => {
+		await runInDurableObject(stub, async (instance) => {
 			instance.env = eventSubEnv;
-			expect(await state.storage.get("pendingRecovery")).toMatchObject({
-				broadcasterUserId: "broadcaster-id",
-				reason: "notification_failures_exceeded",
-				sourceSubscriptionId: "revoked-subscription-id",
-				attempts: 0
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
 		});
+		let status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: {
+				reason: "notification_failures_exceeded",
+				attempts: 0
+			}
+		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 
 		const fetchMock = vi.fn(async (input, init) => {
 			if (input === "https://id.twitch.tv/oauth2/token") {
@@ -1498,16 +1812,19 @@ describe("Twitch EventSub recovery", () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-			expect(await state.storage.get("channelConfig")).toMatchObject({
+		expect(fetchMock).toHaveBeenCalledTimes(4);
+		status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: null,
+			channel: {
 				broadcasterUserId: "broadcaster-id",
 				lastResult: "created",
 				lastSubscriptionId: "replacement-subscription-id"
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 	});
 
 	it("retries EventSub recovery with an alarm after a temporary failure", async () => {
@@ -1539,12 +1856,15 @@ describe("Twitch EventSub recovery", () => {
 		vi.spyOn(console, "error").mockImplementation(() => {});
 
 		expect(await runDurableObjectAlarm(stub)).toBe(true);
-		await runInDurableObject(stub, async (_instance, state) => {
-			expect(await state.storage.get("pendingRecovery")).toMatchObject({
+		const status = await (await stub.fetch(
+			"https://twitch-eventsub-manager/status"
+		)).json();
+		expect(status).toMatchObject({
+			recovery: {
 				attempts: 1
-			});
-			expect(await state.storage.getAlarm()).toBeGreaterThan(Date.now());
+			}
 		});
+		expect(status.alarmAtMs).toBeGreaterThan(Date.now());
 	});
 
 	it("does not recreate subscriptions that require reauthorization", async () => {
@@ -1597,27 +1917,34 @@ describe("Twitch EventSub recovery", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).not.toHaveBeenCalled();
+		const authorizationStatus = await (await channelAuthStub.fetch(
+			"https://twitch-channel-auth/status"
+		)).json();
+		expect(authorizationStatus).toMatchObject({
+			authorized: false,
+			authorization: {
+				status: "reauthorization_required",
+				broadcasterUserId,
+				reason: "eventsub_authorization_revoked"
+			}
+		});
 		await runInDurableObject(channelAuthStub, async (_instance, state) => {
 			const authorization = await state.storage.get("channelAuthorization");
-			expect(authorization).toMatchObject({
-				status: "reauthorization_required",
-				userId: broadcasterUserId,
-				reason: "eventsub_authorization_revoked"
-			});
 			expect(authorization.accessToken).toBeUndefined();
 			expect(authorization.refreshToken).toBeUndefined();
 		});
-		await runInDurableObject(
-			twitchEventSubManagerStub(broadcasterUserId),
-			async (_instance, state) => {
-				expect(await state.storage.get("pendingRecovery")).toBeUndefined();
-				expect(await state.storage.get("channelConfig")).toMatchObject({
-					broadcasterUserId,
-					enabled: false,
-					lastResult: "deconfiguration_pending"
-				});
+		const eventSubStatus = await (await twitchEventSubManagerStub(
+			broadcasterUserId
+		).fetch("https://twitch-eventsub-manager/status")).json();
+		expect(eventSubStatus).toMatchObject({
+			recovery: null,
+			configured: false,
+			channel: {
+				broadcasterUserId,
+				enabled: false,
+				lastResult: "deconfiguration_pending"
 			}
-		);
+		});
 	});
 
 });

@@ -1,15 +1,14 @@
 import { logError } from "../../common.js";
 import { registerTwitchChannel } from "./channel-registry.js";
 import {
-	ensureTwitchChatSubscription,
-	removeTwitchChatSubscriptions
+	ensureTwitchEventSubSubscriptions,
+	removeTwitchEventSubSubscriptions
 } from "./eventsub.js";
 import {
 	noStoreJson,
 	RECOVERABLE_EVENTSUB_STATUS,
 	TwitchEventSubError,
-	validateChannelConfig,
-	validateEventSubMessageId
+	validateChannelConfig
 } from "./eventsub-common.js";
 
 const RECOVERY_KEY = "pendingRecovery";
@@ -17,25 +16,13 @@ const CHANNEL_CONFIG_KEY = "channelConfig";
 const RECOVERY_INITIAL_DELAY_MS = 1000;
 const RECONCILIATION_INITIAL_DELAY_MS = 60 * 1000;
 const RECONCILIATION_INTERVAL_MS = 55 * 60 * 1000;
-const EVENTSUB_MESSAGE_TTL_MS = 60 * 60 * 1000;
+const RECONCILIATION_JITTER_MS = 5 * 60 * 1000;
 const RECOVERY_RETRY_DELAYS_MS = Object.freeze([
 	60 * 1000,
 	5 * 60 * 1000,
 	15 * 60 * 1000,
 	60 * 60 * 1000
 ]);
-
-function initializeEventSubManagerTables(state) {
-	state.storage.sql.exec(`
-		CREATE TABLE IF NOT EXISTS eventsub_seen_messages (
-			message_id TEXT PRIMARY KEY,
-			seen_at_ms INTEGER NOT NULL,
-			expires_at_ms INTEGER NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS eventsub_seen_messages_expiry
-			ON eventsub_seen_messages (expires_at_ms);
-	`);
-}
 
 function validateRecovery(recovery) {
 	const channel = validateChannelConfig(recovery);
@@ -55,41 +42,17 @@ function validateRecovery(recovery) {
 	};
 }
 
-export class TwitchEventSubManager {
-	constructor(state, env) {
+function nextReconciliationDelayMs() {
+	return RECONCILIATION_INTERVAL_MS + Math.floor(
+		Math.random() * (RECONCILIATION_JITTER_MS + 1)
+	);
+}
+
+export class TwitchEventSubManagerBackend {
+	constructor(state, env, registry) {
 		this.state = state;
 		this.env = env;
-		initializeEventSubManagerTables(state);
-	}
-
-	claimMessage(messageId) {
-		const validated = validateEventSubMessageId(messageId);
-		const nowMs = Date.now();
-		return this.state.storage.transactionSync(() => {
-			this.pruneSeenMessages(nowMs);
-			const existing = this.state.storage.sql.exec(
-				"SELECT 1 AS seen FROM eventsub_seen_messages WHERE message_id = ?",
-				validated
-			).toArray()[0];
-			if (existing) return false;
-
-			this.state.storage.sql.exec(
-				`INSERT INTO eventsub_seen_messages
-					(message_id, seen_at_ms, expires_at_ms)
-				 VALUES (?, ?, ?)`,
-				validated,
-				nowMs,
-				nowMs + EVENTSUB_MESSAGE_TTL_MS
-			);
-			return true;
-		});
-	}
-
-	pruneSeenMessages(nowMs = Date.now()) {
-		this.state.storage.sql.exec(
-			"DELETE FROM eventsub_seen_messages WHERE expires_at_ms <= ?",
-			nowMs
-		);
+		this.subscriptionKinds = registry.kinds;
 	}
 
 	async configureChannel(channel) {
@@ -168,7 +131,6 @@ export class TwitchEventSubManager {
 	}
 
 	async alarm() {
-		this.pruneSeenMessages();
 		const [recovery, channel] = await Promise.all([
 			this.state.storage.get(RECOVERY_KEY),
 			this.state.storage.get(CHANNEL_CONFIG_KEY)
@@ -178,7 +140,11 @@ export class TwitchEventSubManager {
 
 		try {
 			if (channel?.enabled === false) {
-				const result = await removeTwitchChatSubscriptions(channel, this.env);
+				const result = await removeTwitchEventSubSubscriptions(
+					channel,
+					this.env,
+					this.subscriptionKinds
+				);
 				const nowMs = Date.now();
 				await this.state.storage.put(CHANNEL_CONFIG_KEY, {
 					...channel,
@@ -193,7 +159,11 @@ export class TwitchEventSubManager {
 				return;
 			}
 
-			const result = await ensureTwitchChatSubscription(target, this.env);
+			const result = await ensureTwitchEventSubSubscriptions(
+				target,
+				this.env,
+				this.subscriptionKinds
+			);
 			await registerTwitchChannel(this.env, target);
 			const nowMs = Date.now();
 			await this.state.storage.put(CHANNEL_CONFIG_KEY, {
@@ -204,6 +174,7 @@ export class TwitchEventSubManager {
 				lastResult: result.result,
 				lastSubscriptionId: result.subscriptionId,
 				lastSubscriptionStatus: result.status,
+				lastSubscriptions: result.subscriptions,
 				consecutiveFailures: 0
 			});
 			if (recovery) {
@@ -217,7 +188,7 @@ export class TwitchEventSubManager {
 					result: result.result
 				}));
 			}
-			await this.state.storage.setAlarm(nowMs + RECONCILIATION_INTERVAL_MS);
+			await this.state.storage.setAlarm(nowMs + nextReconciliationDelayMs());
 		} catch (error) {
 			const attempts = recovery
 				? (recovery.attempts ?? 0) + 1
@@ -255,10 +226,6 @@ export class TwitchEventSubManager {
 	async fetch(request) {
 		const url = new URL(request.url);
 		try {
-			if (request.method === "POST" && url.pathname === "/events/claim") {
-				const input = await request.json();
-				return noStoreJson({ claimed: this.claimMessage(input?.messageId) });
-			}
 			if (request.method === "POST" && url.pathname === "/recover") {
 				const queued = await this.queueRecovery(await request.json());
 				return noStoreJson({ queued }, 202);
@@ -314,4 +281,3 @@ export class TwitchEventSubManager {
 		}
 	}
 }
-

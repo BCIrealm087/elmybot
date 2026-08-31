@@ -1,6 +1,11 @@
-export const commands = Object.freeze({
-	"alive": Object.freeze({
-		description: "Replies if alive.",
-		exec: () => "I'm here!!1"
-	})
-});
+import { featureRegistry } from "../../features/index.js";
+import { mergeCommandDefinitions } from "../../framework/internal.js";
+import { compileTwitchFeatureCommands } from "./feature-commands.js";
+
+export const commands = mergeCommandDefinitions(
+	"twitch",
+	compileTwitchFeatureCommands(
+		featureRegistry.commands.twitch,
+		featureRegistry.actions
+	)
+);
