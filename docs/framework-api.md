@@ -53,6 +53,9 @@ Actions may explicitly request the controlled `authorization`, `config`,
 `state`, and `random` context services. `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
+The `state` service includes the additive `boundedCounter(name, subject,
+options)` API. It safely derives storage keys for arbitrary subjects and makes
+each saturating read, increment, decrement, or reset one atomic operation.
 
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
@@ -103,6 +106,8 @@ The following are backward-compatible within v1:
 - adding an optional manifest or helper option with a stable default;
 - adding a new explicitly requested context service, schema helper, platform
   adapter, or effect factory;
+- adding a method to an existing frozen context service without changing its
+  existing methods;
 - accepting additional input that existing definitions previously rejected;
   and
 - improving error text while preserving documented error codes and fields.

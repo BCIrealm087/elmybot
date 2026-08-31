@@ -24,36 +24,8 @@ function gameIdentity(game) {
   return displayName(game).normalize("NFKC").toLowerCase();
 }
 
-function gameStateKey(game) {
-  const identity = gameIdentity(game);
-  const readable = identity
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 40) || "game";
-  let hash = 0x811c9dc5;
-  for (const character of identity) {
-    hash ^= character.codePointAt(0);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `game_${readable}_${(hash >>> 0).toString(36)}`;
-}
-
 function countMessage(game, count) {
   return `${displayName(game)} deaths: ${count}`;
-}
-
-async function currentCount(ctx, key) {
-  const value = await ctx.state.get(key);
-  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
-}
-
-async function decrementCount(ctx, key) {
-  const value = await ctx.state.increment(key, -1);
-  if (value >= 0) return value;
-  await ctx.state.increment(key, 1);
-  return 0;
 }
 
 export const feature = defineFeature({
@@ -71,7 +43,7 @@ export const feature = defineFeature({
       }),
       uses: { services: ["authorization", "state"] },
       async execute(ctx, { game, operation }) {
-        const key = gameStateKey(game);
+        const deaths = ctx.state.boundedCounter("game", gameIdentity(game));
         if (
           operation !== "show" &&
           !await ctx.authorization.allows(access.moderators)
@@ -84,14 +56,13 @@ export const feature = defineFeature({
 
         let count;
         if (operation === "plus") {
-          count = await ctx.state.increment(key);
+          count = await deaths.increment();
         } else if (operation === "minus") {
-          count = await decrementCount(ctx, key);
+          count = await deaths.decrement();
         } else if (operation === "reset") {
-          await ctx.state.set(key, 0);
-          count = 0;
+          count = await deaths.reset();
         } else {
-          count = await currentCount(ctx, key);
+          count = await deaths.get();
         }
         return {
           output: { message: countMessage(game, count) },

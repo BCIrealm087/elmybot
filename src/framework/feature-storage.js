@@ -7,6 +7,7 @@ const MAX_FEATURE_VALUE_BYTES = 16 * 1024;
 const MAX_FEATURE_VALUE_DEPTH = 20;
 const MAX_VALUES_PER_NAMESPACE = 100;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
+const MAX_COUNTER_SUBJECT_LENGTH = 300;
 const MAX_COOLDOWN_ROWS = 10_000;
 const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 
@@ -232,6 +233,127 @@ function incrementState(state, input) {
   });
 }
 
+function requireBoundedCounterInput(input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const name = requireKey(input?.name);
+  const subject = input?.subject;
+  if (
+    typeof subject !== "string" ||
+    subject.length === 0 ||
+    subject.length > MAX_COUNTER_SUBJECT_LENGTH
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter subjects must contain between 1 and ` +
+      `${MAX_COUNTER_SUBJECT_LENGTH} characters.`
+    );
+  }
+  const min = input?.min ?? 0;
+  const max = input?.max ?? Number.MAX_SAFE_INTEGER;
+  const initial = input?.initial ?? min;
+  if (
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    !Number.isSafeInteger(initial) ||
+    min > max ||
+    initial < min ||
+    initial > max
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "Bounded counter min, max, and initial values must be safe integers with " +
+      "min <= initial <= max."
+    );
+  }
+  const operation = input?.operation;
+  if (!["get", "increment", "decrement", "reset"].includes(operation)) {
+    throw new FeatureStorageUserFacingError("The bounded counter operation is invalid.");
+  }
+  const amount = input?.amount;
+  if (
+    ["increment", "decrement"].includes(operation) &&
+    (!Number.isSafeInteger(amount) || amount < 1 || amount > MAX_INCREMENT_AMOUNT)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter amounts must be integers between 1 and ` +
+      `${MAX_INCREMENT_AMOUNT}.`
+    );
+  }
+  return { featureId, name, subject, min, max, initial, operation, amount };
+}
+
+async function boundedCounterKey(name, subject) {
+  const payload = new TextEncoder().encode(JSON.stringify([name, subject]));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+  const hexadecimal = Array.from(
+    digest,
+    (value) => value.toString(16).padStart(2, "0")
+  ).join("");
+  return `bc_${hexadecimal.slice(0, 60)}`;
+}
+
+async function boundedCounterState(state, input) {
+  const descriptor = requireBoundedCounterInput(input);
+  const key = await boundedCounterKey(descriptor.name, descriptor.subject);
+  return state.storage.transactionSync(() => {
+    const existing = valueRow(
+      state.storage.sql,
+      "state",
+      descriptor.featureId,
+      key
+    );
+    const current = existing
+      ? JSON.parse(existing.value_json)
+      : descriptor.initial;
+    if (
+      !Number.isSafeInteger(current) ||
+      current < descriptor.min ||
+      current > descriptor.max
+    ) {
+      throw new FeatureStorageUserFacingError(
+        "The selected state value is not a valid bounded counter.",
+        409
+      );
+    }
+    if (descriptor.operation === "get") return { value: current };
+
+    let value = descriptor.initial;
+    if (descriptor.operation !== "reset") {
+      const direction = descriptor.operation === "increment" ? 1n : -1n;
+      const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
+      value = Number(
+        candidate < BigInt(descriptor.min)
+          ? BigInt(descriptor.min)
+          : candidate > BigInt(descriptor.max)
+            ? BigInt(descriptor.max)
+            : candidate
+      );
+    }
+    if (!existing && value === descriptor.initial) return { value };
+    if (!existing && namespaceAtCapacity(
+      state.storage.sql,
+      "state",
+      descriptor.featureId
+    )) {
+      throw new FeatureStorageUserFacingError(
+        `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} state values.`,
+        409
+      );
+    }
+    state.storage.sql.exec(
+      `INSERT INTO framework_feature_values
+        (value_kind, feature_id, value_key, value_json, updated_at_ms)
+       VALUES ('state', ?, ?, ?, ?)
+       ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at_ms = excluded.updated_at_ms`,
+      descriptor.featureId,
+      key,
+      JSON.stringify(value),
+      Date.now()
+    );
+    return { value };
+  });
+}
+
 function pruneExpiredCooldowns(sql, nowMs) {
   sql.exec(
     `DELETE FROM framework_feature_cooldowns
@@ -320,6 +442,8 @@ export async function handleFeatureStorageRequest(state, request, pathname) {
       return deleteValue(state, "state", input);
     case "state/increment":
       return incrementState(state, input);
+    case "state/bounded-counter":
+      return await boundedCounterState(state, input);
     case "cooldown/claim":
       return claimCooldown(state, input);
     default:

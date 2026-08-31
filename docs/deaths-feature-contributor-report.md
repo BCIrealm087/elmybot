@@ -60,18 +60,19 @@ the process. The scaffold output also stated the remaining installation steps.
 ### 4. Model the shared behavior and storage
 
 The feature maps one Discord command and one Twitch command to one semantic
-action. The action declares only controlled framework services. Each normalized
-game name maps to a bounded state key, and state remains isolated by feature ID
-and origin group. Atomic increment handles `plus`; `reset` uses `set`; `minus`
-uses an atomic decrement and compensates if it would cross below zero.
+action. In the initial implementation, each normalized game name mapped to a
+hand-derived state key. Atomic increment handled `plus`; `reset` used `set`;
+and `minus` used an atomic decrement followed by a compensating increment if it
+crossed below zero.
 
 **Assessment:** mostly appropriate. The state API makes the ordinary read,
 increment, and reset cases pleasantly small and keeps persistence internals out
 of the feature. Deriving a safe key from arbitrary game text is left entirely
 to the contributor, and enforcing a non-negative decrement requires knowledge
-that API v1 has no transaction or compare-and-set operation. That part is
-moderately cumbersome and deserves a cookbook pattern or bounded counter
-helper in the future.
+that API v1 has no transaction or compare-and-set operation. That part was
+moderately cumbersome and identified a bounded-counter helper as the most
+valuable next framework improvement. The follow-up below implements that
+recommendation.
 
 ### 5. Resolve mixed public/moderator authorization
 
@@ -197,3 +198,57 @@ package. That is a positive result for the architecture, but also a useful
 warning: the ease of the happy-path scaffold can conceal substantial framework
 work when a command combines conditional permissions or richer Twitch text
 parsing.
+
+## Follow-up: bounded counters
+
+The first recommended improvement was implemented as an additive Framework API
+v1 method:
+
+```js
+const deaths = ctx.state.boundedCounter("game", normalizedGameName);
+
+await deaths.get();
+await deaths.increment();
+await deaths.decrement();
+await deaths.reset();
+```
+
+The contributor now chooses only a stable counter name and the feature-domain
+identity of the subject. The framework accepts punctuation and Unicode, hashes
+the name/subject pair into a collision-resistant private key, applies inclusive
+safe-integer bounds, and performs each saturating mutation in one SQLite
+transaction. The default floor and initial value are zero.
+
+The `fun.deaths` feature was migrated to this API. Its slugging, hashing,
+invalid-value repair, and decrement compensation code disappeared; the command
+action now reads almost exactly like its product requirements. A direct Durable
+Object test starts at three, performs ten concurrent decrements, and verifies
+that the stored result is zero. Separate contract coverage checks custom bounds,
+reset behavior, Unicode subjects, subject isolation, and author-facing input
+validation.
+
+**Assessment:** this materially improves the hobby-contributor path. A common
+per-name counter no longer requires storage-key design or concurrency reasoning,
+and safe behavior is the default. Authors still need to decide whether names
+such as `Dark Souls` and `dark souls` represent the same subject, which is a
+legitimate feature-domain choice rather than framework plumbing. The helper is
+slightly more specialized than raw state, but the four-method handle is small
+enough to learn from one example and preserves the lower-level API for other
+state shapes.
+
+### Follow-up verification record
+
+A clean locked dependency installation completed with `npm ci`. The focused
+framework, Durable Object, and feature run passed 3 files and 31 tests. After
+the documentation and contract updates, the final local checks passed:
+
+- `npm test -- --run`: 21 files and 222 tests;
+- `npm run lint`: ESLint, public-boundary, workspace, and generated-catalog
+  checks; and
+- `node --check` for every tracked JavaScript and MJS source file.
+
+**Assessment:** adding the helper itself touches context, production storage,
+the in-memory test runtime, and the normative API documentation, so this is
+framework-maintainer work rather than an ordinary hobby feature change. That
+complexity is paid once: a future command author uses one handle and can verify
+it entirely through the ordinary feature test runtime.

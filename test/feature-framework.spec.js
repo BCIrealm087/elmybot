@@ -373,10 +373,16 @@ describe("Command and feature framework", () => {
         const label = await ctx.config.get("label");
         await ctx.state.set("last_roll", 4);
         const total = await ctx.state.increment("total", 2);
+        const streak = ctx.state.boundedCounter("streak", "Dark Souls", {
+          max: 10
+        });
+        const boundedTotal = await streak.increment(2);
         return {
           output: {
             label,
             total,
+            boundedTotal,
+            counterFrozen: Object.isFrozen(streak),
             roll: ctx.random.integer({ min: 4, max: 4 })
           },
           effects: []
@@ -389,6 +395,7 @@ describe("Command and feature framework", () => {
     const configGet = vi.fn(async () => "Score");
     const stateSet = vi.fn(async () => undefined);
     const stateIncrement = vi.fn(async () => 2);
+    const stateBoundedCounter = vi.fn(async () => 2);
     const claimFeatureCooldown = vi.fn(async () => ({
       allowed: true,
       retryAfterSeconds: 0
@@ -409,7 +416,8 @@ describe("Command and feature framework", () => {
           get: vi.fn(),
           set: stateSet,
           delete: vi.fn(),
-          increment: stateIncrement
+          increment: stateIncrement,
+          boundedCounter: stateBoundedCounter
         }
       },
       random: { integer: ({ min }) => min },
@@ -421,11 +429,29 @@ describe("Command and feature framework", () => {
       input,
       runtime
     )).resolves.toMatchObject({
-      output: { label: "Score", total: 2, roll: 4 }
+      output: {
+        label: "Score",
+        total: 2,
+        boundedTotal: 2,
+        counterFrozen: true,
+        roll: 4
+      }
     });
     expect(configGet).toHaveBeenCalledWith("test.feature", "label");
     expect(stateSet).toHaveBeenCalledWith("test.feature", "last_roll", 4);
     expect(stateIncrement).toHaveBeenCalledWith("test.feature", "total", 2);
+    expect(stateBoundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      {
+        name: "streak",
+        subject: "Dark Souls",
+        min: 0,
+        max: 10,
+        initial: 0
+      },
+      "increment",
+      2
+    );
     expect(claimFeatureCooldown).toHaveBeenCalledWith({
       featureId: "test.feature",
       actionKind: statefulAction.kind,
@@ -446,6 +472,35 @@ describe("Command and feature framework", () => {
       status: 429,
       retryAfterSeconds: 12
     });
+  });
+
+  it("rejects invalid bounded-counter bounds at the author API", async () => {
+    const invalidCounterAction = defineAction({
+      kind: "test.counter.invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        await ctx.state.boundedCounter("score", "game", { min: 1, max: 0 }).get();
+        return { output: {}, effects: [] };
+      }
+    });
+    const registry = createFeatureRegistry([
+      feature({ actions: [invalidCounterAction] })
+    ], { availableServices: ["state"] });
+    const invocation = createCommandInvocation({
+      kind: invalidCounterAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:invalid-counter"
+    });
+
+    await expect(executeAction(
+      createActionRegistry(registry.actions),
+      invocation,
+      { featureServices: { state: { boundedCounter: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_counter_bounds_invalid" });
   });
 
   it("delegates declared conditional authorization to the platform policy", async () => {

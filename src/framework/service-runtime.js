@@ -110,6 +110,15 @@ export function createFeatureServiceRuntime(env, invocation) {
             input(featureId, { key, amount })
           );
           return result.value;
+        },
+        async boundedCounter(featureId, descriptor, operation, amount) {
+          const result = await storageRequest(
+            env,
+            invocation,
+            "state/bounded-counter",
+            input(featureId, { ...descriptor, operation, amount })
+          );
+          return result.value;
         }
       })
     }),

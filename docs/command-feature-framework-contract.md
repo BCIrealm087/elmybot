@@ -324,7 +324,17 @@ The action context has this exact API v1 surface:
     get(key): Promise<JSONValue | null>,
     set(key, value): Promise<void>,
     delete(key): Promise<boolean>,
-    increment(key, amount = 1): Promise<number>
+    increment(key, amount = 1): Promise<number>,
+    boundedCounter(name, subject, {
+      min = 0,
+      max = Number.MAX_SAFE_INTEGER,
+      initial = min
+    } = {}): {
+      get(): Promise<number>,
+      increment(amount = 1): Promise<number>,
+      decrement(amount = 1): Promise<number>,
+      reset(): Promise<number>
+    }
   },
   log: {
     debug(event, metadata = {}): void,
@@ -359,8 +369,17 @@ Rules:
   modes with different access requirements.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
   them by feature ID and origin group.
+- `state.boundedCounter()` accepts a normal feature key as its name and an
+  arbitrary non-empty subject of at most 300 characters. Storage maps the pair
+  to a collision-resistant internal key; subject normalization remains an
+  explicit feature-domain decision.
+- Bounded-counter bounds and the initial value are safe inclusive integers with
+  `min <= initial <= max`. Positive increment and decrement amounts are at most
+  1,000,000. Updates saturate at the selected bound, `reset()` returns to the
+  initial value, and the returned counter handle is frozen.
 - Each state operation is atomic by itself. API v1 does not promise a
-  multi-operation transaction.
+  multi-operation transaction. One bounded-counter mutation, including its
+  floor or ceiling check, is one atomic operation.
 - Log metadata is bounded, JSON-safe, and automatically receives feature,
   action, platform, group, and correlation fields. Secrets and complete raw
   payloads MUST NOT be logged.

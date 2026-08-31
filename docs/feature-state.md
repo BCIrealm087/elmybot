@@ -26,8 +26,35 @@ defineAction({
 
 `ctx.config` is read-only feature code input controlled by operators.
 `ctx.state` is feature-owned data and provides atomic `get`, `set`, `delete`,
-and integer `increment` operations. Each operation is atomic independently;
-API v1 does not expose a multi-operation transaction.
+and integer `increment` operations. It also provides a per-subject bounded
+counter when a feature needs a floor or ceiling without composing multiple
+storage calls:
+
+```js
+const deaths = ctx.state.boundedCounter("deaths", normalizedGameName);
+
+await deaths.get();       // absent counters start at zero
+await deaths.increment(); // add one
+await deaths.decrement(); // subtract one, stopping at zero
+await deaths.reset();     // return to zero
+```
+
+`boundedCounter(name, subject, options)` accepts an ordinary storage-safe name
+and an arbitrary non-empty subject up to 300 characters. The runtime maps the
+pair to a collision-resistant internal key, so authors do not slug or hash user
+text. Subject identity is exact: case folding, Unicode normalization, and
+whitespace normalization are domain choices the feature should make before
+constructing the counter.
+
+Options are `{ min, max, initial }`. They default to zero,
+`Number.MAX_SAFE_INTEGER`, and `min`, respectively. Bounds and the initial value
+must be safe integers satisfying `min <= initial <= max`. Increment and
+decrement amounts are positive integers up to 1,000,000; operations saturate at
+the applicable inclusive bound. `reset()` returns the new initial value.
+
+Each state operation is atomic independently; API v1 does not expose a general
+multi-operation transaction. A bounded-counter mutation and its bound check are
+one storage operation, so concurrent decrements cannot cross the floor.
 
 Using an undeclared service fails immediately. Installing an action that
 requires a service absent from the composition root fails at startup.
@@ -52,6 +79,10 @@ Per group and feature:
 - each value is JSON-safe, no deeper than 20 levels, and at most 16 KiB;
 - one increment is limited to an absolute value of 1,000,000; and
 - incremented values must remain safe integers.
+
+Bounded counters occupy the state namespace only after a mutation changes the
+initial value. A missing `get()`, no-op decrement at the floor, or no-op reset
+does not consume one of the 100 state entries.
 
 The existing `GroupConfig` Durable Object owns these SQLite tables. Legacy
 Discord role configuration remains in its existing storage and public listing;

@@ -416,6 +416,8 @@ so those representations cannot silently drift.
    Discord commands manage installed-feature configuration. The shared
    `/counter` and `!counter` proof uses a configurable label, atomic increment,
    and actor cooldown without accessing Worker bindings or storage layouts.
+   The additive bounded-counter API maps arbitrary subjects to safe internal
+   keys and applies each floor/ceiling check in the same atomic mutation.
 8. **Complete the test kit, scaffold, and contributor guide — completed.** The
    deployment-free test runtime composes real feature contracts while modeling
    actors, authorization, routes, effects, events, schedules, stored-plan

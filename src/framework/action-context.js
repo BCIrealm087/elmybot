@@ -159,6 +159,79 @@ function requireFeatureKey(key) {
   return key;
 }
 
+function requireCounterSubject(subject) {
+  if (typeof subject !== "string" || subject.length === 0 || subject.length > 300) {
+    throw new FeatureContextError(
+      "Bounded counter subjects must contain between 1 and 300 characters.",
+      { code: "feature_counter_subject_invalid" }
+    );
+  }
+  return subject;
+}
+
+function boundedCounterDescriptor(name, subject, options = {}) {
+  if (
+    typeof options !== "object" ||
+    options === null ||
+    Array.isArray(options)
+  ) {
+    throw new FeatureContextError("Bounded counter options must be an object.", {
+      code: "feature_counter_bounds_invalid"
+    });
+  }
+  const min = options.min ?? 0;
+  const max = options.max ?? Number.MAX_SAFE_INTEGER;
+  const initial = options.initial ?? min;
+  if (
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    !Number.isSafeInteger(initial) ||
+    min > max ||
+    initial < min ||
+    initial > max
+  ) {
+    throw new FeatureContextError(
+      "Bounded counter min, max, and initial values must be safe integers with " +
+      "min <= initial <= max.",
+      { code: "feature_counter_bounds_invalid" }
+    );
+  }
+  return Object.freeze({
+    name: requireFeatureKey(name),
+    subject: requireCounterSubject(subject),
+    min,
+    max,
+    initial
+  });
+}
+
+function requireCounterAmount(amount) {
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1_000_000) {
+    throw new FeatureContextError(
+      "Bounded counter amounts must be integers between 1 and 1000000.",
+      { code: "feature_counter_amount_invalid" }
+    );
+  }
+  return amount;
+}
+
+function boundedCounter(action, runtimeContext, name, subject, options) {
+  requireDeclaredService(action, "state");
+  const descriptor = boundedCounterDescriptor(name, subject, options);
+  const run = (operation, amount) =>
+    serviceMethod(action, runtimeContext, "state", "boundedCounter")(
+      descriptor,
+      operation,
+      amount
+    );
+  return Object.freeze({
+    get: () => run("get"),
+    increment: (amount = 1) => run("increment", requireCounterAmount(amount)),
+    decrement: (amount = 1) => run("decrement", requireCounterAmount(amount)),
+    reset: () => run("reset")
+  });
+}
+
 function requireDeclaredService(action, service) {
   if (!action.uses.services.includes(service)) {
     throw new FeatureContextError(
@@ -298,7 +371,14 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         serviceMethod(action, runtimeContext, "state", "increment")(
           requireFeatureKey(key),
           amount
-        )
+        ),
+      boundedCounter: (name, subject, options) => boundedCounter(
+        action,
+        runtimeContext,
+        name,
+        subject,
+        options
+      )
     }),
     log: logger(runtimeContext, action, invocation)
   });

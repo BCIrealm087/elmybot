@@ -432,6 +432,19 @@ actor.
 See [`feature-state.md`](feature-state.md) for production limits and operator
 configuration commands.
 
+When a counter belongs to arbitrary user text or must never cross a floor or
+ceiling, use the bounded-counter handle instead of deriving a storage key or
+combining `get()` with `increment()`:
+
+```js
+const deaths = ctx.state.boundedCounter("deaths", normalizedGameName);
+const value = await deaths.decrement(); // atomically stops at zero
+```
+
+The framework safely maps the subject to an internal key. Normalize subject
+identity in the feature only when the domain requires it—for example, if game
+names should be case-insensitive.
+
 ## Cookbook 7: conditionally protected command modes
 
 Keep the action public when everyone may read but only moderators may mutate.
@@ -457,9 +470,10 @@ defineAction({
         effects: []
       };
     }
+    const score = ctx.state.boundedCounter("score", "shared");
     const value = operation === "plus"
-      ? await ctx.state.increment("value")
-      : await ctx.state.get("value") ?? 0;
+      ? await score.increment()
+      : await score.get();
     return { output: { message: `Score: ${value}` }, effects: [] };
   }
 });

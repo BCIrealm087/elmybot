@@ -142,6 +142,77 @@ describe('Platform-independent worker behavior', () => {
       key: 'concurrent',
     })).data).toEqual({ value: 10 });
 
+    const counter = {
+      featureId: 'test.one',
+      name: 'deaths',
+      subject: 'NieR: Automata™ / ending E 🔥',
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      initial: 0,
+    };
+    expect((await post('state/bounded-counter', {
+      ...counter,
+      operation: 'get',
+    })).data).toEqual({ value: 0 });
+    expect((await post('state/bounded-counter', {
+      ...counter,
+      operation: 'increment',
+      amount: 3,
+    })).data).toEqual({ value: 3 });
+    await Promise.all(Array.from({ length: 10 }, () =>
+      post('state/bounded-counter', {
+        ...counter,
+        operation: 'decrement',
+        amount: 1,
+      })));
+    expect((await post('state/bounded-counter', {
+      ...counter,
+      operation: 'get',
+    })).data).toEqual({ value: 0 });
+
+    const lives = {
+      featureId: 'test.one',
+      name: 'lives',
+      subject: 'player/one',
+      min: -2,
+      max: 2,
+      initial: 1,
+    };
+    expect((await post('state/bounded-counter', {
+      ...lives,
+      operation: 'increment',
+      amount: 10,
+    })).data).toEqual({ value: 2 });
+    expect((await post('state/bounded-counter', {
+      ...lives,
+      operation: 'decrement',
+      amount: 10,
+    })).data).toEqual({ value: -2 });
+    expect((await post('state/bounded-counter', {
+      ...lives,
+      operation: 'reset',
+    })).data).toEqual({ value: 1 });
+    expect((await post('state/bounded-counter', {
+      ...lives,
+      subject: 'player/two',
+      operation: 'get',
+    })).data).toEqual({ value: 1 });
+
+    const invalidCounter = await post('state/bounded-counter', {
+      ...counter,
+      subject: 'x'.repeat(301),
+      operation: 'get',
+    });
+    expect(invalidCounter.response.status).toBe(422);
+    expect(invalidCounter.data.userFacingError).toContain('between 1 and 300');
+    const invalidCounterAmount = await post('state/bounded-counter', {
+      ...counter,
+      operation: 'increment',
+      amount: 0,
+    });
+    expect(invalidCounterAmount.response.status).toBe(422);
+    expect(invalidCounterAmount.data.userFacingError).toContain('between 1 and');
+
     const cooldown = {
       featureId: 'test.one',
       actionKind: 'test.one.run.v1',

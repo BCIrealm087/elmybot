@@ -102,6 +102,23 @@ describe("fun.deaths", () => {
     })).toReply("Dark Souls deaths: 0");
   });
 
+  it("accepts punctuation and Unicode without exposing storage-key rules", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const group = discordTestGroup();
+    const moderator = discordTestModerator();
+    const game = "NieR: Automata™ 🔥";
+
+    (await runtime.discord.command("deaths", {
+      group,
+      actor: moderator,
+      args: { game, operation: "plus" }
+    })).toReply(`${game} deaths: 1`);
+    (await runtime.discord.command("deaths", {
+      group,
+      args: { game }
+    })).toReply(`${game} deaths: 1`);
+  });
+
   it("parses quoted multi-word Twitch game names", () => {
     expect(feature.commands.twitch[0].parse.parse('"Dark Souls" plus')).toEqual({
       game: "Dark Souls",

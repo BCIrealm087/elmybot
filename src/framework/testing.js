@@ -363,6 +363,40 @@ function createMemoryServices(clock) {
               const nextValue = current + amount;
               state.set(namespaced, nextValue);
               return nextValue;
+            },
+            boundedCounter: async (featureId, descriptor, operation, amount) => {
+              const namespaced = storageKey(
+                groupKey,
+                featureId,
+                `bounded-counter\u0000${descriptor.name}\u0000${descriptor.subject}`
+              );
+              const current = state.get(namespaced) ?? descriptor.initial;
+              if (
+                !Number.isSafeInteger(current) ||
+                current < descriptor.min ||
+                current > descriptor.max
+              ) {
+                throw new FeatureTestRuntimeError(
+                  "The in-memory state value is not a valid bounded counter."
+                );
+              }
+              if (operation === "get") return current;
+              let nextValue = descriptor.initial;
+              if (operation !== "reset") {
+                const direction = operation === "increment" ? 1n : -1n;
+                const candidate = BigInt(current) + direction * BigInt(amount);
+                nextValue = Number(
+                  candidate < BigInt(descriptor.min)
+                    ? BigInt(descriptor.min)
+                    : candidate > BigInt(descriptor.max)
+                      ? BigInt(descriptor.max)
+                      : candidate
+                );
+              }
+              if (state.has(namespaced) || nextValue !== descriptor.initial) {
+                state.set(namespaced, nextValue);
+              }
+              return nextValue;
             }
           })
         }),
