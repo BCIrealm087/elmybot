@@ -167,9 +167,11 @@ resolved the failure. A final clean installation with `npm ci` succeeded, then:
 
 The local Work mode limitation documented in `AGENTS.md` means the Wrangler
 dry run was deliberately left to CI rather than repeatedly attempting a command
-that the environment blocks before execution. The GitHub Actions result is
-recorded in the final handoff because embedding the result in this file would
-itself create a new commit requiring another authoritative CI run.
+that the environment blocks before execution. GitHub Actions
+[run #89](https://github.com/BCIrealm087/elmybot/actions/runs/33356035051)
+completed successfully for implementation commit `2c507356`: locked install,
+all tests, lint, tracked-source syntax checks, and the non-deploying Wrangler
+dry run passed.
 
 **Assessment:** good overall. The commands are clear and fast, and the full
 suite caught precisely the one cross-cutting expectation affected by adding a
