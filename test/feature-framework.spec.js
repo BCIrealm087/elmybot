@@ -10,6 +10,7 @@ import {
   discordNativeCommand,
   FeatureDefinitionError,
   frameworkApiVersion,
+  schema,
   twitchActionCommand,
   twitchNativeCommand
 } from "../src/framework/index.js";
@@ -507,7 +508,19 @@ describe("Command and feature framework", () => {
     const conditionalAction = defineAction({
       kind: "test.authorization.run.v1",
       supportedOrigins: ["discord"],
+      input: schema.object({
+        operation: schema.enum(["show", "plus"], {
+          optional: true,
+          default: "show"
+        })
+      }),
       uses: { services: ["authorization"] },
+      conditionalAccess: [
+        {
+          capability: access.moderators,
+          when: { argument: "operation", values: ["plus"] }
+        }
+      ],
       async execute(ctx) {
         return {
           output: {
@@ -520,6 +533,15 @@ describe("Command and feature framework", () => {
     const catalog = createFeatureRegistry([
       feature({ actions: [conditionalAction] })
     ], { availableServices: ["authorization"] });
+    expect(conditionalAction.conditionalAccess).toEqual([
+      {
+        capability: access.moderators,
+        when: { argument: "operation", values: ["plus"] }
+      }
+    ]);
+    expect(Object.isFrozen(conditionalAction.conditionalAccess)).toBe(true);
+    expect(Object.isFrozen(conditionalAction.conditionalAccess[0].when.values))
+      .toBe(true);
     const input = createCommandInvocation({
       kind: conditionalAction.kind,
       origin: {
@@ -541,6 +563,55 @@ describe("Command and feature framework", () => {
       capability: access.moderators,
       invocation: expect.objectContaining({ kind: conditionalAction.kind })
     });
+  });
+
+  it("rejects conditional-access metadata that can drift from the action schema", () => {
+    const input = schema.object({
+      operation: schema.enum(["show", "plus"])
+    });
+    const base = {
+      kind: "test.authorization.invalid.v1",
+      supportedOrigins: ["discord"],
+      input,
+      execute: () => ({ output: {}, effects: [] })
+    };
+
+    expect(() => defineAction({
+      ...base,
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", values: ["plus"] }
+      }]
+    })).toThrow("requires the `authorization` service");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "missing", values: ["plus"] }
+      }]
+    })).toThrow("argument must name a primitive input field");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", values: ["reset"] }
+      }]
+    })).toThrow("value rejected by its input field");
+
+    const unregistered = defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: "unregistered.conditional",
+        when: { argument: "operation", values: ["plus"] }
+      }]
+    });
+    expect(() => createFeatureRegistry([
+      feature({ actions: [unregistered] })
+    ], { availableServices: ["authorization"] }))
+      .toThrow("conditional capability is not registered");
   });
 
   it("fails composition for unavailable services and blocks undeclared service access", async () => {

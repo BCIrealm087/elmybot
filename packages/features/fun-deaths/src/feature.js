@@ -36,6 +36,15 @@ export const feature = defineFeature({
     defineAction({
       kind: FUN_DEATHS_ACTION_KIND,
       capability: null,
+      conditionalAccess: [
+        {
+          capability: access.moderators,
+          when: {
+            argument: "operation",
+            values: ["plus", "minus", "reset"]
+          }
+        }
+      ],
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
         game: schema.string({ minLength: 1, maxLength: 80, trim: true }),

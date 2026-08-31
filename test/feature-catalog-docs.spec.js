@@ -20,6 +20,19 @@ describe("Generated feature catalog", () => {
     expect(markdown).toContain("`@elmybot/feature-alive` | `core.alive` | yes");
     expect(markdown).toContain("`core.alive` | `@elmybot/feature-alive`");
     expect(markdown).toContain("`/counter`");
+    expect(markdown).toContain("Command | Type | Access | Description");
+    expect(markdown).toContain(
+      "fun.deaths | `/deaths` | action | public; framework.moderators when " +
+      "`operation` is `plus`, `minus`, or `reset`"
+    );
+    expect(markdown).toContain(
+      "fun.deaths | `!deaths` | action | public; framework.moderators when " +
+      "`operation` is `plus`, `minus`, or `reset`"
+    );
+    expect(markdown).toContain(
+      "`fun.deaths.manage.v1` | discord, twitch | public; " +
+      "framework.moderators when `operation` is `plus`, `minus`, or `reset`"
+    );
     expect(markdown).toContain("`!announce`");
     expect(markdown).toContain("`integration.announcement.publish.v1`");
     expect(markdown).toContain("`twitch.stream-online-to-discord.v1`");

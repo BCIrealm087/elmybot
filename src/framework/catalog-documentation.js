@@ -46,13 +46,29 @@ function triggerOwners(registry, collection) {
   return owners;
 }
 
-function commandCapability(registry, command) {
+function valueList(values) {
+  const rendered = values.map((value) => `\`${String(value)}\``);
+  if (rendered.length === 1) return rendered[0];
+  if (rendered.length === 2) return rendered.join(" or ");
+  return `${rendered.slice(0, -1).join(", ")}, or ${rendered.at(-1)}`;
+}
+
+function actionAccess(action) {
+  if (!action) return "public";
+  const baseline = action.capability ?? "public";
+  const conditional = action.conditionalAccess.map(({ capability, when }) =>
+    `${capability} when \`${when.argument}\` is ${valueList(when.values)}`
+  );
+  return [baseline, ...conditional].join("; ");
+}
+
+function commandAccess(registry, command) {
   if (command.mode === ACTION_COMMAND_TYPE) {
-    return registry.actions[command.actionKind]?.capability ?? "public";
+    return actionAccess(registry.actions[command.actionKind]);
   }
   if (command.mode === SCHEDULED_ACTION_COMMAND_TYPE) {
     const schedule = registry.schedules[command.scheduleKind];
-    return registry.actions[schedule?.actionKind]?.capability ?? "public";
+    return actionAccess(registry.actions[schedule?.actionKind]);
   }
   return command.capability ?? "public";
 }
@@ -98,7 +114,7 @@ export function generateFeatureCatalogMarkdown(
       commandOwner.get(command),
       platform === "discord" ? `\`/${command.name}\`` : `\`!${command.name}\``,
       commandType(command.mode),
-      commandCapability(registry, command),
+      commandAccess(registry, command),
       command.description
     ])
   );
@@ -106,7 +122,7 @@ export function generateFeatureCatalogMarkdown(
     action.featureId,
     `\`${action.kind}\``,
     action.supportedOrigins.join(", "),
-    action.capability ?? "public",
+    actionAccess(action),
     action.uses.services.join(", ") || "—",
     action.cooldown ? `${action.cooldown.scope}, ${action.cooldown.seconds}s` : "—"
   ]);
@@ -159,11 +175,11 @@ export function generateFeatureCatalogMarkdown(
     table(["Package", "Feature", "Installed by Worker"], workspaceRows),
     "## Commands",
     "",
-    table(["Feature", "Command", "Type", "Capability", "Description"], commandRows),
+    table(["Feature", "Command", "Type", "Access", "Description"], commandRows),
     "## Actions",
     "",
     table(
-      ["Feature", "Action kind", "Origins", "Capability", "Services", "Cooldown"],
+      ["Feature", "Action kind", "Origins", "Access", "Services", "Cooldown"],
       actionRows
     ),
     "## Routes",

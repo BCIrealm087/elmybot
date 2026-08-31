@@ -234,6 +234,7 @@ capability and cannot declare a different preset.
 defineAction({
   kind: "integration.example.run.v1",
   capability: null,
+  conditionalAccess: [],
   supportedOrigins: ["discord", "twitch"],
   input: schema.object({}),
   uses: {
@@ -249,6 +250,9 @@ Requirements:
 
 - `kind` is a versioned semantic kind.
 - `capability` is either `null` or a registered namespaced capability.
+- `conditionalAccess` defaults to an empty array. Each rule names a registered
+  capability and one primitive input argument plus the values for which feature
+  code requires that capability.
 - `supportedOrigins` contains at least one unique platform.
 - `input` defaults to `schema.object({})`.
 - `uses` defaults to empty arrays.
@@ -264,6 +268,32 @@ The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
 tests. An action may declare several possible routes and effects without using
 all of them during every invocation.
+
+Conditional-access rules have this shape:
+
+```js
+conditionalAccess: [
+  {
+    capability: access.moderators,
+    when: {
+      argument: "operation",
+      values: ["plus", "minus", "reset"]
+    }
+  }
+]
+```
+
+The argument must name a primitive field in the action's object schema, and
+every listed value must pass that field's schema. A declaration contains at
+most 20 rules and each rule at most 20 unique values; all are normalized and
+frozen. A non-empty declaration requires the `authorization` service. Registry
+composition rejects unregistered conditional capabilities.
+
+This metadata documents argument-dependent access; it does not authorize by
+itself. Feature code MUST still call `authorization.allows()` before performing
+the protected mode. Keeping the runtime check explicit preserves custom denial
+responses while making the intended policy visible to review and generated
+documentation.
 
 The action executor receives already normalized `args`. It MUST return a value
 accepted by the existing `createActionResult()` contract:
@@ -440,8 +470,9 @@ Framework API v1 option types are `string`, `integer`, `number`, `boolean`,
 types and registration payload. `user`, `role`, and `channel` normalize to
 their opaque ID strings.
 
-The installed action owns capability authorization. A command cannot weaken or
-override it. `availability: "guild"` rejects DM use before action execution.
+The installed action owns baseline capability authorization and conditional
+access metadata. A command cannot weaken or override either. `availability:
+"guild"` rejects DM use before action execution.
 
 `render` receives the normalized `ActionResult` and a controlled Discord
 rendering context. It defaults to `discordTextResult`, which requires a
@@ -474,10 +505,10 @@ syntax is unchanged.
 The parser produces semantic arguments which are then validated by the action
 input schema. Command names are case-insensitive and stored lowercase.
 
-The installed action owns capability authorization. Twitch platform policy
-maps authenticated EventSub actor claims to that capability. The default
-renderer requires a non-empty `output.message` no longer than the Twitch chat
-limit.
+The installed action owns baseline capability authorization and conditional
+access metadata. Twitch platform policy maps authenticated EventSub actor
+claims to those capabilities. The default renderer requires a non-empty
+`output.message` no longer than the Twitch chat limit.
 
 ### Native commands
 

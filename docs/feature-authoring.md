@@ -116,10 +116,12 @@ helps.
 - Versioned action, route, event, effect, and schedule kinds end in `.v1`, `.v2`,
   and so on.
 - Commands validate into semantic arguments before feature code runs.
-- Protected action commands inherit the action capability.
+- Protected action commands inherit the action's baseline capability and
+  conditional-access metadata.
 - Actions declare every route, effect, and optional service they may use.
-- Argument-dependent protected modes use the declared `authorization` service;
-  feature code never inspects platform roles or badges.
+- Argument-dependent protected modes declare `conditionalAccess`, use the
+  `authorization` service for the runtime check, and never inspect platform
+  roles or badges.
 - Feature code receives no `env`, OAuth token, request, webhook payload, Durable
   Object ID, SQL handle, coordinator envelope, or retry loop.
 - Effects describe intended platform outcomes. The coordinator owns durable
@@ -455,6 +457,12 @@ capability before performing the protected operation:
 defineAction({
   kind: "fun.score.manage.v1",
   capability: null,
+  conditionalAccess: [
+    {
+      capability: access.moderators,
+      when: { argument: "operation", values: ["plus"] }
+    }
+  ],
   supportedOrigins: ["discord", "twitch"],
   uses: { services: ["authorization", "state"] },
   input: schema.object({
@@ -483,6 +491,9 @@ Use an ordinary action-level capability when the whole action is protected.
 Conditional checks are for commands whose validated modes genuinely have
 different access requirements. `authorization.allows()` accepts only reviewed,
 registered capabilities and returns the platform policy's boolean decision.
+`conditionalAccess` is validated metadata rather than automatic enforcement:
+the explicit check remains required, while generated documentation can now
+describe the public and protected modes accurately.
 
 ## Before opening a pull request
 

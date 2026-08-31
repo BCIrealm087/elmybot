@@ -257,3 +257,66 @@ the in-memory test runtime, and the normative API documentation, so this is
 framework-maintainer work rather than an ordinary hobby feature change. That
 complexity is paid once: a future command author uses one handle and can verify
 it entirely through the ordinary feature test runtime.
+
+## Follow-up: conditional-access metadata
+
+The second recommended improvement addresses a documentation mismatch. The
+action's baseline `capability` is `null` because anyone may show a count, so the
+generated catalog previously labeled `/deaths`, `!deaths`, and the shared
+action simply as `public`. That omitted the moderator requirement for `plus`,
+`minus`, and `reset`.
+
+Framework API v1 now accepts optional structured action metadata:
+
+```js
+conditionalAccess: [
+  {
+    capability: access.moderators,
+    when: {
+      argument: "operation",
+      values: ["plus", "minus", "reset"]
+    }
+  }
+]
+```
+
+The framework verifies that `operation` is a primitive action input, that every
+listed value is accepted by its schema, that the capability is registered, and
+that the action declared the `authorization` service. The frozen metadata is
+owned once by the shared action and inherited by both platform commands. The
+catalog's column is now named `Access` and renders the result as `public;
+framework.moderators when operation is plus, minus, or reset`.
+
+The declaration is deliberately descriptive rather than executable. The
+existing `ctx.authorization.allows(access.moderators)` check remains the source
+of runtime enforcement and preserves the command's tailored denial message.
+This avoids introducing a second authorization engine, but it means review must
+still confirm that the declared rule and the explicit check express the same
+condition.
+
+**Assessment:** appropriate and reasonably easy for a hobby contributor. The
+extra rule is repetitive next to the runtime `if`, but it uses ordinary action
+argument names and values rather than platform roles or badges. Schema-aware
+validation catches the most likely documentation mistakes—typos and impossible
+values—before startup. The remaining possibility of semantic drift is an honest
+tradeoff for metadata-only scope; declarative runtime enforcement could be a
+later design, but would need a careful decision about custom denial responses.
+
+### Conditional-access verification record
+
+After a clean `npm ci`, the focused framework, catalog, and `fun.deaths` run
+passed 3 files and 28 tests. The complete local suite passed 21 files and 223
+tests. Lint also confirmed the feature API boundary, workspace package
+consistency, and generated-catalog freshness; every tracked JavaScript and MJS
+file passed `node --check`.
+
+The final local test process also printed a background Workerd DNS lookup
+warning for `id.twitch.tv` after reporting all 223 tests passed. No assertion or
+test file failed; the clean GitHub Actions run remains the authoritative check
+for this environment-sensitive noise.
+
+**Assessment:** the generated-document check is especially valuable here. It
+turns the catalog's access wording into reviewed output rather than relying only
+on unit-level metadata assertions. The validation tests additionally confirm
+that a missing authorization-service declaration, unknown argument, impossible
+enum value, or unregistered capability is rejected before installation.
