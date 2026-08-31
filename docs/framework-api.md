@@ -68,7 +68,9 @@ performs the runtime check through `ctx.authorization.allows()`.
 Feature tests may additionally import the documented test kit from
 `src/framework/testing.js`. The test kit follows the v1 feature contract but is
 not a production feature dependency. Workspace tests use the equivalent
-`@elmybot/framework/testing` export.
+`@elmybot/framework/testing` export. Its Twitch runtime accepts either parsed
+semantic arguments through `twitch.command()` or bang-prefixed raw command text
+through `twitch.commandText()` when parser behavior is under test.
 
 All other modules below `src/framework/` are implementation details. In
 particular, `internal.js`, registry composition, service runtimes, storage

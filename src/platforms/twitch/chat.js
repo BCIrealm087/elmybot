@@ -1,17 +1,16 @@
 import { logError } from "../../common.js";
+import { parseTwitchCommandText } from "../../framework/internal.js";
 import { sendTwitchChatMessage } from "./chat-delivery.js";
 import { commands } from "./commands.js";
 
 function commandFromMessage(messageText) {
-	const match = messageText.trim().match(/^!([^\s]+)(?:\s|$)/);
-	if (!match) return null;
-	const name = match[1].toLowerCase();
-	const definition = commands[name];
+	const command = parseTwitchCommandText(messageText);
+	if (!command) return null;
+	const definition = commands[command.name];
 	if (!definition) return null;
 	return {
-		name,
-		definition,
-		argsText: messageText.trim().slice(match[0].length).trim()
+		...command,
+		definition
 	};
 }
 

@@ -34,6 +34,18 @@ describe("Feature test kit", () => {
     (await runtime.twitch.command("alive")).toReply("I'm here!!1");
   });
 
+  it("accepts raw Twitch command text and rejects text outside the command boundary", async () => {
+    const runtime = createFeatureTestRuntime(aliveFeature);
+
+    (await runtime.twitch.commandText("  !ALIVE  ")).toReply("I'm here!!1");
+    await expect(runtime.twitch.commandText("hello chat")).rejects.toMatchObject({
+      code: "feature_test_twitch_command_text_invalid"
+    });
+    await expect(runtime.twitch.commandText("!missing")).rejects.toMatchObject({
+      code: "feature_test_command_not_found"
+    });
+  });
+
   it("executes platform-native commands and records narrow adapter operations", async () => {
     const runtime = createFeatureTestRuntime(discordRoleAccessFeature);
     const manager = discordTestActor({

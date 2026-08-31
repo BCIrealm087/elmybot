@@ -13,6 +13,7 @@ import {
 } from "./command-common.js";
 import { createFeatureRegistry } from "./feature-registry.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
+import { parseTwitchCommandText } from "./twitch-command-text.js";
 
 const ROUTED_MESSAGE_EFFECT_KINDS = Object.freeze({
   discord: "discord.message.send.v1",
@@ -605,12 +606,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     });
   }
 
-  async function command(platform, name, {
-    args = {},
-    actor = testActor(platform),
-    group: groupInput,
-    routes: inputRoutes
-  } = {}) {
+  function commandDefinition(platform, name) {
     const definition = registry.commands[platform][name];
     if (!definition) {
       throw new FeatureTestRuntimeError(
@@ -618,6 +614,16 @@ export function createFeatureTestRuntime(featureOrFeatures, {
         { code: "feature_test_command_not_found" }
       );
     }
+    return definition;
+  }
+
+  async function command(platform, name, {
+    args = {},
+    actor = testActor(platform),
+    group: groupInput,
+    routes: inputRoutes
+  } = {}) {
+    const definition = commandDefinition(platform, name);
     const group = normalizedGroup(platform, groupInput);
     const sourceEventId = nextSourceId(platform, "command");
 
@@ -700,6 +706,23 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }
 
     throw new FeatureTestRuntimeError("The feature command mode is unsupported.");
+  }
+
+  async function twitchCommandText(messageText, input = {}) {
+    const parsed = parseTwitchCommandText(messageText);
+    if (!parsed) {
+      throw new FeatureTestRuntimeError(
+        "Twitch command text must start with a bang-prefixed command name.",
+        { code: "feature_test_twitch_command_text_invalid" }
+      );
+    }
+
+    const definition = commandDefinition("twitch", parsed.name);
+
+    return command("twitch", parsed.name, {
+      ...input,
+      args: definition.parse.parse(parsed.argsText)
+    });
   }
 
   async function event(kind, {
@@ -808,7 +831,10 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   return Object.freeze({
     registry,
     discord: Object.freeze({ command: (name, input) => command("discord", name, input) }),
-    twitch: Object.freeze({ command: (name, input) => command("twitch", name, input) }),
+    twitch: Object.freeze({
+      command: (name, input) => command("twitch", name, input),
+      commandText: twitchCommandText
+    }),
     event,
     clock,
     routes: Object.freeze({

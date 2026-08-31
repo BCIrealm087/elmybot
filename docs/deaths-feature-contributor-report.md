@@ -325,3 +325,51 @@ turns the catalog's access wording into reviewed output rather than relying only
 on unit-level metadata assertions. The validation tests additionally confirm
 that a missing authorization-service declaration, unknown argument, impossible
 enum value, or unregistered capability is rejected before installation.
+
+## Follow-up: raw Twitch command tests
+
+The third recommended improvement closes the remaining gap from step 8. The
+test runtime now accepts the same bang-prefixed command text that a Twitch
+chatter types:
+
+```js
+const result = await runtime.twitch.commandText(
+  '!deaths "Dark Souls" plus',
+  { actor: twitchTestModerator() }
+);
+
+result.toReply("Dark Souls deaths: 1");
+```
+
+This one call performs command-name detection, quoted-token parsing, action
+schema validation, authorization, execution, state mutation, and response
+rendering. The existing `runtime.twitch.command(name, input)` entry remains for
+tests that intentionally begin with already parsed semantic arguments.
+
+The production Twitch adapter and test runtime now share one internal
+command-text extractor. This prevents the test helper from quietly developing
+different rules for leading whitespace, command casing, or the boundary
+between the name and its argument text. Non-command text and unknown command
+names reject in the command-focused test API, making contributor typos visible;
+the production chat adapter continues to ignore them as normal chat.
+
+The `fun.deaths` package test was migrated from a direct assertion against
+`feature.commands.twitch[0].parse.parse()` to the raw entry point. The test no
+longer reaches into its command definition and now proves that quoted game
+names work through the same public test surface as the rest of the feature.
+
+**Assessment:** this is a meaningful improvement for hobby contributors. A
+syntax-sensitive Twitch test now reads like the chat interaction it describes,
+and authors no longer need to know where a parser is stored inside a feature
+definition. Keeping both entry points is useful: semantic tests stay concise,
+while one or two raw-text tests can cover the platform grammar without
+duplicating every behavior case. The implementation complexity belongs to the
+framework and platform adapter; the contributor-facing cost is one discoverable
+method and one example.
+
+### Raw-command verification record
+
+The focused feature-test-kit, `fun.deaths`, and parser-helper run passed 3 files
+and 26 tests. The complete local suite passed 21 files and 224 tests. ESLint,
+the public feature-boundary check, workspace-package validation, generated
+catalog freshness, and JavaScript syntax checks also passed.

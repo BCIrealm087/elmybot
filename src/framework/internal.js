@@ -7,3 +7,4 @@ export {
   mergeCommandDefinitions
 } from "./feature-registry.js";
 export { discordOptionDescriptor } from "./discord.js";
+export { parseTwitchCommandText } from "./twitch-command-text.js";

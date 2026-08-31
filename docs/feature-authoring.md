@@ -160,6 +160,7 @@ facilities:
 | --- | --- |
 | Discord command | `runtime.discord.command(name, input)` |
 | Twitch command | `runtime.twitch.command(name, input)` |
+| Raw Twitch command text | `runtime.twitch.commandText(text, input)` |
 | Domain event | `runtime.event(kind, input)` |
 | Configuration | `runtime.config.set(group, featureId, key, value)` |
 | State inspection | `runtime.state.get(group, featureId, key)` |
@@ -178,6 +179,24 @@ result.toEmitTwitchChat("Let's go!");
 result.toEmitDiscordMessage("The stream is live!");
 result.toSchedule("discord.fun.hype-random.v1");
 ```
+
+Use `runtime.twitch.commandText()` when Twitch tokenization or quoting is part
+of the behavior under test. It accepts the same bang-prefixed text a chatter
+types and then runs command lookup, the command's declared parser, action input
+validation, execution, and rendering:
+
+```js
+const result = await runtime.twitch.commandText(
+  '!deaths "Dark Souls" plus',
+  { actor: twitchTestModerator() }
+);
+
+result.toReply("Dark Souls deaths: 1");
+```
+
+Text without a command prefix and command names that are not installed reject
+with `FeatureTestRuntimeError`. Keep using `runtime.twitch.command()` when a
+test intentionally starts from already parsed semantic arguments.
 
 Actors carry explicit capabilities. Public actors default to
 `framework.members`; protected tests should state the grant being exercised:

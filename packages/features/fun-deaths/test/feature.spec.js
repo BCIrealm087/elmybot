@@ -119,11 +119,12 @@ describe("fun.deaths", () => {
     })).toReply(`${game} deaths: 1`);
   });
 
-  it("parses quoted multi-word Twitch game names", () => {
-    expect(feature.commands.twitch[0].parse.parse('"Dark Souls" plus')).toEqual({
-      game: "Dark Souls",
-      operation: "plus"
-    });
+  it("executes quoted multi-word game names from raw Twitch command text", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+
+    (await runtime.twitch.commandText('!deaths "Dark Souls" plus', {
+      actor: twitchTestModerator()
+    })).toReply("Dark Souls deaths: 1");
   });
 
   it("rejects unsupported operations", async () => {
