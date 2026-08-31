@@ -49,6 +49,11 @@ surface consists of:
 - Twitch authoring helpers: `twitchActionCommand`, `twitchNativeCommand`,
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
+Actions may explicitly request the controlled `authorization`, `config`,
+`state`, and `random` context services. `authorization` delegates conditional
+checks to the same platform-owned capability policy used for whole actions; it
+does not expose platform roles, badges, or authorizer functions.
+
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
 

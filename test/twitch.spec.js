@@ -155,6 +155,33 @@ describe("Twitch feature commands", () => {
 			argsText: ""
 		})).resolves.toContain("Try !counter again");
 	});
+
+	it("parses quoted death games and restricts mutations to moderators", async () => {
+		const broadcasterUserId = `deaths-channel-${++twitchMessageIdCounter}`;
+		const member = {
+			broadcaster_user_id: broadcasterUserId,
+			chatter_user_id: "deaths-member",
+			badges: []
+		};
+		await expect(twitchCommands.deaths.exec(member, env, {
+			messageId: `deaths-message-${++twitchMessageIdCounter}`,
+			argsText: '"Dark Souls"'
+		})).resolves.toBe("Dark Souls deaths: 0");
+		await expect(twitchCommands.deaths.exec(member, env, {
+			messageId: `deaths-message-${++twitchMessageIdCounter}`,
+			argsText: '"Dark Souls" plus'
+		})).resolves.toBe("Only moderators can change death counts.");
+
+		const moderator = {
+			...member,
+			chatter_user_id: "deaths-moderator",
+			badges: [{ set_id: "moderator", id: "1" }]
+		};
+		await expect(twitchCommands.deaths.exec(moderator, env, {
+			messageId: `deaths-message-${++twitchMessageIdCounter}`,
+			argsText: '"Dark Souls" plus'
+		})).resolves.toBe("Dark Souls deaths: 1");
+	});
 });
 
 async function runAliveCommandWithFetch(fetchImplementation, broadcasterUserId) {

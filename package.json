@@ -20,6 +20,7 @@
 	},
 	"dependencies": {
 		"@elmybot/feature-alive": "1.0.0",
+		"@elmybot/feature-fun-deaths": "0.1.0",
 		"@elmybot/framework": "1.0.0"
 	},
 	"devDependencies": {

@@ -118,6 +118,8 @@ helps.
 - Commands validate into semantic arguments before feature code runs.
 - Protected action commands inherit the action capability.
 - Actions declare every route, effect, and optional service they may use.
+- Argument-dependent protected modes use the declared `authorization` service;
+  feature code never inspects platform roles or badges.
 - Feature code receives no `env`, OAuth token, request, webhook payload, Durable
   Object ID, SQL handle, coordinator envelope, or retry loop.
 - Effects describe intended platform outcomes. The coordinator owns durable
@@ -188,6 +190,10 @@ const moderator = discordTestActor({
 Convenience helpers are also available: `discordTestModerator()`,
 `discordTestManager()`, `twitchTestModerator()`, and
 `twitchTestBroadcaster()`.
+
+`twitchTokens()` accepts ordinary whitespace-delimited tokens and double-quoted
+multi-word strings. For example, a two-field parser can normalize
+`"Dark Souls" plus` into `{ game: "Dark Souls", operation: "plus" }`.
 
 The harness does not replace platform ingress or durability integration tests.
 Use the existing Worker tests when verifying signatures, raw Discord/Twitch
@@ -425,6 +431,44 @@ actor.
 
 See [`feature-state.md`](feature-state.md) for production limits and operator
 configuration commands.
+
+## Cookbook 7: conditionally protected command modes
+
+Keep the action public when everyone may read but only moderators may mutate.
+Declare `authorization` and ask the existing platform policy about a reviewed
+capability before performing the protected operation:
+
+```js
+defineAction({
+  kind: "fun.score.manage.v1",
+  capability: null,
+  supportedOrigins: ["discord", "twitch"],
+  uses: { services: ["authorization", "state"] },
+  input: schema.object({
+    operation: schema.enum(["show", "plus"], { optional: true, default: "show" })
+  }),
+  async execute(ctx, { operation }) {
+    if (
+      operation === "plus" &&
+      !await ctx.authorization.allows(access.moderators)
+    ) {
+      return {
+        output: { message: "Only moderators can change the score." },
+        effects: []
+      };
+    }
+    const value = operation === "plus"
+      ? await ctx.state.increment("value")
+      : await ctx.state.get("value") ?? 0;
+    return { output: { message: `Score: ${value}` }, effects: [] };
+  }
+});
+```
+
+Use an ordinary action-level capability when the whole action is protected.
+Conditional checks are for commands whose validated modes genuinely have
+different access requirements. `authorization.allows()` accepts only reviewed,
+registered capabilities and returns the platform policy's boolean decision.
 
 ## Before opening a pull request
 

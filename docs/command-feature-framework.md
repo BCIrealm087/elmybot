@@ -240,6 +240,11 @@ claims. A feature cannot create an arbitrary authorization function that grants
 itself authority. Genuinely new sensitive capabilities require an explicit
 central policy addition and review.
 
+When one validated command mode is public and another is protected, an action
+may explicitly request `ctx.authorization` and ask whether the current actor
+has a reviewed capability. Platform policy still owns the decision; the
+feature receives no raw Discord roles, Twitch badges, or custom authorizer.
+
 ### Route catalog
 
 Replace scattered route declarations and management choices with a registered
@@ -404,8 +409,9 @@ so those representations cannot silently drift.
    installed `/integration_schedule_twitch` proof repeatedly invokes the same
    announcement action at bounded-random intervals.
 7. **Add namespaced configuration, state, and cooldowns — completed.** Actions
-   opt into frozen `config`, `state`, and `random` services; per-group SQLite
-   namespaces enforce key, value-size, and entry-count bounds; and declarative
+   opt into frozen `authorization`, `config`, `state`, and `random` services;
+   conditional authorization delegates to platform policy, while per-group
+   SQLite namespaces enforce key, value-size, and entry-count bounds; and declarative
    actor or group cooldowns are claimed atomically before execution. Protected
    Discord commands manage installed-feature configuration. The shared
    `/counter` and `!counter` proof uses a configurable label, atomic increment,

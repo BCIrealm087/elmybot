@@ -385,6 +385,46 @@ describe('Discord platform', () => {
     })).resolves.toMatchObject({ content: 'Cheers: 2' });
   });
 
+  it('keeps /deaths public while restricting mutations to moderators', async () => {
+    const guildId = uniqueId('deaths-guild');
+    mockDiscordApi({ ownerId: uniqueId('owner') });
+    expect(commands.deaths.guild).toEqual({ capability: null });
+
+    const memberRead = buildSlashInteraction({
+      name: 'deaths',
+      guildId,
+      options: [{ name: 'game', value: 'Dark Souls' }],
+    });
+    await expect(commands.deaths.exec(memberRead, env, 'deaths', {
+      sourceInteraction: memberRead,
+    })).resolves.toMatchObject({ content: 'Dark Souls deaths: 0' });
+
+    const memberWrite = buildSlashInteraction({
+      name: 'deaths',
+      guildId,
+      options: [
+        { name: 'game', value: 'Dark Souls' },
+        { name: 'operation', value: 'plus' },
+      ],
+    });
+    await expect(commands.deaths.exec(memberWrite, env, 'deaths', {
+      sourceInteraction: memberWrite,
+    })).resolves.toMatchObject({ content: 'Only moderators can change death counts.' });
+
+    const moderatorWrite = buildSlashInteraction({
+      name: 'deaths',
+      guildId,
+      permissions: '8192',
+      options: [
+        { name: 'game', value: 'Dark Souls' },
+        { name: 'operation', value: 'plus' },
+      ],
+    });
+    await expect(commands.deaths.exec(moderatorWrite, env, 'deaths', {
+      sourceInteraction: moderatorWrite,
+    })).resolves.toMatchObject({ content: 'Dark Souls deaths: 1' });
+  });
+
   it.each([
     ['config_show_value', [{ name: 'entry', value: 'allowedRoles' }]],
     ['config_list_entries', []],

@@ -83,7 +83,12 @@ describe("Representative feature migrations", () => {
     });
     expect(discordCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
     expect(twitchCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
-    expect(featureRegistry.services).toEqual(["config", "random", "state"]);
+    expect(featureRegistry.services).toEqual([
+      "authorization",
+      "config",
+      "random",
+      "state"
+    ]);
   });
 
   it("installs announcements as one routed action with two route directions", () => {

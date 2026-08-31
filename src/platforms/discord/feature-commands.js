@@ -4,7 +4,7 @@ import { discordOptionDescriptor } from "../../framework/internal.js";
 import { SCHEDULED_ACTION_COMMAND_TYPE } from "../../framework/command-common.js";
 import { ephemeralData } from "./common.js";
 import { executeDiscordAction } from "./actions.js";
-import { CAPABILITIES } from "./discord-permissions.js";
+import { CAPABILITIES, checkPermissions } from "./discord-permissions.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import {
   DiscordFeatureSchedulingError,
@@ -182,8 +182,17 @@ export function compileDiscordFeatureCommands(definitions, actions, schedules = 
               args,
               {
                 env,
-                authorize: ({ capability: required }) =>
-                  required === runtime.authorizedCapability
+                authorize: async ({ capability: required }) => {
+                  if (required === null || required === runtime.authorizedCapability) {
+                    return true;
+                  }
+                  const permission = await checkPermissions(
+                    runtime.sourceInteraction ?? interaction,
+                    env,
+                    { capability: required }
+                  );
+                  return permission.configured && permission.ok;
+                }
               }
             );
             return definition.render(result, Object.freeze({ platform: "discord" }));

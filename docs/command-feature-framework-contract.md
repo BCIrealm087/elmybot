@@ -257,7 +257,8 @@ Requirements:
 
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
-requires, chosen from `config`, `state`, and `random` in API v1.
+requires, chosen from `authorization`, `config`, `state`, and `random` in API
+v1.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
@@ -300,6 +301,9 @@ The action context has this exact API v1 surface:
   },
   random: {
     integer({ min, max }): number
+  },
+  authorization: {
+    allows(capability): Promise<boolean>
   },
   routes: {
     resolve(routeKind): Promise<readonly RouteSnapshot[]>
@@ -346,9 +350,13 @@ Rules:
   stable idempotency metadata from the current invocation.
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
-- `config`, `state`, and `random` may be used only when declared in
+- `authorization`, `config`, `state`, and `random` may be used only when declared in
   `uses.services`. Undeclared access is a framework error. The namespace shape
   remains stable so feature code does not branch on service presence.
+- `authorization.allows()` accepts only a reviewed registered capability and
+  delegates to the current platform policy. It exposes no claims, roles,
+  badges, or replacement authorizer and is intended for validated command
+  modes with different access requirements.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
   them by feature ID and origin group.
 - Each state operation is atomic by itself. API v1 does not promise a
@@ -359,14 +367,16 @@ Rules:
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `config`, `state`, and `random` are part of the approved v1 surface,
+Although `authorization`, `config`, `state`, and `random` are part of the
+approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
 
-Implementation status: all three API v1 services are available in the installed
-composition. Config and state are scoped through `GroupConfig`; declarative
-cooldowns use the same per-group boundary and are enforced before action code.
+Implementation status: all four API v1 services are available in the installed
+composition. Authorization delegates to the platform policy. Config and state
+are scoped through `GroupConfig`; declarative cooldowns use the same per-group
+boundary and are enforced before action code.
 
 ## Command definitions
 
@@ -436,6 +446,11 @@ API v1 provides:
 - `twitchRestText({ arg, minLength, maxLength })`; and
 - `twitchTokens([{ arg, type, optional, default }])`, where type is `string`,
   `integer`, `number`, or `boolean`.
+
+`twitchTokens()` recognizes double-quoted multi-word tokens and removes the
+delimiting quotes. Inside a quoted token, a backslash escapes the following
+character. Unterminated quotes are validation errors. Existing unquoted token
+syntax is unchanged.
 
 The parser produces semantic arguments which are then validated by the action
 input schema. Command names are case-insensitive and stored lowercase.

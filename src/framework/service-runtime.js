@@ -1,6 +1,7 @@
 import { FEATURE_STORAGE_PATH_PREFIX } from "./feature-storage.js";
 
 export const FEATURE_RUNTIME_SERVICES = Object.freeze([
+  "authorization",
   "config",
   "state",
   "random"

@@ -32,6 +32,42 @@ function parseToken(value, type, path) {
   throw new TypeError(`Unsupported Twitch token type: \`${type}\`.`);
 }
 
+function tokenizeArgs(argsText) {
+  const tokens = [];
+  let token = "";
+  let tokenStarted = false;
+  let quoted = false;
+  let escaped = false;
+
+  for (const character of argsText.trim()) {
+    if (escaped) {
+      token += character;
+      tokenStarted = true;
+      escaped = false;
+    } else if (character === "\\" && quoted) {
+      escaped = true;
+    } else if (character === "\"") {
+      quoted = !quoted;
+      tokenStarted = true;
+    } else if (/\s/.test(character) && !quoted) {
+      if (tokenStarted) {
+        tokens.push(token);
+        token = "";
+        tokenStarted = false;
+      }
+    } else {
+      token += character;
+      tokenStarted = true;
+    }
+  }
+  if (quoted) {
+    throw new SchemaValidationError("arguments", "contains an unterminated quote.");
+  }
+  if (escaped) token += "\\";
+  if (tokenStarted) tokens.push(token);
+  return tokens;
+}
+
 export function twitchNoArgs() {
   return markTwitchParser({
     kind: "none",
@@ -121,7 +157,7 @@ export function twitchTokens(fields) {
   return markTwitchParser({
     kind: "tokens",
     parse(argsText) {
-      const tokens = argsText.trim().length === 0 ? [] : argsText.trim().split(/\s+/);
+      const tokens = tokenizeArgs(argsText);
       if (tokens.length > definitions.length) {
         throw new SchemaValidationError("arguments", "contains too many values.");
       }

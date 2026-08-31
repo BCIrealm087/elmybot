@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  access,
   defineAction,
   defineEventAction,
   defineFeature,
@@ -444,6 +445,46 @@ describe("Command and feature framework", () => {
       code: "action_cooldown_active",
       status: 429,
       retryAfterSeconds: 12
+    });
+  });
+
+  it("delegates declared conditional authorization to the platform policy", async () => {
+    const conditionalAction = defineAction({
+      kind: "test.authorization.run.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["authorization"] },
+      async execute(ctx) {
+        return {
+          output: {
+            allowed: await ctx.authorization.allows(access.moderators)
+          },
+          effects: []
+        };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [conditionalAction] })
+    ], { availableServices: ["authorization"] });
+    const input = createCommandInvocation({
+      kind: conditionalAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:authorization"
+    });
+    const authorize = vi.fn(async ({ capability }) =>
+      capability === access.moderators
+    );
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { authorize }
+    )).resolves.toMatchObject({ output: { allowed: true } });
+    expect(authorize).toHaveBeenCalledWith({
+      capability: access.moderators,
+      invocation: expect.objectContaining({ kind: conditionalAction.kind })
     });
   });
 

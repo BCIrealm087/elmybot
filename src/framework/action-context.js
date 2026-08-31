@@ -1,5 +1,6 @@
 import { createEffect } from "../integrations/contracts.js";
 import { frameworkApiVersion } from "./api-version.js";
+import { isRegisteredCapability } from "./access.js";
 
 export class FeatureContextError extends Error {
   constructor(message, { code = "feature_context_unavailable" } = {}) {
@@ -201,6 +202,28 @@ function randomInteger(action, runtimeContext, { min, max } = {}) {
   return value;
 }
 
+async function authorizationAllows(action, invocation, runtimeContext, capability) {
+  requireDeclaredService(action, "authorization");
+  if (!isRegisteredCapability(capability)) {
+    throw new FeatureContextError("Feature authorization capability is invalid.", {
+      code: "feature_authorization_capability_invalid"
+    });
+  }
+  if (typeof runtimeContext.authorize !== "function") {
+    throw new FeatureContextError(
+      "Feature context service is unavailable: `authorization`.",
+      { code: "feature_authorization_unavailable" }
+    );
+  }
+  const allowed = await runtimeContext.authorize({ capability, invocation });
+  if (typeof allowed !== "boolean") {
+    throw new FeatureContextError("Feature authorization returned an invalid result.", {
+      code: "feature_authorization_result_invalid"
+    });
+  }
+  return allowed;
+}
+
 function logger(runtimeContext, action, invocation) {
   const write = (level, event, metadata) => {
     if (typeof runtimeContext.log === "function") {
@@ -244,6 +267,14 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
     }),
     random: Object.freeze({
       integer: (bounds) => randomInteger(action, runtimeContext, bounds)
+    }),
+    authorization: Object.freeze({
+      allows: (capability) => authorizationAllows(
+        action,
+        invocation,
+        runtimeContext,
+        capability
+      )
     }),
     routes: routed.routes,
     effects: routed.effects,

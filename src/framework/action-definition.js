@@ -10,7 +10,12 @@ const BOUND_ACTION_TYPE = "bound-feature-action";
 const VERSIONED_KIND_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
 const SUPPORTED_ORIGINS = new Set(["discord", "twitch"]);
-const SUPPORTED_SERVICES = new Set(["config", "state", "random"]);
+const SUPPORTED_SERVICES = new Set([
+  "authorization",
+  "config",
+  "state",
+  "random"
+]);
 const COOLDOWN_SCOPES = new Set(["actor", "group"]);
 
 function requireVersionedKinds(value, path) {

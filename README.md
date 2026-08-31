@@ -92,6 +92,7 @@ script. All commands except `/alive` are guild-only.
 |---|---|---|
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
+| `/deaths` | `game`, optional `operation` (`plus`, `minus`, `reset`) | Show a game's deaths; moderators may update them |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -135,9 +136,11 @@ characters and are resolved at delivery time.
 |---|---|---|
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
+| `!deaths <game> [plus|minus|reset]` | Any chatter reads; broadcaster or moderator updates | Show or update a game's deaths |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
-Command names are case-insensitive. `!announce` accepts at most 2,000
+Command names are case-insensitive. Quote multi-word death-game names, for
+example `!deaths "Dark Souls" plus`. `!announce` accepts at most 2,000
 characters. Ordinary chat and unknown commands are acknowledged after HMAC
 verification without creating a durable inbox row.
 
@@ -370,7 +373,7 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 Start with the [feature authoring guide](docs/feature-authoring.md). It includes
 the repository-local and recommended workspace-package scaffolds, deployment-free
 test runtime, and cookbooks for native, shared, routed, scheduled, event-driven,
-and stateful features. The
+stateful, and conditionally authorized features. The
 [installed feature catalog](docs/feature-catalog.md) is generated from registry
 metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
 The [Framework API v1 stability policy](docs/framework-api.md) defines the
