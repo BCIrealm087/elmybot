@@ -398,7 +398,7 @@ npm run feature:workspaces
 - [Durable integration execution](docs/integration-execution.md)
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
-- [Feature configuration, state, and cooldowns](docs/feature-state.md)
+- [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

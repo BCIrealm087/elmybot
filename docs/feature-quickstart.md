@@ -40,7 +40,8 @@ it and skip this table. Otherwise, open only the relevant reference:
 | --- | --- |
 | The same behavior on Discord and Twitch | [Shared-command cookbook](feature-authoring.md#cookbook-2-shared-discord-and-twitch-command) |
 | Raw Twitch text, quoting, or token parsing | [Twitch test-runtime section](feature-authoring.md#the-feature-test-kit) |
-| A counter, score, quote list, or other memory | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) and [state limits](feature-state.md) |
+| A counter, score, quote list, or other group-local memory | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) and [state ownership](feature-state.md#choose-the-state-boundary-first) |
+| One value shared by linked Discord and Twitch groups | [State-ownership decision](feature-state.md#choose-the-state-boundary-first) before writing code |
 | Public reads but moderator-only changes | [Conditional-access cookbook](feature-authoring.md#cookbook-7-conditionally-protected-command-modes) |
 | A Discord-specific option or response | [Native-command cookbook](feature-authoring.md#cookbook-1-platform-native-command) |
 | Sending to a linked Discord or Twitch group | [Routed-command cookbook](feature-authoring.md#cookbook-3-routed-cross-platform-command) |

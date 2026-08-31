@@ -10,6 +10,12 @@ Command and event adapters resolve those routes before submitting work to the
 per-integration execution ledger and effect outbox. See
 `docs/integration-execution.md`.
 
+An active link does not merge feature configuration or state between its member
+groups. `ctx.state` remains scoped to the command or event's origin group. A
+feature that truly needs one mutable value owned by the relationship must first
+follow the [state-ownership guidance](feature-state.md#choose-the-state-boundary-first);
+Framework API v1 does not expose arbitrary integration-scoped state.
+
 ## Discord commands
 
 Linking, routing, and operations are exposed through guild-only deferred

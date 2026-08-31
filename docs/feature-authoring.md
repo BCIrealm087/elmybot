@@ -427,8 +427,11 @@ authenticated domain event is required.
 
 ## Cookbook 6: stateful command
 
-Declare services and a cooldown in the action. Feature code cannot select a
-different group or feature namespace:
+First use the [state-ownership decision](feature-state.md#choose-the-state-boundary-first).
+A shared Discord/Twitch action still receives independent state for each origin
+group. Once group-local ownership is the intended behavior, declare services
+and a cooldown in the action. Feature code cannot select a different group or
+feature namespace:
 
 ```js
 defineAction({

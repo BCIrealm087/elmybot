@@ -320,6 +320,12 @@ Both are automatically scoped by feature and platform group. Storage size and
 operation limits prevent one feature from becoming an unbounded shared-state
 consumer or reading another feature's data.
 
+Shared action code does not imply shared storage, and linking groups does not
+merge their namespaces. Intentionally shared mutable data belongs to an
+integration identity and requires explicit lifecycle, authorization,
+cardinality, atomicity, and revocation semantics. Framework API v1 keeps that
+boundary closed rather than presenting origin-group state as integration state.
+
 Cooldowns should be declarative where possible:
 
 ```js

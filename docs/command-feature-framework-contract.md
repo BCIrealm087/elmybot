@@ -403,6 +403,10 @@ Rules:
   modes with different access requirements.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
   them by feature ID and origin group.
+- A shared action and an active integration do not merge group namespaces.
+  API v1 exposes no mutable integration-scoped feature-state service; features
+  MUST NOT simulate one by reaching into integration internals or synchronizing
+  multiple local copies as though they were one authoritative value.
 - `state.boundedCounter()` accepts a normal feature key as its name and an
   arbitrary non-empty subject of at most 300 characters. Storage maps the pair
   to a collision-resistant internal key; subject normalization remains an

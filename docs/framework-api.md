@@ -59,7 +59,10 @@ checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
 The `state` service includes the additive `boundedCounter(name, subject,
 options)` API. It safely derives storage keys for arbitrary subjects and makes
-each saturating read, increment, decrement, or reset one atomic operation.
+each saturating read, increment, decrement, or reset one atomic operation. All
+configuration and state remain scoped to the action's origin group, including
+when that group is linked to another platform. API v1 does not expose mutable
+integration-scoped feature state.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and

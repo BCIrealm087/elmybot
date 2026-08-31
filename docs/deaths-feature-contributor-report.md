@@ -409,12 +409,12 @@ The first decision is now “does the generated Discord command already fit?”;
 only a feature that answers no has to choose another document. The quickstart
 still exposes the two manual installation edits—root `package.json` and
 `src/features/index.js`—because hiding them would make the explicit-install
-model harder to understand. At 146 lines it is not a tiny checklist, but it is
-less than one third of the detailed reference and contains the complete normal
-path rather than sending the reader through architecture history. The clearest
-remaining documentation decision is improvement 5: explaining when platform
-state should stay independent and when an integration should intentionally
-share it.
+model harder to understand. At roughly 150 lines it is not a tiny checklist,
+but it is less than one third of the detailed reference and contains the
+complete normal path rather than sending the reader through architecture
+history. The clearest remaining documentation decision is improvement 5:
+explaining when platform state should stay independent and when an integration
+should intentionally share it.
 
 ### Progressive-documentation verification record
 
@@ -430,3 +430,54 @@ GitHub Actions [run 33435782839](https://github.com/BCIrealm087/elmybot/actions/
 completed successfully for implementation commit `97b478cd`: the locked
 install, all 224 tests, lint and generated-document checks, tracked-source
 syntax checks, and the non-deploying Wrangler Worker dry run passed.
+
+## Follow-up: choosing local or shared state
+
+The fifth recommended improvement makes the state ownership decision explicit.
+Framework state has always been namespaced by feature ID and origin group, but
+“one shared action on Discord and Twitch” and “linked Discord and Twitch groups”
+could both sound as though they implied shared storage. They do not. The same
+action invoked in a Discord guild and a Twitch channel receives two independent
+`ctx.state` namespaces, and creating an integration does not merge them.
+
+The state guide now begins with a three-way decision table:
+
+- data owned independently by each group uses `ctx.state` or `ctx.config`;
+- local data that causes cross-platform delivery stays local and uses routes
+  and effects; and
+- one authoritative value mutated by both linked groups belongs to the
+  integration relationship.
+
+The third case is intentionally not presented as a ready-to-use API. Framework
+API v1 has no `ctx.integration.state`; the existing integration coordinator owns
+execution and effect-delivery records rather than arbitrary feature data. The
+guidance asks authors to define multi-link selection, unlink/relink lifecycle,
+cross-platform authorization, unlinked behavior, atomicity, and retry
+idempotency before proposing an integration-scoped service or purpose-built
+action. It also warns against embedding integration IDs in local keys or using
+routed effects to maintain two supposedly authoritative copies.
+
+The quickstart exposes the choice as two separate rows—group-local memory and
+one value shared by linked groups—before the contributor writes code. The
+stateful cookbook, integration guide, API policy, normative contract, and design
+record now repeat the same boundary at the level appropriate to their audience.
+
+**Assessment:** the ordinary hobby-contributor path is now clear and easy:
+“works on both platforms” defaults to independent per-group data, as the
+`fun.deaths` feature already does. A genuinely shared scoreboard or economy is
+still framework-maintainer work, which is less convenient but honest. Presenting
+an unsafe shortcut would hide the hardest product questions and produce
+ambiguous behavior as soon as a group has multiple links or an integration is
+revoked. The documentation now tells contributors exactly when they can proceed
+alone and what design answers they need when they cannot.
+
+This completes all five framework and contributor-experience improvements
+identified by the original `fun.deaths` exercise.
+
+### State-ownership guidance verification record
+
+The complete local suite passed 21 files and 224 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, and tracked JavaScript syntax checks also passed. The state-boundary
+heading and every new quickstart, cookbook, and integration-guide link to it
+were checked directly in the working tree.

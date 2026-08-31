@@ -1,9 +1,57 @@
-# Feature configuration, state, and cooldowns
+# Feature configuration, state ownership, and cooldowns
 
 Framework actions can use controlled per-group persistence without receiving a
 Durable Object binding, object name, storage key prefix, or SQL handle. The
 runtime derives both boundaries from the installed feature ID and the current
 action origin.
+
+## Choose the state boundary first
+
+A shared action shares behavior, not storage. When the same action runs from a
+Discord guild and a Twitch channel, `ctx.state` still resolves two independent
+namespaces because the invocations have different origin groups. Linking those
+groups does not merge their configuration, state, or cooldowns.
+
+Use this decision table before adding state:
+
+| Product requirement | State owner | Supported contributor shape |
+| --- | --- | --- |
+| Each Discord guild or Twitch channel has its own count, settings, or collection | The origin group | Use `ctx.state` or `ctx.config` |
+| One group remembers local data and sends notifications or effects to linked groups | The origin group | Keep local state and use declared routes/effects for delivery |
+| Linked groups must read and mutate one authoritative value | The integration relationship | Requires an integration-scoped design; Framework API v1 does not expose arbitrary integration state |
+
+“Works on Discord and Twitch” means the behavior is available on both
+platforms; it does not by itself mean the data is shared. Choose independent
+state unless the requirement explicitly says that both platforms must observe
+the same value and that the value exists because those groups are linked.
+
+Examples:
+
+- Deaths tracked separately for a Discord community and a Twitch channel use
+  origin-group state, even when the groups are linked.
+- A Twitch stream-online event that sends a Discord message uses a route and an
+  effect. Delivery across platforms does not make it shared state.
+- One tournament scoreboard that moderators update from either member of one
+  Discord–Twitch link is integration-owned state.
+
+True integration-owned state needs more decisions than a different key:
+
+1. Which integration owns the value when one group belongs to several links?
+2. What happens when the integration is revoked and later recreated?
+3. Which actors from each platform may read or mutate it?
+4. What happens when a command is used without an active link?
+5. Which mutations must be atomic or idempotent across retries?
+
+Framework API v1 intentionally stops the ordinary contributor at that boundary.
+It does not provide `ctx.integration.state`. Propose the ownership and lifecycle
+answers above for maintainer review before adding an integration-scoped service
+or a purpose-built integration action.
+
+Do not imitate shared state by embedding another platform's group ID or an
+integration ID in a local `ctx.state` key. The value remains owned by the origin
+group and creates separate copies. Do not synchronize two local copies with
+routed effects when the requirement calls for one authoritative value; retries,
+revocation, and many-to-many links make those copies capable of diverging.
 
 ## Author API
 
@@ -128,3 +176,9 @@ Expired rows are pruned in bounded batches as new claims arrive.
 `/counter` and Twitch `!counter`. Counts remain independent because Discord
 guilds and Twitch channels have different origin-group namespaces. The feature
 also demonstrates operator configuration and a five-second actor cooldown.
+
+The proof test for independent state should use two explicit groups, mutate one,
+and assert that the other remains unchanged. A future integration-state API
+would additionally need contract tests for commands from both member groups,
+multiple integrations per group, unlinked use, revocation, concurrent mutation,
+and replay/idempotency behavior.
