@@ -7,6 +7,7 @@ import {
   invitationTokenHash,
   isValidOpaqueId,
   parseGroupKey,
+  publicDefaultLink,
   publicMember,
   publicRoute,
   randomInvitationToken,
@@ -15,6 +16,7 @@ import {
   validatedGroup,
   validatedInvitationRoutes,
   validatedOpaqueId,
+  validatedPlatform,
   validatedRouteDestination,
   validatedRouteKind
 } from "./registry-validation.js";
@@ -286,6 +288,92 @@ export class IntegrationRegistry {
       );
     }
     return integration;
+  }
+
+  getDefaultLink(sourceGroupInput, targetPlatformInput) {
+    const sourceGroup = validatedGroup(sourceGroupInput);
+    const targetPlatform = validatedPlatform(
+      targetPlatformInput,
+      "Integration default-link target platform"
+    );
+    if (sourceGroup.platform === targetPlatform) {
+      throw new IntegrationRegistryError(
+        "An integration default link must target another platform.",
+        { status: 422, code: "integration_default_platform_invalid" }
+      );
+    }
+    const row = this.state.storage.sql.exec(
+      `SELECT default_link.source_group_key, default_link.target_platform,
+              default_link.integration_id, default_link.target_group_key,
+              default_link.created_at_ms, default_link.updated_at_ms
+       FROM integration_default_links default_link
+       JOIN integrations integration
+         ON integration.integration_id = default_link.integration_id
+        AND integration.status = 'active'
+       JOIN integration_members source_member
+         ON source_member.integration_id = default_link.integration_id
+        AND source_member.group_key = default_link.source_group_key
+       JOIN integration_members target_member
+         ON target_member.integration_id = default_link.integration_id
+        AND target_member.group_key = default_link.target_group_key
+        AND target_member.platform = default_link.target_platform
+       WHERE default_link.source_group_key = ?
+         AND default_link.target_platform = ?`,
+      sourceGroup.key,
+      targetPlatform
+    ).toArray()[0];
+    return row ? publicDefaultLink(row) : null;
+  }
+
+  assignDefaultLinkIfAbsent({
+    sourceGroup: sourceGroupInput,
+    targetGroup: targetGroupInput,
+    integrationId: integrationIdInput,
+    nowMs = Date.now()
+  }) {
+    const sourceGroup = validatedGroup(sourceGroupInput);
+    const targetGroup = validatedGroup(targetGroupInput);
+    const integrationId = validatedOpaqueId(integrationIdInput, "Integration ID");
+    if (sourceGroup.platform === targetGroup.platform) {
+      throw new IntegrationRegistryError(
+        "An integration default link must target another platform.",
+        { status: 422, code: "integration_default_platform_invalid" }
+      );
+    }
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new IntegrationRegistryError("Integration default-link time is invalid.", {
+        status: 422,
+        code: "integration_default_time_invalid"
+      });
+    }
+    const integration = this.requireIntegrationMember(integrationId, sourceGroup);
+    if (integration.status !== "active") {
+      throw new IntegrationRegistryError("The integration is not active.", {
+        status: 409,
+        code: "integration_inactive"
+      });
+    }
+    if (!integration.members.some((member) => member.group.key === targetGroup.key)) {
+      throw new IntegrationRegistryError(
+        "The default-link target group does not belong to this integration.",
+        { status: 422, code: "integration_default_target_not_member" }
+      );
+    }
+
+    this.state.storage.sql.exec(
+      `INSERT INTO integration_default_links
+        (source_group_key, target_platform, integration_id, target_group_key,
+         created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(source_group_key, target_platform) DO NOTHING`,
+      sourceGroup.key,
+      targetGroup.platform,
+      integrationId,
+      targetGroup.key,
+      nowMs,
+      nowMs
+    );
+    return this.getDefaultLink(sourceGroup, targetGroup.platform);
   }
 
   managementStatus(input) {

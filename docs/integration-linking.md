@@ -103,6 +103,32 @@ Large group-wide revocations are processed 50 integrations at a time and leave
 a durable continuation for the registry alarm, keeping each transaction
 bounded without weakening eventual deactivation.
 
+## Directional default-link foundation
+
+The registry schema reserves one default-link edge for each source group and
+target platform:
+
+```text
+(source group key, target platform) -> (integration ID, target group key)
+```
+
+The target group is stored explicitly rather than inferred from the integration
+so the model remains unambiguous if an integration later contains several
+members from the same platform. A Discord guild's default Twitch edge and a
+Twitch channel's default Discord edge are separate records and may change
+independently.
+
+The registry currently provides validated internal operations to read an active
+default and assign one only when the directional key is absent. Assignment
+requires an active integration containing both the source and target groups;
+same-platform edges are rejected. A later attempted assignment cannot silently
+replace the existing default.
+
+This is implementation step 1 only. Link activation does not populate these
+records yet, and no HTTP client or management command can read or change them.
+Automatic first-link assignment, managed switching, revocation fallback, and a
+contributor-facing resolver are separate follow-up steps.
+
 ## Initial routes
 
 Each new Discord invitation seeds three independently versioned routes:

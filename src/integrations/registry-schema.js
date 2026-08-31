@@ -66,6 +66,19 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_members_group
       ON integration_members(group_key, integration_id);
 
+    CREATE TABLE IF NOT EXISTS integration_default_links (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      integration_id TEXT NOT NULL,
+      target_group_key TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform)
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_default_links_integration
+      ON integration_default_links(integration_id, source_group_key, target_platform);
+
     CREATE INDEX IF NOT EXISTS integrations_status_created
       ON integrations(status, created_at_ms, integration_id);
 

@@ -395,6 +395,123 @@ describe("Cross-platform integration linking", () => {
     expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(1);
   });
 
+  it("stores one directional default-link edge for each source and target platform", async () => {
+    const linked = await activateIntegration();
+    const integrationId = linked.completion.integration.id;
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        const discordDefault = instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.group,
+          targetGroup: linked.channel,
+          integrationId,
+          nowMs: 100
+        });
+        const twitchDefault = instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.channel,
+          targetGroup: linked.group,
+          integrationId,
+          nowMs: 101
+        });
+
+        expect(discordDefault).toMatchObject({
+          sourceGroup: linked.group,
+          targetPlatform: "twitch",
+          integration: { id: integrationId },
+          targetGroup: linked.channel,
+          createdAtMs: 100,
+          updatedAtMs: 100
+        });
+        expect(twitchDefault).toMatchObject({
+          sourceGroup: linked.channel,
+          targetPlatform: "discord",
+          integration: { id: integrationId },
+          targetGroup: linked.group,
+          createdAtMs: 101,
+          updatedAtMs: 101
+        });
+        expect(state.storage.sql.exec(
+          `SELECT source_group_key, target_platform, integration_id,
+                  target_group_key
+           FROM integration_default_links
+           ORDER BY source_group_key`
+        ).toArray()).toEqual([
+          {
+            source_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`,
+            target_platform: "twitch",
+            integration_id: integrationId,
+            target_group_key: linked.channel.key ?? `twitch:channel:${linked.channel.id}`
+          },
+          {
+            source_group_key: linked.channel.key ?? `twitch:channel:${linked.channel.id}`,
+            target_platform: "discord",
+            integration_id: integrationId,
+            target_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`
+          }
+        ]);
+      }
+    );
+  });
+
+  it("does not replace a directional default when a later link is assigned", async () => {
+    const group = discordGroup();
+    const first = await activateIntegration({ group, channel: twitchGroup() });
+    const second = await activateIntegration({ group, channel: twitchGroup() });
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        instance.assignDefaultLinkIfAbsent({
+          sourceGroup: group,
+          targetGroup: first.channel,
+          integrationId: first.completion.integration.id,
+          nowMs: 200
+        });
+        const unchanged = instance.assignDefaultLinkIfAbsent({
+          sourceGroup: group,
+          targetGroup: second.channel,
+          integrationId: second.completion.integration.id,
+          nowMs: 300
+        });
+
+        expect(unchanged.integration.id).toBe(first.completion.integration.id);
+        expect(unchanged.targetGroup).toMatchObject(first.channel);
+        expect(unchanged.createdAtMs).toBe(200);
+        expect(unchanged.updatedAtMs).toBe(200);
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_default_links
+           WHERE source_group_key = ?`,
+          `discord:guild:${group.id}`
+        ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("rejects invalid directional default-link ownership", async () => {
+    const linked = await activateIntegration();
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance) => {
+        expect(() => instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.group,
+          targetGroup: discordGroup(),
+          integrationId: linked.completion.integration.id
+        })).toThrow(expect.objectContaining({
+          code: "integration_default_platform_invalid"
+        }));
+        expect(() => instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.group,
+          targetGroup: twitchGroup(),
+          integrationId: linked.completion.integration.id
+        })).toThrow(expect.objectContaining({
+          code: "integration_default_target_not_member"
+        }));
+      }
+    );
+  });
+
   it("revokes active links when the Twitch channel authorization disconnects", async () => {
     const active = await activateIntegration();
     const broadcasterId = active.channel.id;

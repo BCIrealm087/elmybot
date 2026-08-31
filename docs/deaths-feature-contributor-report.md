@@ -486,3 +486,45 @@ GitHub Actions [run 33440277418](https://github.com/BCIrealm087/elmybot/actions/
 completed successfully for implementation commit `857ff664`: the locked
 install, all 224 tests, lint and generated-document checks, tracked-source
 syntax checks, and the non-deploying Wrangler Worker dry run passed.
+
+## Default-link work: step 1 directional foundation
+
+Before redesigning `fun.deaths`, the integration registry gained the durable
+identity needed to choose one relationship in a many-link group. A default is a
+directional edge keyed by source group and target platform, with the selected
+integration and target group stored as its value. Discord-to-Twitch and
+Twitch-to-Discord defaults are therefore independent even when they initially
+refer to the same two-member integration.
+
+The existing `IntegrationRegistry` SQLite initializer creates the additive
+table in deployed objects, so no new Durable Object class or Wrangler migration
+tag is required. The target group is stored explicitly to avoid assuming that
+every future integration contains only one member per platform.
+
+The internal registry operation validates both memberships, requires an active
+cross-platform integration, and inserts only when the directional key is
+absent. Tests prove that both directions coexist, a later Twitch link cannot
+steal a Discord guild's existing default, and same-platform or non-member
+targets fail before storage.
+
+**Assessment:** appropriate foundation work, but intentionally not useful to a
+feature contributor yet. Keeping automatic assignment and management out of
+this step makes the invariant easy to review: one storage key identifies one
+direction, and first-writer behavior preserves an established choice. The next
+step can call this primitive during link activation without deciding management
+UX or revocation fallback at the same time.
+
+### Directional-default verification record
+
+The focused registry run passed 1 file and 13 tests. Its first draft exposed a
+test-isolation mistake: the singleton Durable Object retained rows created by
+earlier cases, while an assertion counted the entire table. Scoping that
+assertion to the source group under test fixed the test without changing the
+runtime implementation.
+
+The complete local suite passed 21 files and 227 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, tracked JavaScript syntax checks, and the whitespace/error-marker
+check also passed. The deployment-specific Wrangler dry run remains for GitHub
+Actions because the Work Mode environment does not provide its deployment
+credentials.

@@ -93,11 +93,17 @@ export function validatedRouteKind(value) {
   return value;
 }
 
-function validatedRoutePlatform(value) {
+export function validatedPlatform(value, subject = "Integration platform") {
   if (typeof value !== "string" || !PLATFORM_PATTERN.test(value)) {
-    throw new IntegrationRegistryError("Integration route platform is invalid.");
+    throw new IntegrationRegistryError(`${subject} is invalid.`, {
+      code: "integration_platform_invalid"
+    });
   }
   return value;
+}
+
+function validatedRoutePlatform(value) {
+  return validatedPlatform(value, "Integration route platform");
 }
 
 export function validatedRouteDestination(value) {
@@ -266,6 +272,23 @@ export function publicRoute(row) {
     targetGroup: parseGroupKey(row.target_group_key),
     destination: validatedRouteDestination(JSON.parse(row.destination_json)).destination,
     enabled: Boolean(row.enabled),
+    createdAtMs: row.created_at_ms,
+    updatedAtMs: row.updated_at_ms
+  };
+}
+
+export function publicDefaultLink(row) {
+  return {
+    sourceGroup: parseGroupKey(row.source_group_key),
+    targetPlatform: validatedPlatform(
+      row.target_platform,
+      "Integration default-link target platform"
+    ),
+    integration: {
+      id: validatedOpaqueId(row.integration_id, "Integration ID"),
+      key: `integration:${row.integration_id}`
+    },
+    targetGroup: parseGroupKey(row.target_group_key),
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms
   };
