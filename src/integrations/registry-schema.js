@@ -122,4 +122,52 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
       ON integration_group_revocations(requested_at_ms, group_key);
   `);
+
+  // Stepwise deployments may already contain active integrations created
+  // before directional defaults existed. Remove only invalid/stale selections,
+  // then deterministically choose the oldest active edge for each missing
+  // source-group/target-platform pair. Existing valid choices are preserved.
+  state.storage.sql.exec(`
+    DELETE FROM integration_default_links AS default_link
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM integrations integration
+      JOIN integration_members source_member
+        ON source_member.integration_id = integration.integration_id
+       AND source_member.group_key = default_link.source_group_key
+      JOIN integration_members target_member
+        ON target_member.integration_id = integration.integration_id
+       AND target_member.group_key = default_link.target_group_key
+       AND target_member.platform = default_link.target_platform
+      WHERE integration.integration_id = default_link.integration_id
+        AND integration.status = 'active'
+    );
+
+    INSERT INTO integration_default_links
+      (source_group_key, target_platform, integration_id, target_group_key,
+       created_at_ms, updated_at_ms)
+    SELECT source_group_key, target_platform, integration_id, target_group_key,
+           created_at_ms, created_at_ms
+    FROM (
+      SELECT source_member.group_key AS source_group_key,
+             target_member.platform AS target_platform,
+             integration.integration_id,
+             target_member.group_key AS target_group_key,
+             integration.created_at_ms,
+             ROW_NUMBER() OVER (
+               PARTITION BY source_member.group_key, target_member.platform
+               ORDER BY integration.created_at_ms, integration.integration_id,
+                        target_member.group_key
+             ) AS preference
+      FROM integrations integration
+      JOIN integration_members source_member
+        ON source_member.integration_id = integration.integration_id
+      JOIN integration_members target_member
+        ON target_member.integration_id = integration.integration_id
+       AND target_member.platform <> source_member.platform
+      WHERE integration.status = 'active'
+    ) candidates
+    WHERE preference = 1
+    ON CONFLICT(source_group_key, target_platform) DO NOTHING;
+  `);
 }

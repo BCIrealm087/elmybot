@@ -11,13 +11,32 @@ checks that the requesting guild belongs to the named integration.
 | Component | Owns |
 | --- | --- |
 | Discord adapter | Command parsing, capability enforcement, safe bounded rendering |
-| `IntegrationRegistry` | Membership authorization, route configuration, lifecycle state, audit history |
+| `IntegrationRegistry` | Membership authorization, default selection, route configuration, lifecycle state, audit history |
 | `IntegrationCoordinator` | Execution/effect aggregates, dead-letter inspection, explicit effect retry |
 
 Keeping these interfaces platform-neutral allows a future control panel or
 another authenticated platform adapter to reuse the same operations. It does
 not force Twitch-native and Discord-native commands into a shared presentation
 or authorization model.
+
+## Default-link management
+
+`/integration_list` marks the Discord guild's current default Twitch link.
+`/integration_default_set integration_id:<id>` changes that directional choice
+to another active relationship containing the guild and selected Twitch
+channel. Both commands require `integration.manage`.
+
+The Discord adapter enforces the local owner/Administrator/Manage Server policy.
+The registry then verifies that the guild belongs to the selected integration,
+that its target is an authenticated member, that the relationship is active,
+and that the supplied actor belongs to the source platform. This defense in
+depth is reusable by another authenticated platform adapter.
+
+No API or command unsets a default while an eligible relationship exists.
+Selecting the current relationship is a no-op. Revoking the selected link
+atomically chooses the oldest remaining active edge, or removes the record only
+when no link to that target platform remains. Automatic assignment, explicit
+updates, fallback, and last-link unavailability use distinct audit events.
 
 ## Status and route management
 
@@ -64,9 +83,11 @@ A future adapter should:
 
 1. Authenticate the platform request and enforce its local management policy.
 2. Pass its canonical platform group to registry status, route, or audit calls.
-3. Let the registry independently verify integration membership.
-4. Only after that check, access coordinator diagnostics or retry helpers.
-5. Render bounded, platform-appropriate output without exposing stored payloads.
+3. For a default update, pass the exact target group and an actor from the
+   source platform; never offer a separate unset operation.
+4. Let the registry independently verify integration membership.
+5. Only after that check, access coordinator diagnostics or retry helpers.
+6. Render bounded, platform-appropriate output without exposing stored payloads.
 
 This keeps authorization defense-in-depth while allowing each platform to have
 its own commands and user experience.

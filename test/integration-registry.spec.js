@@ -13,12 +13,16 @@ import {
 import {
   completeIntegrationInvitation,
   createIntegrationInvitation,
+  getIntegrationDefaultLink,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
   integrationRegistryStub,
   listIntegrationsForGroup,
-  reserveIntegrationInvitation
+  reserveIntegrationInvitation,
+  revokeIntegration,
+  setIntegrationDefaultLink
 } from "../src/integrations/index.js";
+import { initializeRegistryTables } from "../src/integrations/registry-schema.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 
 const integrationEnv = {
@@ -112,6 +116,8 @@ describe("Cross-platform integration linking", () => {
     expect(commands.integration_link_twitch.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_list.guild.capability)
+      .toBe(CAPABILITIES.INTEGRATION_MANAGE);
+    expect(commands.integration_default_set.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_unlink.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
@@ -395,47 +401,41 @@ describe("Cross-platform integration linking", () => {
     expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(1);
   });
 
-  it("stores one directional default-link edge for each source and target platform", async () => {
+  it("automatically assigns the first active link in both directions", async () => {
     const linked = await activateIntegration();
     const integrationId = linked.completion.integration.id;
+    const discordDefault = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: linked.group,
+      targetPlatform: "twitch"
+    });
+    const twitchDefault = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: linked.channel,
+      targetPlatform: "discord"
+    });
+
+    expect(discordDefault.defaultLink).toMatchObject({
+      sourceGroup: linked.group,
+      targetPlatform: "twitch",
+      integration: { id: integrationId },
+      targetGroup: linked.channel
+    });
+    expect(twitchDefault.defaultLink).toMatchObject({
+      sourceGroup: linked.channel,
+      targetPlatform: "discord",
+      integration: { id: integrationId },
+      targetGroup: linked.group
+    });
 
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
-      async (instance, state) => {
-        const discordDefault = instance.assignDefaultLinkIfAbsent({
-          sourceGroup: linked.group,
-          targetGroup: linked.channel,
-          integrationId,
-          nowMs: 100
-        });
-        const twitchDefault = instance.assignDefaultLinkIfAbsent({
-          sourceGroup: linked.channel,
-          targetGroup: linked.group,
-          integrationId,
-          nowMs: 101
-        });
-
-        expect(discordDefault).toMatchObject({
-          sourceGroup: linked.group,
-          targetPlatform: "twitch",
-          integration: { id: integrationId },
-          targetGroup: linked.channel,
-          createdAtMs: 100,
-          updatedAtMs: 100
-        });
-        expect(twitchDefault).toMatchObject({
-          sourceGroup: linked.channel,
-          targetPlatform: "discord",
-          integration: { id: integrationId },
-          targetGroup: linked.group,
-          createdAtMs: 101,
-          updatedAtMs: 101
-        });
+      async (_instance, state) => {
         expect(state.storage.sql.exec(
           `SELECT source_group_key, target_platform, integration_id,
                   target_group_key
            FROM integration_default_links
-           ORDER BY source_group_key`
+           WHERE integration_id = ?
+           ORDER BY source_group_key`,
+          integrationId
         ).toArray()).toEqual([
           {
             source_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`,
@@ -454,36 +454,130 @@ describe("Cross-platform integration linking", () => {
     );
   });
 
+  it("backfills defaults for active links created before the default table", async () => {
+    const linked = await activateIntegration();
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          "DELETE FROM integration_default_links WHERE integration_id = ?",
+          linked.completion.integration.id
+        );
+        initializeRegistryTables(state);
+        expect(state.storage.sql.exec(
+          `SELECT source_group_key, target_platform, integration_id
+           FROM integration_default_links
+           WHERE integration_id = ?
+           ORDER BY source_group_key`,
+          linked.completion.integration.id
+        ).toArray()).toEqual([
+          {
+            source_group_key: `discord:guild:${linked.group.id}`,
+            target_platform: "twitch",
+            integration_id: linked.completion.integration.id
+          },
+          {
+            source_group_key: `twitch:channel:${linked.channel.id}`,
+            target_platform: "discord",
+            integration_id: linked.completion.integration.id
+          }
+        ]);
+      }
+    );
+  });
+
   it("does not replace a directional default when a later link is assigned", async () => {
     const group = discordGroup();
     const first = await activateIntegration({ group, channel: twitchGroup() });
     const second = await activateIntegration({ group, channel: twitchGroup() });
+    const unchanged = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetPlatform: "twitch"
+    });
+
+    expect(unchanged.defaultLink.integration.id)
+      .toBe(first.completion.integration.id);
+    expect(unchanged.defaultLink.targetGroup).toMatchObject(first.channel);
+    expect(unchanged.defaultLink.integration.id)
+      .not.toBe(second.completion.integration.id);
 
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
-      async (instance, state) => {
-        instance.assignDefaultLinkIfAbsent({
-          sourceGroup: group,
-          targetGroup: first.channel,
-          integrationId: first.completion.integration.id,
-          nowMs: 200
-        });
-        const unchanged = instance.assignDefaultLinkIfAbsent({
-          sourceGroup: group,
-          targetGroup: second.channel,
-          integrationId: second.completion.integration.id,
-          nowMs: 300
-        });
-
-        expect(unchanged.integration.id).toBe(first.completion.integration.id);
-        expect(unchanged.targetGroup).toMatchObject(first.channel);
-        expect(unchanged.createdAtMs).toBe(200);
-        expect(unchanged.updatedAtMs).toBe(200);
+      async (_instance, state) => {
         expect(state.storage.sql.exec(
           `SELECT COUNT(*) AS total FROM integration_default_links
            WHERE source_group_key = ?`,
           `discord:guild:${group.id}`
         ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("allows an owning platform actor to switch but not unset its default", async () => {
+    const group = discordGroup();
+    const actor = discordActor();
+    const first = await activateIntegration({ group, actor, channel: twitchGroup() });
+    const second = await activateIntegration({ group, actor, channel: twitchGroup() });
+    const switchedAtMs = Date.now() + 1_000;
+    vi.spyOn(Date, "now").mockReturnValue(switchedAtMs);
+
+    const switched = await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor
+    });
+    expect(switched).toMatchObject({
+      changed: true,
+      defaultLink: {
+        sourceGroup: group,
+        targetPlatform: "twitch",
+        integration: { id: second.completion.integration.id },
+        targetGroup: second.channel,
+        updatedAtMs: switchedAtMs
+      }
+    });
+    expect(switched.defaultLink.createdAtMs).toBeLessThan(switchedAtMs);
+
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor: twitchActor(second.channel.id)
+    })).rejects.toMatchObject({
+      status: 403,
+      code: "integration_actor_platform_mismatch"
+    });
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: null,
+      integrationId: first.completion.integration.id,
+      actor
+    })).rejects.toMatchObject({ code: "integration_identity_invalid" });
+
+    const unchanged = await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor
+    });
+    expect(unchanged.changed).toBe(false);
+    expect(unchanged.defaultLink.updatedAtMs).toBe(switchedAtMs);
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT event, actor_platform, actor_id, group_key
+           FROM integration_audit
+           WHERE integration_id = ? AND event = 'integration.default.updated.v1'`,
+          second.completion.integration.id
+        ).toArray()).toEqual([{
+          event: "integration.default.updated.v1",
+          actor_platform: "discord",
+          actor_id: actor.id,
+          group_key: `discord:guild:${group.id}`
+        }]);
       }
     );
   });
@@ -510,6 +604,70 @@ describe("Cross-platform integration linking", () => {
         }));
       }
     );
+  });
+
+  it("falls back independently in each direction and clears only the last link", async () => {
+    const firstGuild = discordGroup();
+    const secondGuild = discordGroup();
+    const firstChannel = twitchGroup();
+    const secondChannel = twitchGroup();
+    const first = await activateIntegration({
+      group: firstGuild,
+      channel: firstChannel
+    });
+    const discordFallback = await activateIntegration({
+      group: firstGuild,
+      channel: secondChannel
+    });
+    const twitchFallback = await activateIntegration({
+      group: secondGuild,
+      channel: firstChannel
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: first.completion.integration.id,
+      group: firstGuild,
+      actor: first.actor,
+      reason: "test_default_fallback"
+    });
+
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: discordFallback.completion.integration.id },
+      targetGroup: secondChannel
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstChannel,
+      targetPlatform: "discord"
+    })).defaultLink).toMatchObject({
+      integration: { id: twitchFallback.completion.integration.id },
+      targetGroup: secondGuild
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: discordFallback.completion.integration.id,
+      group: firstGuild,
+      actor: discordFallback.actor,
+      reason: "test_last_link"
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toBeNull();
+
+    const replacement = await activateIntegration({
+      group: firstGuild,
+      channel: twitchGroup()
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: replacement.completion.integration.id },
+      targetGroup: replacement.channel
+    });
   });
 
   it("revokes active links when the Twitch channel authorization disconnects", async () => {
@@ -546,6 +704,14 @@ describe("Cross-platform integration linking", () => {
     });
 
     expect((await listIntegrationsForGroup(integrationEnv, active.group)).total).toBe(0);
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: active.group,
+      targetPlatform: "twitch"
+    })).defaultLink).toBeNull();
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: active.channel,
+      targetPlatform: "discord"
+    })).defaultLink).toBeNull();
   });
 
   it("expires and continues large maintenance batches through alarms", async () => {

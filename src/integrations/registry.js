@@ -25,6 +25,7 @@ export {
   completeIntegrationInvitation,
   createIntegrationInvitation,
   getIntegrationById,
+  getIntegrationDefaultLink,
   getIntegrationManagementStatus,
   INTEGRATION_REGISTRY_NAME,
   integrationRegistryStub,
@@ -34,6 +35,7 @@ export {
   resolveIntegrationRoutes,
   revokeIntegration,
   revokeIntegrationsForGroup,
+  setIntegrationDefaultLink,
   updateIntegrationRoute
 } from "./registry-client.js";
 export { IntegrationRegistryError } from "./registry-validation.js";
@@ -325,11 +327,10 @@ export class IntegrationRegistry {
     return row ? publicDefaultLink(row) : null;
   }
 
-  assignDefaultLinkIfAbsent({
+  requireDefaultLinkTarget({
     sourceGroup: sourceGroupInput,
     targetGroup: targetGroupInput,
-    integrationId: integrationIdInput,
-    nowMs = Date.now()
+    integrationId: integrationIdInput
   }) {
     const sourceGroup = validatedGroup(sourceGroupInput);
     const targetGroup = validatedGroup(targetGroupInput);
@@ -339,12 +340,6 @@ export class IntegrationRegistry {
         "An integration default link must target another platform.",
         { status: 422, code: "integration_default_platform_invalid" }
       );
-    }
-    if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
-      throw new IntegrationRegistryError("Integration default-link time is invalid.", {
-        status: 422,
-        code: "integration_default_time_invalid"
-      });
     }
     const integration = this.requireIntegrationMember(integrationId, sourceGroup);
     if (integration.status !== "active") {
@@ -359,6 +354,33 @@ export class IntegrationRegistry {
         { status: 422, code: "integration_default_target_not_member" }
       );
     }
+    return { sourceGroup, targetGroup, integrationId };
+  }
+
+  assignDefaultLinkIfAbsent({
+    sourceGroup: sourceGroupInput,
+    targetGroup: targetGroupInput,
+    integrationId: integrationIdInput,
+    nowMs = Date.now()
+  }) {
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new IntegrationRegistryError("Integration default-link time is invalid.", {
+        status: 422,
+        code: "integration_default_time_invalid"
+      });
+    }
+    const { sourceGroup, targetGroup, integrationId } = this.requireDefaultLinkTarget({
+      sourceGroup: sourceGroupInput,
+      targetGroup: targetGroupInput,
+      integrationId: integrationIdInput
+    });
+    const existing = this.state.storage.sql.exec(
+      `SELECT integration_id
+       FROM integration_default_links
+       WHERE source_group_key = ? AND target_platform = ?`,
+      sourceGroup.key,
+      targetGroup.platform
+    ).toArray()[0];
 
     this.state.storage.sql.exec(
       `INSERT INTO integration_default_links
@@ -373,7 +395,155 @@ export class IntegrationRegistry {
       nowMs,
       nowMs
     );
+    if (!existing) {
+      audit(this.state.storage.sql, {
+        integrationId,
+        event: "integration.default.assigned.v1",
+        groupKey: sourceGroup.key,
+        occurredAtMs: nowMs
+      });
+    }
     return this.getDefaultLink(sourceGroup, targetGroup.platform);
+  }
+
+  setDefaultLink(input) {
+    const { sourceGroup, targetGroup, integrationId } = this.requireDefaultLinkTarget({
+      sourceGroup: input?.sourceGroup,
+      targetGroup: input?.targetGroup,
+      integrationId: input?.integrationId
+    });
+    const actor = validatedActor(
+      input?.actor,
+      sourceGroup.platform,
+      "Integration default-link actor"
+    );
+    const nowMs = Date.now();
+
+    return this.state.storage.transactionSync(() => {
+      const existing = this.state.storage.sql.exec(
+        `SELECT integration_id, target_group_key
+         FROM integration_default_links
+         WHERE source_group_key = ? AND target_platform = ?`,
+        sourceGroup.key,
+        targetGroup.platform
+      ).toArray()[0];
+      if (
+        existing?.integration_id === integrationId &&
+        existing.target_group_key === targetGroup.key
+      ) {
+        return {
+          changed: false,
+          defaultLink: this.getDefaultLink(sourceGroup, targetGroup.platform)
+        };
+      }
+
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_default_links
+          (source_group_key, target_platform, integration_id, target_group_key,
+           created_at_ms, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_group_key, target_platform) DO UPDATE SET
+           integration_id = excluded.integration_id,
+           target_group_key = excluded.target_group_key,
+           updated_at_ms = excluded.updated_at_ms`,
+        sourceGroup.key,
+        targetGroup.platform,
+        integrationId,
+        targetGroup.key,
+        nowMs,
+        nowMs
+      );
+      audit(this.state.storage.sql, {
+        integrationId,
+        event: "integration.default.updated.v1",
+        actor,
+        groupKey: sourceGroup.key,
+        occurredAtMs: nowMs
+      });
+      return {
+        changed: true,
+        defaultLink: this.getDefaultLink(sourceGroup, targetGroup.platform)
+      };
+    });
+  }
+
+  repairDefaultLinksForRevokedIntegration(integrationIdInput, nowMs = Date.now()) {
+    const integrationId = validatedOpaqueId(integrationIdInput, "Integration ID");
+    if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+      throw new IntegrationRegistryError("Integration default-link time is invalid.", {
+        status: 422,
+        code: "integration_default_time_invalid"
+      });
+    }
+    const affected = this.state.storage.sql.exec(
+      `SELECT source_group_key, target_platform
+       FROM integration_default_links
+       WHERE integration_id = ?
+       ORDER BY source_group_key, target_platform`,
+      integrationId
+    ).toArray();
+    let reassigned = 0;
+    let unavailable = 0;
+
+    for (const edge of affected) {
+      const fallback = this.state.storage.sql.exec(
+        `SELECT integration.integration_id,
+                target_member.group_key AS target_group_key
+         FROM integrations integration
+         JOIN integration_members source_member
+           ON source_member.integration_id = integration.integration_id
+          AND source_member.group_key = ?
+         JOIN integration_members target_member
+           ON target_member.integration_id = integration.integration_id
+          AND target_member.platform = ?
+         WHERE integration.status = 'active'
+         ORDER BY integration.created_at_ms, integration.integration_id,
+                  target_member.group_key
+         LIMIT 1`,
+        edge.source_group_key,
+        edge.target_platform
+      ).toArray()[0];
+
+      if (fallback) {
+        this.state.storage.sql.exec(
+          `UPDATE integration_default_links
+           SET integration_id = ?, target_group_key = ?, updated_at_ms = ?
+           WHERE source_group_key = ? AND target_platform = ?
+             AND integration_id = ?`,
+          fallback.integration_id,
+          fallback.target_group_key,
+          nowMs,
+          edge.source_group_key,
+          edge.target_platform,
+          integrationId
+        );
+        audit(this.state.storage.sql, {
+          integrationId: fallback.integration_id,
+          event: "integration.default.fallback.v1",
+          groupKey: edge.source_group_key,
+          occurredAtMs: nowMs
+        });
+        reassigned += 1;
+        continue;
+      }
+
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_default_links
+         WHERE source_group_key = ? AND target_platform = ?
+           AND integration_id = ?`,
+        edge.source_group_key,
+        edge.target_platform,
+        integrationId
+      );
+      audit(this.state.storage.sql, {
+        integrationId,
+        event: "integration.default.unavailable.v1",
+        groupKey: edge.source_group_key,
+        occurredAtMs: nowMs
+      });
+      unavailable += 1;
+    }
+    return { reassigned, unavailable };
   }
 
   managementStatus(input) {
@@ -561,6 +731,19 @@ export class IntegrationRegistry {
             { status: 403, code: "integration_completion_identity_mismatch" }
           );
         }
+        const discordGroup = parseGroupKey(invitation.discord_group_key);
+        this.assignDefaultLinkIfAbsent({
+          sourceGroup: discordGroup,
+          targetGroup: twitchGroup,
+          integrationId: invitation.completed_integration_id,
+          nowMs
+        });
+        this.assignDefaultLinkIfAbsent({
+          sourceGroup: twitchGroup,
+          targetGroup: discordGroup,
+          integrationId: invitation.completed_integration_id,
+          nowMs
+        });
         return {
           integrationId: invitation.completed_integration_id,
           alreadyLinked: false,
@@ -692,6 +875,19 @@ export class IntegrationRegistry {
         groupKey: twitchGroup.key,
         occurredAtMs: nowMs
       });
+      const discordGroup = parseGroupKey(invitation.discord_group_key);
+      this.assignDefaultLinkIfAbsent({
+        sourceGroup: discordGroup,
+        targetGroup: twitchGroup,
+        integrationId,
+        nowMs
+      });
+      this.assignDefaultLinkIfAbsent({
+        sourceGroup: twitchGroup,
+        targetGroup: discordGroup,
+        integrationId,
+        nowMs
+      });
       return { integrationId, alreadyLinked, replayed: false };
     });
 
@@ -822,6 +1018,7 @@ export class IntegrationRegistry {
         groupKey: group.key,
         occurredAtMs: nowMs
       });
+      this.repairDefaultLinksForRevokedIntegration(integrationId, nowMs);
       return {
         revoked: true,
         alreadyRevoked: false,
@@ -873,6 +1070,7 @@ export class IntegrationRegistry {
         groupKey,
         occurredAtMs: nowMs
       });
+      this.repairDefaultLinksForRevokedIntegration(row.integration_id, nowMs);
     }
     const pending = Boolean(this.state.storage.sql.exec(
       `SELECT 1 AS present
@@ -1042,6 +1240,15 @@ export class IntegrationRegistry {
       }
       if (request.method === "POST" && url.pathname === "/integrations/status") {
         return noStoreJson(this.managementStatus(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/default-links/get") {
+        const input = await request.json();
+        return noStoreJson({
+          defaultLink: this.getDefaultLink(input?.sourceGroup, input?.targetPlatform)
+        });
+      }
+      if (request.method === "POST" && url.pathname === "/default-links/set") {
+        return noStoreJson(this.setDefaultLink(await request.json()));
       }
       if (request.method === "POST" && url.pathname === "/routes/resolve") {
         return noStoreJson(this.resolveRoutes(await request.json()));

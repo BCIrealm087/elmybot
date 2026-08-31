@@ -109,6 +109,7 @@ script. All commands except `/alive` are guild-only.
 | `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
+| `/integration_default_set` | `integration_id` | Select the server's default Twitch link |
 | `/integration_status` | `integration_id` | Show membership, routes, and delivery aggregates |
 | `/integration_route_set` | `integration_id`, `route`, `enabled`, optional `channel` | Enable, disable, or retarget a route |
 | `/integration_audit` | `integration_id` | Show recent lifecycle and route history |
@@ -165,6 +166,12 @@ Discord guild and Twitch channel, with three enabled routes:
 | `discord.announce-to-twitch.v1` | `/integration_announce_twitch` sends to Twitch chat |
 | `twitch.announce-to-discord.v1` | `!announce` sends to Discord |
 | `twitch.stream-online-to-discord.v1` | `stream.online` invokes a feature action that publishes a Discord notice |
+
+The first link becomes the directional default for both groups. Later links do
+not replace an existing choice. Discord managers can identify the current link
+in `/integration_list` and change the guild's choice with
+`/integration_default_set`; unlinking a selected relationship falls back to the
+oldest remaining active link.
 
 Routes can be disabled or retargeted independently. A Twitch channel may link
 to multiple Discord guilds. Revoking a link preserves its audit history and

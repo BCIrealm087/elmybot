@@ -25,6 +25,8 @@ commands:
   and uses the command's Discord channel as the initial cross-platform message
   destination.
 - `/integration_list` lists the server's active integrations and their IDs.
+- `/integration_default_set integration_id:<id>` makes one active link the
+  server's default Twitch relationship.
 - `/integration_status integration_id:<id>` shows membership, route state, and
   aggregate execution/effect state.
 - `/integration_route_set integration_id:<id> route:<kind> enabled:<boolean>
@@ -71,7 +73,8 @@ evaluating the capability or contacting the registry.
 6. The broadcaster's channel authorization Durable Object completes the
    reservation and activates an integration containing the Discord guild and
    Twitch channel. The invitation's route templates are bound to those
-   authenticated group identities.
+   authenticated group identities. If either direction has no default yet, the
+   new relationship becomes that direction's default.
 7. The registry returns the integration ID, which Discord managers can inspect
    or revoke with the management commands.
 
@@ -103,7 +106,7 @@ Large group-wide revocations are processed 50 integrations at a time and leave
 a durable continuation for the registry alarm, keeping each transaction
 bounded without weakening eventual deactivation.
 
-## Directional default-link foundation
+## Directional default-link lifecycle
 
 The registry schema reserves one default-link edge for each source group and
 target platform:
@@ -118,16 +121,37 @@ members from the same platform. A Discord guild's default Twitch edge and a
 Twitch channel's default Discord edge are separate records and may change
 independently.
 
-The registry currently provides validated internal operations to read an active
-default and assign one only when the directional key is absent. Assignment
-requires an active integration containing both the source and target groups;
-same-platform edges are rejected. A later attempted assignment cannot silently
-replace the existing default.
+Link completion assigns both directions only when their directional keys are
+absent. A later link therefore cannot silently steal an established choice.
+Deployments that already contain active relationships are backfilled
+deterministically: the oldest active integration wins, with stable integration
+and target-group keys breaking timestamp ties.
 
-This is implementation step 1 only. Link activation does not populate these
-records yet, and no HTTP client or management command can read or change them.
-Automatic first-link assignment, managed switching, revocation fallback, and a
-contributor-facing resolver are separate follow-up steps.
+The internal read and update operations require an active integration containing
+the exact source and target groups. An explicit update also requires an actor
+from the source platform. Platform adapters remain responsible for authenticating
+that actor and applying their local management policy. The Discord adapter
+exposes `/integration_default_set` under `integration.manage`, so only the
+server owner or a member with Administrator or Manage Server can change the
+guild's default Twitch link. `/integration_list` marks the current choice.
+
+There is intentionally no unset operation. Re-selecting the existing edge is a
+no-op, while selecting another eligible edge is atomic with an
+`integration.default.updated.v1` audit event. The Twitch-to-Discord direction is
+created and maintained by the same platform-neutral registry rules; a future
+authenticated Twitch management adapter can reuse the update operation without
+letting a Discord guild choose on behalf of a Twitch channel.
+
+Revocation repairs only directional defaults that selected the revoked
+integration. Each affected direction falls back to its oldest remaining active
+edge using the same deterministic ordering as upgrade backfill. If no eligible
+edge remains, the row is removed because those platforms are no longer linked;
+this is lifecycle cleanup, not a user-visible unset operation. A later new link
+becomes the default normally. Fallback and unavailable transitions are audited.
+
+These steps complete default-link lifecycle management. A contributor-facing
+feature resolver remains a separate step; feature code still cannot access a
+default through Framework API v1.
 
 ## Initial routes
 
@@ -161,6 +185,9 @@ the management, audit, and recovery model.
 - `/integration_unlink` revokes only the selected relationship. It does not
   remove Twitch authorization because the channel may have other integrations
   or use Twitch-native Elmybot behavior.
+- Revoking a selected relationship moves each affected directional default to
+  the oldest remaining active link. If none remains, that direction has no
+  default until it is linked again.
 - Disconnecting or invalidating the Twitch broadcaster authorization revokes all
   active integrations containing that Twitch channel. If registry revocation is
   temporarily unavailable, the channel authorization records pending

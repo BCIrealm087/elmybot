@@ -3,6 +3,7 @@ import {
   defaultDiscordTwitchRoutes,
   getIntegrationCoordinatorStatus,
   getIntegrationDeadLetters,
+  getIntegrationDefaultLink,
   getIntegrationManagementStatus,
   INTEGRATION_ROUTE_KINDS,
   IntegrationCoordinatorError,
@@ -11,6 +12,7 @@ import {
   listIntegrationsForGroup,
   retryIntegrationEffect,
   revokeIntegration,
+  setIntegrationDefaultLink,
   updateIntegrationRoute
 } from "../../integrations/index.js";
 import { CAPABILITIES } from "./discord-permissions.js";
@@ -138,16 +140,70 @@ export const integrationCommands = Object.freeze({
     },
     deferred: true,
     exec: async (interaction, env) => {
-      const { result, userFacingError } = await integrationCommandRequest(() =>
-        listIntegrationsForGroup(env, discordIntegrationGroup(interaction), { limit: 10 })
-      );
+      const group = discordIntegrationGroup(interaction);
+      const { result, userFacingError } = await integrationCommandRequest(async () => {
+        const [listed, selected] = await Promise.all([
+          listIntegrationsForGroup(env, group, { limit: 10 }),
+          getIntegrationDefaultLink(env, {
+            sourceGroup: group,
+            targetPlatform: "twitch"
+          })
+        ]);
+        return { ...listed, defaultLink: selected.defaultLink };
+      });
       if (userFacingError) return ephemeralData(userFacingError);
       if (result.total === 0) return ephemeralData("No active integrations.");
-      const shown = result.integrations.map((integration) =>
-        `• ${twitchMemberDescription(integration)} — id: \`${integration.id}\``
-      ).join("\n");
+      const shown = result.integrations.map((integration) => {
+        const defaultLabel = result.defaultLink?.integration.id === integration.id
+          ? " — **default**"
+          : "";
+        return `• ${twitchMemberDescription(integration)} — id: \`${integration.id}\`` +
+          defaultLabel;
+      }).join("\n");
       return ephemeralData(
         `Active integrations (${result.total} total, showing ${result.integrations.length}):\n${shown}`
+      );
+    }
+  },
+
+  "integration_default_set": {
+    description: "Set this server's default Twitch integration.",
+    guild: {
+      capability: CAPABILITIES.INTEGRATION_MANAGE
+    },
+    deferred: true,
+    options: [integrationIdOption()],
+    exec: async (interaction, env) => {
+      const integrationId = String(getOption(interaction, "integration_id") ?? "").trim();
+      const sourceGroup = discordIntegrationGroup(interaction);
+      const actor = discordIntegrationActor(interaction);
+      const { result, userFacingError } = await integrationCommandRequest(async () => {
+        const status = await getIntegrationManagementStatus(env, {
+          integrationId,
+          group: sourceGroup
+        });
+        const target = status.integration.members.find(
+          ({ group }) => group.platform === "twitch"
+        );
+        if (!target) {
+          throw new IntegrationRegistryError(
+            "The integration does not contain a Twitch channel.",
+            { status: 422, code: "integration_default_target_not_member" }
+          );
+        }
+        const selected = await setIntegrationDefaultLink(env, {
+          sourceGroup,
+          targetGroup: target.group,
+          integrationId,
+          actor
+        });
+        return { ...selected, integration: status.integration };
+      });
+      if (userFacingError) return ephemeralData(userFacingError);
+      return ephemeralData(
+        result.changed
+          ? `Set ${twitchMemberDescription(result.integration)} as this server's default Twitch link.`
+          : `${twitchMemberDescription(result.integration)} is already this server's default Twitch link.`
       );
     }
   },

@@ -17,6 +17,7 @@ export {
   completeIntegrationInvitation,
   createIntegrationInvitation,
   getIntegrationById,
+  getIntegrationDefaultLink,
   getIntegrationManagementStatus,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
@@ -30,6 +31,7 @@ export {
   revokeIntegration,
   revokeIntegrationsForGroup,
   resolveIntegrationRoutes,
+  setIntegrationDefaultLink,
   updateIntegrationRoute
 } from "./registry.js";
 

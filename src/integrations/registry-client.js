@@ -79,6 +79,14 @@ export async function getIntegrationManagementStatus(env, input) {
   return postRegistry(env, "/integrations/status", input);
 }
 
+export async function getIntegrationDefaultLink(env, input) {
+  return postRegistry(env, "/default-links/get", input);
+}
+
+export async function setIntegrationDefaultLink(env, input) {
+  return postRegistry(env, "/default-links/set", input);
+}
+
 export async function updateIntegrationRoute(env, input) {
   return postRegistry(env, "/routes/update", input);
 }

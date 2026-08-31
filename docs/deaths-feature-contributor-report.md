@@ -533,3 +533,77 @@ GitHub Actions [run 33445382987](https://github.com/BCIrealm087/elmybot/actions/
 completed successfully for implementation commit `c0fea7aa`: the locked
 install, all 227 tests, lint and repository checks, tracked-source syntax
 checks, and the non-deploying Wrangler Worker dry run passed.
+
+## Default-link work: steps 2–4 lifecycle management
+
+### Step 2: assign the first link automatically
+
+Invitation completion now attempts an insert-only default for both directions:
+Discord guild to Twitch and Twitch channel to Discord. Replayed completion and
+re-linking an already-active pair run the same idempotent operation, while a
+later distinct link cannot replace an established choice. The schema
+initializer also backfills active relationships created before default links
+existed, choosing the oldest edge with stable IDs as tie-breakers.
+
+**Assessment:** appropriate and substantially easier than the foundation step.
+The activation transaction already had both authenticated group identities, so
+the behavior fit in one authoritative place. Upgrade backfill was the only
+extra complexity; without it, an incremental deployment could violate the
+stated invariant until every existing pair linked again.
+
+### Step 3: allow an authorized switch without unset
+
+The registry now accepts an exact source group, target group, integration, and
+source-platform actor. It verifies active membership before atomically replacing
+the directional value and recording `integration.default.updated.v1`. Selecting
+the current edge is a no-op. Missing targets are invalid and there is no delete
+endpoint or client operation.
+
+Discord's existing management adapter exposes
+`/integration_default_set integration_id:<id>` under the strict
+`integration.manage` capability, and `/integration_list` marks the current
+choice. The command resolves the authenticated Twitch member from the selected
+integration rather than asking a manager to type a second opaque group key.
+Twitch-to-Discord choices use the same registry operation, but no Twitch-native
+management command was added: current architecture deliberately makes Discord
+the first management adapter, and a Discord manager must not choose a Twitch
+channel's outgoing default.
+
+**Assessment:** the registry operation was straightforward; the cumbersome part
+was preserving authorization ownership across platforms. Reusing the existing
+Discord management capability kept the user experience small and avoided
+inventing a weaker global token or treating any integration member as entitled
+to update every direction. For a hobby feature author this remains framework
+infrastructure, not command code they should have to reproduce.
+
+### Step 4: repair defaults after revocation
+
+Every single-link and batched group revocation now repairs only rows that chose
+the revoked integration. Each direction independently selects its oldest
+remaining active edge. If none exists, the row is removed because the source is
+no longer linked to that platform; this automatic lifecycle cleanup is distinct
+from a user-requested unset. Linking again recreates the missing default.
+Fallback and unavailable outcomes have separate audit events.
+
+The focused topology deliberately used one Discord guild with two Twitch
+channels and one Twitch channel with two Discord guilds. Revoking their shared
+edge proved that the two directions can fall back to different integrations.
+It also covered last-link cleanup followed by automatic assignment on relink.
+
+**Assessment:** this was the most reasoning-heavy step. Updating only the
+Discord side would have looked correct in the ordinary two-member case but
+failed the directional model. Centralizing repair beside both registry
+revocation paths made the invariant reviewable and prevented platform-specific
+disconnect code from needing to understand default selection.
+
+At this point the registry owns a complete default-link lifecycle. The remaining
+step before `fun.deaths` can use it is a narrow contributor-facing resolver that
+reads the default without exposing registry mutation or lifecycle internals.
+
+### Default-link lifecycle verification record
+
+The focused registry and management run passed 2 files and 20 tests. The
+complete local suite passed 21 files and 231 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, tracked JavaScript syntax checks, and the whitespace/error-marker
+check also passed. The non-deploying Wrangler dry run remains for GitHub Actions.
