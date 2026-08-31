@@ -36,8 +36,20 @@ helpers from `@elmybot/framework/testing`. It starts private and remains part of
 this repository; publishing it is a separate future decision.
 
 The scaffold never overwrites an existing file and does not install the feature
-automatically. Add its exact version to the root `dependencies`, run
-`npm install`, and add it to `src/features/index.js`:
+automatically. Add its exact version to the root `dependencies` without
+removing the existing entries:
+
+```json
+{
+  "dependencies": {
+    "@elmybot/feature-fun-hype": "0.1.0"
+  }
+}
+```
+
+Run `npm install` from the repository root to update `package-lock.json` and
+create the workspace link. Then add the feature's default export to the
+explicit catalog in `src/features/index.js`:
 
 ```js
 import hypeFeature from "@elmybot/feature-fun-hype";

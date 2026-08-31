@@ -354,12 +354,14 @@ The harness should support:
 - coordinator replay simulations; and
 - automatic contract checks for every feature.
 
-A scaffold command such as the following should create a feature module and its
-test skeleton:
+A scaffold command such as the following creates the recommended private
+workspace package and its test skeleton:
 
 ```text
-npm run feature:new -- fun-hype
+npm run feature:new -- fun-hype --workspace
 ```
+
+Omit `--workspace` when the feature is intentionally repository-local.
 
 Feature metadata should also become the source for generated Discord
 registration descriptors, command documentation, and route-management choices
@@ -412,8 +414,8 @@ so those representations cannot silently drift.
    deployment-free test runtime composes real feature contracts while modeling
    actors, authorization, routes, effects, events, schedules, stored-plan
    replay, configuration, state, cooldowns, clock, randomness, and logs. The
-   non-overwriting `npm run feature:new -- <name>` scaffold creates one feature
-   module and one test skeleton. The authoring guide provides native, shared,
+   non-overwriting `npm run feature:new -- <name>` scaffold creates one local
+   feature module and one test skeleton. The authoring guide provides native, shared,
    routed, scheduled, event-driven, and stateful cookbooks, while the generated
    installed-feature catalog and lint freshness check keep contributor
    documentation tied to registry metadata.
@@ -429,7 +431,8 @@ so those representations cannot silently drift.
     workspaces now expose `@elmybot/framework` and its test kit, while
     `@elmybot/feature-alive` proves independent feature source, metadata, tests,
     explicit installation, Worker bundling, and compatibility re-exports. The
-    workspace scaffold creates the complete package shape; validation checks
+    recommended `npm run feature:new -- <name> --workspace` scaffold creates the
+    complete package shape; validation checks
     names, exports, framework peer versions, metadata, and feature definitions;
     and ESLint prevents package source from escaping into Worker internals.
     Runtime-loaded code and external package publication remain out of scope.

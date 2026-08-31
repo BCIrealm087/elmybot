@@ -8,14 +8,20 @@ Framework API: v1.
 
 ## Features
 
-| Feature | Description | Actions | Discord commands | Twitch commands |
-| --- | --- | --- | --- | --- |
-| `core.alive` | A shared responsiveness check. | 1 | 1 | 1 |
-| `fun.counter` | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 1 | 1 |
-| `integrations.announcements` | Publishes immediate announcements across linked platforms. | 1 | 1 | 1 |
-| `discord.role-access` | Manages Discord roles trusted by protected bot commands. | 0 | 1 | 0 |
-| `twitch.stream-online` | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 |
-| `integrations.scheduled-twitch-announcements` | Schedules recurring announcements to linked Twitch chats. | 0 | 1 | 0 |
+| Feature | Source | Description | Actions | Discord commands | Twitch commands |
+| --- | --- | --- | --- | --- | --- |
+| `core.alive` | `@elmybot/feature-alive` | A shared responsiveness check. | 1 | 1 | 1 |
+| `fun.counter` | repository-local | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 1 | 1 |
+| `integrations.announcements` | repository-local | Publishes immediate announcements across linked platforms. | 1 | 1 | 1 |
+| `discord.role-access` | repository-local | Manages Discord roles trusted by protected bot commands. | 0 | 1 | 0 |
+| `twitch.stream-online` | repository-local | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 |
+| `integrations.scheduled-twitch-announcements` | repository-local | Schedules recurring announcements to linked Twitch chats. | 0 | 1 | 0 |
+
+## Workspace packages
+
+| Package | Feature | Installed by Worker |
+| --- | --- | --- |
+| `@elmybot/feature-alive` | `core.alive` | yes |
 
 ## Commands
 

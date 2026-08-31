@@ -64,17 +64,34 @@ function commandType(mode) {
   return mode;
 }
 
-export function generateFeatureCatalogMarkdown(registry) {
+export function generateFeatureCatalogMarkdown(
+  registry,
+  { workspacePackages = [] } = {}
+) {
   const commandOwner = commandOwners(registry);
   const routeOwner = routeOwners(registry);
   const eventOwner = triggerOwners(registry, "events");
   const scheduleOwner = triggerOwners(registry, "schedules");
+  const packageByFeatureId = new Map(
+    workspacePackages.map((workspacePackage) => [
+      workspacePackage.featureId,
+      workspacePackage.packageName
+    ])
+  );
   const featureRows = registry.features.map((feature) => [
     `\`${feature.id}\``,
+    packageByFeatureId.has(feature.id)
+      ? `\`${packageByFeatureId.get(feature.id)}\``
+      : "repository-local",
     feature.description,
     feature.actions.length,
     feature.commands.discord.length,
     feature.commands.twitch.length
+  ]);
+  const workspaceRows = workspacePackages.map((workspacePackage) => [
+    `\`${workspacePackage.packageName}\``,
+    `\`${workspacePackage.featureId}\``,
+    workspacePackage.installed ? "yes" : "no"
   ]);
   const commandRows = ["discord", "twitch"].flatMap((platform) =>
     Object.values(registry.commands[platform]).map((command) => [
@@ -127,9 +144,19 @@ export function generateFeatureCatalogMarkdown(registry) {
     "## Features",
     "",
     table(
-      ["Feature", "Description", "Actions", "Discord commands", "Twitch commands"],
+      [
+        "Feature",
+        "Source",
+        "Description",
+        "Actions",
+        "Discord commands",
+        "Twitch commands"
+      ],
       featureRows
     ),
+    "## Workspace packages",
+    "",
+    table(["Package", "Feature", "Installed by Worker"], workspaceRows),
     "## Commands",
     "",
     table(["Feature", "Command", "Type", "Capability", "Description"], commandRows),

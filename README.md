@@ -376,6 +376,13 @@ metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
 The [Framework API v1 stability policy](docs/framework-api.md) defines the
 supported import boundary, compatible changes, and deprecation lifecycle.
 
+Create and validate the recommended private workspace package with:
+
+```sh
+npm run feature:new -- fun-hype --workspace
+npm run feature:workspaces
+```
+
 ## Detailed documentation
 
 - [Cross-platform contracts](docs/cross-platform-contracts.md)

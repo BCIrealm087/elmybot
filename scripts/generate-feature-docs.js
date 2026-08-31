@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { featureRegistry } from "../src/features/index.js";
 import { generateFeatureCatalogMarkdown } from "../src/framework/catalog-documentation.js";
+import { checkWorkspaceFeatures } from "./check-workspace-features.js";
 
 export const FEATURE_CATALOG_PATH = "docs/feature-catalog.md";
 
@@ -10,7 +11,10 @@ export async function generateFeatureDocs({
   root = process.cwd(),
   check = false
 } = {}) {
-  const output = generateFeatureCatalogMarkdown(featureRegistry);
+  const workspacePackages = await checkWorkspaceFeatures({ root });
+  const output = generateFeatureCatalogMarkdown(featureRegistry, {
+    workspacePackages
+  });
   const destination = path.resolve(root, FEATURE_CATALOG_PATH);
   if (check) {
     let existing = null;

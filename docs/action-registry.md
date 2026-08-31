@@ -99,10 +99,15 @@ platform response shapes do not enter the action invocation.
 
 ## Adding an action
 
-For contributor-facing behavior, create a feature module with `defineFeature()`,
-declare its semantic action with `defineAction()`, and expose it through the
-Discord or Twitch action-command helpers. Add the reviewed module to the
-explicit catalog in `src/features/index.js` and give it a focused test.
+For contributor-facing behavior, create either a repository-local feature
+module or a private workspace package with `defineFeature()`. Declare its
+semantic action with `defineAction()` and expose it through the Discord or
+Twitch action-command helpers. Workspace source imports the public API from
+`@elmybot/framework`; local source imports `src/framework/index.js`. Add the
+reviewed feature to the explicit catalog in `src/features/index.js` and give it
+a focused test. A workspace package must also be installed at its exact version
+in the root `dependencies` and lockfile so a clean Worker build resolves the
+same reviewed source.
 
 The framework then validates its argument schema, capability, supported
 origins, action references, route and effect dependencies, and command

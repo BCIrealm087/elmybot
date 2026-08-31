@@ -6,9 +6,6 @@ import {
   isFeatureDefinition
 } from "../packages/framework/index.js";
 
-const root = process.cwd();
-const workspaceRoot = path.join(root, "packages", "features");
-
 async function readJson(file) {
   return JSON.parse(await readFile(file, "utf8"));
 }
@@ -17,7 +14,8 @@ function requireEqual(actual, expected, message) {
   if (actual !== expected) throw new Error(message);
 }
 
-export async function checkWorkspaceFeatures() {
+export async function checkWorkspaceFeatures({ root = process.cwd() } = {}) {
+  const workspaceRoot = path.join(root, "packages", "features");
   const rootManifest = await readJson(path.join(root, "package.json"));
   const frameworkManifest = await readJson(
     path.join(root, "packages", "framework", "package.json")
