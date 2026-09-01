@@ -702,3 +702,85 @@ completed successfully for implementation commit `a9dee9c3`: the locked
 install, all 234 tests, lint and generated-document checks, tracked-source
 syntax checks, and the non-deploying Wrangler Worker dry run passed. Wrangler
 4.126.0 reported a 546.01 KiB upload and 103.52 KiB gzip size.
+
+## Default-link work: step 6 adversarial verification
+
+### Audit the existing matrix before adding cases
+
+The lifecycle work from steps 1–5 already had useful direct coverage: first
+assignment in both directions, deterministic upgrade backfill, a later link not
+stealing the default, authorized switching without unset, independent fallback,
+last-link cleanup, relinking, invalid membership, Discord management policy,
+and the contributor resolver. Step 6 therefore did not create another broad
+happy-path file or repeat those assertions.
+
+The remaining risk clusters were topology and ordering: four groups connected
+as a complete many-to-many square, group-wide rather than single-link
+revocation, managers presenting a valid but foreign integration, two links
+finishing at once, and a replacement completion racing revocation of the old
+default.
+
+**Assessment:** doing the coverage audit first was appropriate. From a hobby
+contributor's perspective, the default-link behavior is already easy to test
+through `defaultTestLink()`. These registry tests are maintainer-level because
+they intentionally exercise invitation completion, SQL-backed lifecycle, and
+Durable Object serialization. Asking an ordinary command author to reproduce
+them would be cumbersome and would test infrastructure rather than the feature.
+
+### Add many-link and authorization isolation
+
+The first new topology creates the complete 2×2 set of links between two
+Discord guilds and two Twitch channels. It switches one Discord-to-Twitch
+direction and one Twitch-to-Discord direction, then verifies all four selected
+edges. The two untouched directions remain unchanged, proving that a switch is
+keyed by source group and target platform rather than by integration or by the
+pair of platforms globally.
+
+A separate authorization-boundary case gives a correctly shaped Discord actor
+two invalid choices: an integration owned by another guild, and a foreign
+target presented with the guild's own integration. The registry rejects them
+with distinct membership errors and preserves the existing default. This
+complements the existing platform-policy test, which proves that
+`integration.manage` admits guild managers but not ordinary moderators.
+
+**Assessment:** the 2×2 case is the most valuable readability improvement in
+the matrix. Directionality can sound abstract; four explicit final targets make
+cross-direction contamination obvious. The authorization case is necessarily
+split across two layers—Discord decides who is a manager, while the registry
+decides what that authenticated source may manage—but each test now states its
+own boundary clearly.
+
+### Exercise lifecycle and concurrency
+
+Group-wide revocation now has a topology-specific test rather than relying only
+on the earlier 51-row batching test. Revoking a guild's two links removes its
+outgoing default, removes the orphaned Twitch channel's reverse default,
+promotes the shared Twitch channel's remaining Discord link, and leaves that
+other guild's outgoing default intact.
+
+Two race tests use concurrent public registry requests. Simultaneous completion
+of two first links must leave exactly one directional row and exactly one
+assignment audit for their shared Discord source; either valid integration may
+win. In the second race, revocation of the selected link and completion of its
+prepared replacement may serialize in either order, but the final default must
+select the active replacement and no row may still reference the revoked
+integration.
+
+**Assessment:** these tests focus on stable invariants instead of timing or a
+particular promise winner, so they avoid becoming change-detector tests for the
+Durable Object scheduler. They are slightly harder to read than sequential
+cases, but the allowed nondeterminism is local and the final conditions match
+what users actually need: one valid default, no stale revoked edge, and no
+duplicate assignment record. The existing implementation passed without a
+production change, which is evidence that the transaction and uniqueness
+boundaries introduced in earlier steps are doing their job.
+
+### Step 6 verification record
+
+The default-link-focused run passed 4 files and 54 tests. The registry file by
+itself passed all 22 cases, including the five new adversarial tests. The
+complete local suite passed 21 files and 239 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, tracked JavaScript syntax checks, and the whitespace/error-marker
+check also passed. The non-deploying Wrangler dry run remains for GitHub
+Actions. Its result will be recorded after the step 6 commit is verified.
