@@ -697,5 +697,8 @@ generated-catalog freshness, tracked JavaScript syntax checks, and the
 whitespace/error-marker check also passed. The non-deploying Wrangler dry run
 remains for GitHub Actions, as required by the repository instructions.
 
-The GitHub Actions run will be added after the implementation commit has
-completed CI.
+GitHub Actions [run 33456660202](https://github.com/BCIrealm087/elmybot/actions/runs/33456660202)
+completed successfully for implementation commit `a9dee9c3`: the locked
+install, all 234 tests, lint and generated-document checks, tracked-source
+syntax checks, and the non-deploying Wrangler Worker dry run passed. Wrangler
+4.126.0 reported a 546.01 KiB upload and 103.52 KiB gzip size.
