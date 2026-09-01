@@ -219,6 +219,20 @@ function requireCounterAmount(amount) {
   return amount;
 }
 
+function requireCounterValue(value, descriptor) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < descriptor.min ||
+    value > descriptor.max
+  ) {
+    throw new FeatureContextError(
+      "Bounded counter values must be safe integers within the configured bounds.",
+      { code: "feature_counter_value_invalid" }
+    );
+  }
+  return value;
+}
+
 function boundedCounter(
   action,
   runtimeContext,
@@ -239,6 +253,7 @@ function boundedCounter(
     );
   return Object.freeze({
     get: () => run("get"),
+    set: (value) => run("set", requireCounterValue(value, descriptor)),
     increment: (amount = 1) => run("increment", requireCounterAmount(amount)),
     decrement: (amount = 1) => run("decrement", requireCounterAmount(amount)),
     reset: () => run("reset")

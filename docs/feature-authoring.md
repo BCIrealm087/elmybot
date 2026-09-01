@@ -598,6 +598,17 @@ defineAction({
 });
 ```
 
+Use `exceptValues` instead when every supplied value except a small public set
+requires the capability. The rule matches only when the argument is present,
+so an omitted optional argument remains governed by the action's baseline:
+
+```js
+conditionalAccess: [{
+  capability: access.moderators,
+  when: { argument: "operation", exceptValues: ["show"] }
+}]
+```
+
 Use an ordinary action-level capability when the whole action is protected.
 Conditional checks are for commands whose validated modes genuinely have
 different access requirements. `authorization.allows()` accepts only reviewed,

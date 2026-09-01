@@ -100,6 +100,7 @@ storage calls:
 const deaths = ctx.state.boundedCounter("deaths", normalizedGameName);
 
 await deaths.get();       // absent counters start at zero
+await deaths.set(42);     // assign an exact in-bounds value
 await deaths.increment(); // add one
 await deaths.decrement(); // subtract one, stopping at zero
 await deaths.reset();     // return to zero
@@ -138,7 +139,8 @@ Options are `{ min, max, initial }`. They default to zero,
 `Number.MAX_SAFE_INTEGER`, and `min`, respectively. Bounds and the initial value
 must be safe integers satisfying `min <= initial <= max`. Increment and
 decrement amounts are positive integers up to 1,000,000; operations saturate at
-the applicable inclusive bound. `reset()` returns the new initial value.
+the applicable inclusive bound. `set(value)` requires a safe integer within the
+configured bounds, and `reset()` returns the new initial value.
 
 Each state operation is atomic independently; API v1 does not expose a general
 multi-operation or cross-owner transaction. A bounded-counter mutation and its

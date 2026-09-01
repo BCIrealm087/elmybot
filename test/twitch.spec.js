@@ -169,7 +169,7 @@ describe("Twitch feature commands", () => {
 		})).resolves.toBe("Death counts require a default linked Discord server.");
 		await expect(twitchCommands.deaths.exec(member, env, {
 			messageId: `deaths-message-${++twitchMessageIdCounter}`,
-			argsText: 'plus "Dark Souls"'
+			argsText: '42 "Dark Souls"'
 		})).resolves.toBe("Only moderators can change death counts.");
 
 		const moderator = {
@@ -179,7 +179,7 @@ describe("Twitch feature commands", () => {
 		};
 		await expect(twitchCommands.deaths.exec(moderator, env, {
 			messageId: `deaths-message-${++twitchMessageIdCounter}`,
-			argsText: 'plus "Dark Souls"'
+			argsText: '42 "Dark Souls"'
 		})).resolves.toBe("Death counts require a default linked Discord server.");
 	});
 });

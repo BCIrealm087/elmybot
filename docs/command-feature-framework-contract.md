@@ -255,8 +255,9 @@ Requirements:
 - `kind` is a versioned semantic kind.
 - `capability` is either `null` or a registered namespaced capability.
 - `conditionalAccess` defaults to an empty array. Each rule names a registered
-  capability and one primitive input argument plus the values for which feature
-  code requires that capability.
+  capability and one primitive input argument plus either the values for which
+  feature code requires that capability or the values excluded from that
+  requirement.
 - `supportedOrigins` contains at least one unique platform.
 - `input` defaults to `schema.object({})`.
 - `uses` defaults to empty arrays.
@@ -288,10 +289,13 @@ conditionalAccess: [
 ```
 
 The argument must name a primitive field in the action's object schema, and
-every listed value must pass that field's schema. A declaration contains at
-most 20 rules and each rule at most 20 unique values; all are normalized and
-frozen. A non-empty declaration requires the `authorization` service. Registry
-composition rejects unregistered conditional capabilities.
+each rule must contain exactly one of `values` or `exceptValues`. Every listed
+value must pass that field's schema. `values` matches the listed normalized
+values. `exceptValues` matches when the argument is present and its normalized
+value is not listed; an omitted optional argument does not match. A declaration
+contains at most 20 rules and each rule at most 20 unique values; all are
+normalized and frozen. A non-empty declaration requires the `authorization`
+service. Registry composition rejects unregistered conditional capabilities.
 
 This metadata documents argument-dependent access; it does not authorize by
 itself. Feature code MUST still call `authorization.allows()` before performing
@@ -354,6 +358,7 @@ The action context has this exact API v1 surface:
         initial = min
       } = {}): {
         get(): Promise<number>,
+        set(value): Promise<number>,
         increment(amount = 1): Promise<number>,
         decrement(amount = 1): Promise<number>,
         reset(): Promise<number>
@@ -386,6 +391,7 @@ The action context has this exact API v1 surface:
       initial = min
     } = {}): {
       get(): Promise<number>,
+      set(value): Promise<number>,
       increment(amount = 1): Promise<number>,
       decrement(amount = 1): Promise<number>,
       reset(): Promise<number>
@@ -447,9 +453,10 @@ Rules:
   to a collision-resistant internal key; subject normalization remains an
   explicit feature-domain decision.
 - Bounded-counter bounds and the initial value are safe inclusive integers with
-  `min <= initial <= max`. Positive increment and decrement amounts are at most
-  1,000,000. Updates saturate at the selected bound, `reset()` returns to the
-  initial value, and the returned counter handle is frozen.
+  `min <= initial <= max`. `set(value)` accepts a safe integer within those
+  bounds. Positive increment and decrement amounts are at most 1,000,000.
+  Updates saturate at the selected bound, `reset()` returns to the initial
+  value, and the returned counter handle is frozen.
 - Each state operation is atomic by itself. API v1 does not promise a
   multi-operation or cross-owner transaction. One bounded-counter mutation,
   including its floor or ceiling check, is one atomic operation.

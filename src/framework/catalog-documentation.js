@@ -56,9 +56,13 @@ function valueList(values) {
 function actionAccess(action) {
   if (!action) return "public";
   const baseline = action.capability ?? "public";
-  const conditional = action.conditionalAccess.map(({ capability, when }) =>
-    `${capability} when \`${when.argument}\` is ${valueList(when.values)}`
-  );
+  const conditional = action.conditionalAccess.map(({ capability, when }) => {
+    if (when.exceptValues) {
+      return `${capability} when \`${when.argument}\` is present and is not ` +
+        valueList(when.exceptValues);
+    }
+    return `${capability} when \`${when.argument}\` is ${valueList(when.values)}`;
+  });
   return [baseline, ...conditional].join("; ");
 }
 

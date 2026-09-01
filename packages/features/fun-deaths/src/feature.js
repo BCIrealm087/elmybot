@@ -16,6 +16,9 @@ export const FUN_DEATHS_ACTION_KIND = "fun.deaths.manage.v1";
 
 const OPERATIONS = Object.freeze(["check", "plus", "minus", "reset"]);
 const LAST_GAME_KEY = "last_game";
+const OPERATION_HELP =
+  "check, plus, minus, reset, or a non-negative safe integer";
+const OPERATION_ERROR = `Choose ${OPERATION_HELP}.`;
 
 function displayName(game) {
   return game.trim().replace(/\s+/g, " ");
@@ -39,6 +42,17 @@ function missingLinkMessage(platform) {
     : "Death counts require a default linked Discord server.";
 }
 
+function parseOperation(operation) {
+  if (operation === undefined || operation === "check") {
+    return Object.freeze({ kind: "check" });
+  }
+  if (OPERATIONS.includes(operation)) return Object.freeze({ kind: operation });
+  if (!/^\d+$/.test(operation)) return null;
+  const value = Number(operation);
+  if (!Number.isSafeInteger(value)) return null;
+  return Object.freeze({ kind: "set", value });
+}
+
 export const feature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "fun.deaths",
@@ -52,13 +66,18 @@ export const feature = defineFeature({
           capability: access.moderators,
           when: {
             argument: "operation",
-            values: ["plus", "minus", "reset"]
+            exceptValues: ["check"]
           }
         }
       ],
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
-        operation: schema.enum(OPERATIONS, { optional: true }),
+        operation: schema.string({
+          minLength: 1,
+          maxLength: 80,
+          trim: true,
+          optional: true
+        }),
         game: schema.string({
           minLength: 1,
           maxLength: 80,
@@ -73,15 +92,18 @@ export const feature = defineFeature({
         if (game !== undefined && operation === undefined) {
           return {
             output: {
-              message: "Choose check, plus, minus, or reset before naming a game."
+              message: `Choose ${OPERATION_HELP} before naming a game.`
             },
             effects: []
           };
         }
 
-        const selectedOperation = operation ?? "check";
+        const selectedOperation = parseOperation(operation);
+        if (selectedOperation === null) {
+          return { output: { message: OPERATION_ERROR }, effects: [] };
+        }
         const isModerator = await ctx.authorization.allows(access.moderators);
-        if (selectedOperation !== "check" && !isModerator) {
+        if (selectedOperation.kind !== "check" && !isModerator) {
           return {
             output: { message: "Only moderators can change death counts." },
             effects: []
@@ -115,12 +137,14 @@ export const feature = defineFeature({
           .boundedCounter("game", gameIdentity(selectedGame));
 
         let count;
-        if (selectedOperation === "plus") {
+        if (selectedOperation.kind === "plus") {
           count = await deaths.increment();
-        } else if (selectedOperation === "minus") {
+        } else if (selectedOperation.kind === "minus") {
           count = await deaths.decrement();
-        } else if (selectedOperation === "reset") {
+        } else if (selectedOperation.kind === "reset") {
           count = await deaths.reset();
+        } else if (selectedOperation.kind === "set") {
+          count = await deaths.set(selectedOperation.value);
         } else {
           count = await deaths.get();
         }
@@ -145,11 +169,11 @@ export const feature = defineFeature({
           discordOption({
             arg: "operation",
             name: "operation",
-            description: "Check, plus, minus, or reset; defaults to check.",
+            description: "Check, plus, minus, reset, or set a non-negative count.",
             type: "string",
             required: false,
-            minLength: 4,
-            maxLength: 5
+            minLength: 1,
+            maxLength: 80
           }),
           discordOption({
             arg: "game",

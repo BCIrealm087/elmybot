@@ -419,7 +419,7 @@ function createMemoryServices(clock) {
         return nextValue;
       },
       boundedCounter: async (featureId, ...args) => {
-        const [descriptor, operation, amount] = argumentsAfterOwner(args);
+        const [descriptor, operation, operand] = argumentsAfterOwner(args);
         const namespaced = storageKey(
           ownerKey(args),
           featureId,
@@ -436,10 +436,19 @@ function createMemoryServices(clock) {
           );
         }
         if (operation === "get") return current;
-        let nextValue = descriptor.initial;
-        if (operation !== "reset") {
+        if (operation === "set" && (
+          !Number.isSafeInteger(operand) ||
+          operand < descriptor.min ||
+          operand > descriptor.max
+        )) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory bounded counter value is outside its bounds."
+          );
+        }
+        let nextValue = operation === "set" ? operand : descriptor.initial;
+        if (!["reset", "set"].includes(operation)) {
           const direction = operation === "increment" ? 1n : -1n;
-          const candidate = BigInt(current) + direction * BigInt(amount);
+          const candidate = BigInt(current) + direction * BigInt(operand);
           nextValue = Number(
             candidate < BigInt(descriptor.min)
               ? BigInt(descriptor.min)

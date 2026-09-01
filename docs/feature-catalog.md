@@ -30,13 +30,13 @@ Framework API: v1.
 | Feature | Command | Type | Access | Description |
 | --- | --- | --- | --- | --- |
 | core.alive | `/alive` | action | public | Replies if alive. |
-| fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is `plus`, `minus`, or `reset` | Check or update shared deaths for a linked game. |
+| fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update shared deaths for a linked game. |
 | fun.counter | `/counter` | action | public | Increment this server's feature counter. |
 | integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. |
 | discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. |
 | integrations.scheduled-twitch-announcements | `/integration_schedule_twitch` | scheduled action | integration.announcement.publish | Schedule a recurring message in linked Twitch chats. |
 | core.alive | `!alive` | action | public | Replies if alive. |
-| fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is `plus`, `minus`, or `reset` | Check or update shared deaths for a linked game. |
+| fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update shared deaths for a linked game. |
 | fun.counter | `!counter` | action | public | Increment this channel's feature counter. |
 | integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. |
 
@@ -45,7 +45,7 @@ Framework API: v1.
 | Feature | Action kind | Origins | Access | Services | Cooldown |
 | --- | --- | --- | --- | --- | --- |
 | core.alive | `core.health.check.v1` | discord, twitch | public | — | — |
-| fun.deaths | `fun.deaths.manage.v1` | discord, twitch | public; framework.moderators when `operation` is `plus`, `minus`, or `reset` | authorization, integrationState, links, state | — |
+| fun.deaths | `fun.deaths.manage.v1` | discord, twitch | public; framework.moderators when `operation` is present and is not `check` | authorization, integrationState, links, state | — |
 | fun.counter | `fun.counter.increment.v1` | discord, twitch | public | config, state | actor, 5s |
 | integrations.announcements | `integration.announcement.publish.v1` | discord, twitch | integration.announcement.publish | — | — |
 | twitch.stream-online | `twitch.stream-online.publish.v1` | twitch | public | — | — |

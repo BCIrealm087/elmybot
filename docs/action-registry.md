@@ -42,8 +42,8 @@ Unknown actions and unsupported origins fail before executor code runs.
 `capability: null` means that the action has no baseline capability requirement.
 The alive health check is entirely public. An action may additionally declare
 validated `conditionalAccess` metadata when particular normalized argument
-values are protected; feature code enforces those modes through the controlled
-authorization service.
+values, or every present value except named public cases, are protected;
+feature code enforces those modes through the controlled authorization service.
 
 A capability-protected action fails closed unless the caller supplies an
 `authorize` policy. The policy receives the required capability and normalized

@@ -140,7 +140,11 @@ function normalizeConditionalAccess(value, input, uses) {
       entry.when,
       `Action conditionalAccess[${index}].when must be an object.`
     );
-    onlyFields(when, new Set(["argument", "values"]), `${path}.when`);
+    onlyFields(
+      when,
+      new Set(["argument", "values", "exceptValues"]),
+      `${path}.when`
+    );
     if (
       typeof when.argument !== "string" ||
       !/^[a-z][a-z0-9_]{0,63}$/.test(when.argument)
@@ -153,28 +157,38 @@ function normalizeConditionalAccess(value, input, uses) {
         `Action conditionalAccess[${index}] argument must name a primitive input field.`
       );
     }
+    const hasValues = when.values !== undefined;
+    const hasExceptValues = when.exceptValues !== undefined;
+    if (hasValues === hasExceptValues) {
+      throw new TypeError(
+        `Action conditionalAccess[${index}].when must contain exactly one of ` +
+        "values or exceptValues."
+      );
+    }
+    const matchField = hasValues ? "values" : "exceptValues";
+    const candidates = when[matchField];
     if (
-      !Array.isArray(when.values) ||
-      when.values.length === 0 ||
-      when.values.length > MAX_CONDITIONAL_ACCESS_VALUES
+      !Array.isArray(candidates) ||
+      candidates.length === 0 ||
+      candidates.length > MAX_CONDITIONAL_ACCESS_VALUES
     ) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] values must contain between 1 and ` +
+        `Action conditionalAccess[${index}] ${matchField} must contain between 1 and ` +
         `${MAX_CONDITIONAL_ACCESS_VALUES} entries.`
       );
     }
-    if (when.values.some((candidate) =>
+    if (candidates.some((candidate) =>
       candidate === null ||
       !["string", "number", "boolean"].includes(typeof candidate)
     )) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] values must be primitive values.`
+        `Action conditionalAccess[${index}] ${matchField} must be primitive values.`
       );
     }
     let values;
     try {
-      values = when.values.map((candidate) => field.parse(candidate, {
-        path: `conditionalAccess[${index}].when.values`
+      values = candidates.map((candidate) => field.parse(candidate, {
+        path: `conditionalAccess[${index}].when.${matchField}`
       }));
     } catch (cause) {
       if (cause instanceof SchemaValidationError) {
@@ -187,13 +201,15 @@ function normalizeConditionalAccess(value, input, uses) {
       throw cause;
     }
     if (new Set(values.map((candidate) => JSON.stringify(candidate))).size !== values.length) {
-      throw new TypeError(`Action conditionalAccess[${index}] values must be unique.`);
+      throw new TypeError(
+        `Action conditionalAccess[${index}] ${matchField} must be unique.`
+      );
     }
     return Object.freeze({
       capability: entry.capability,
       when: Object.freeze({
         argument: when.argument,
-        values: Object.freeze(values)
+        [matchField]: Object.freeze(values)
       })
     });
   }));

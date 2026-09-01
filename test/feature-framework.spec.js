@@ -681,6 +681,64 @@ describe("Command and feature framework", () => {
     )).rejects.toMatchObject({ code: "feature_counter_bounds_invalid" });
   });
 
+  it("validates bounded-counter assignments at the author API", async () => {
+    const setCounterAction = defineAction({
+      kind: "test.counter.set.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        const counter = ctx.state.boundedCounter("score", "game", { max: 10 });
+        return { output: { value: await counter.set(7) }, effects: [] };
+      }
+    });
+    const registry = createFeatureRegistry([
+      feature({ actions: [setCounterAction] })
+    ], { availableServices: ["state"] });
+    const invocation = createCommandInvocation({
+      kind: setCounterAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:set-counter"
+    });
+    const boundedCounter = vi.fn(async () => 7);
+
+    await expect(executeAction(
+      createActionRegistry(registry.actions),
+      invocation,
+      { featureServices: { state: { boundedCounter } } }
+    )).resolves.toMatchObject({ output: { value: 7 } });
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "set",
+      7
+    );
+
+    const invalidAction = defineAction({
+      kind: "test.counter.set-invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        await ctx.state.boundedCounter("score", "game", { max: 10 }).set(11);
+        return { output: {}, effects: [] };
+      }
+    });
+    const invalidRegistry = createFeatureRegistry([
+      feature({ actions: [invalidAction] })
+    ], { availableServices: ["state"] });
+    await expect(executeAction(
+      createActionRegistry(invalidRegistry.actions),
+      createCommandInvocation({
+        ...invocation,
+        kind: invalidAction.kind,
+        sourceEventId: "discord:interaction:set-counter-invalid"
+      }),
+      { featureServices: { state: { boundedCounter } } }
+    )).rejects.toMatchObject({ code: "feature_counter_value_invalid" });
+  });
+
   it("delegates declared conditional authorization to the platform policy", async () => {
     const conditionalAction = defineAction({
       kind: "test.authorization.run.v1",
@@ -718,6 +776,26 @@ describe("Command and feature framework", () => {
     ]);
     expect(Object.isFrozen(conditionalAction.conditionalAccess)).toBe(true);
     expect(Object.isFrozen(conditionalAction.conditionalAccess[0].when.values))
+      .toBe(true);
+
+    const exceptAction = defineAction({
+      kind: "test.authorization.except.v1",
+      supportedOrigins: ["discord"],
+      input: schema.object({
+        operation: schema.string({ optional: true })
+      }),
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", exceptValues: ["show"] }
+      }],
+      execute: () => ({ output: {}, effects: [] })
+    });
+    expect(exceptAction.conditionalAccess).toEqual([{
+      capability: access.moderators,
+      when: { argument: "operation", exceptValues: ["show"] }
+    }]);
+    expect(Object.isFrozen(exceptAction.conditionalAccess[0].when.exceptValues))
       .toBe(true);
     const input = createCommandInvocation({
       kind: conditionalAction.kind,
@@ -776,6 +854,26 @@ describe("Command and feature framework", () => {
         when: { argument: "operation", values: ["reset"] }
       }]
     })).toThrow("value rejected by its input field");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: {
+          argument: "operation",
+          values: ["plus"],
+          exceptValues: ["show"]
+        }
+      }]
+    })).toThrow("exactly one of values or exceptValues");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation" }
+      }]
+    })).toThrow("exactly one of values or exceptValues");
 
     const unregistered = defineAction({
       ...base,

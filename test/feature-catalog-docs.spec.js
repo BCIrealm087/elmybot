@@ -23,15 +23,15 @@ describe("Generated feature catalog", () => {
     expect(markdown).toContain("Command | Type | Access | Description");
     expect(markdown).toContain(
       "fun.deaths | `/deaths` | action | public; framework.moderators when " +
-      "`operation` is `plus`, `minus`, or `reset`"
+      "`operation` is present and is not `check`"
     );
     expect(markdown).toContain(
       "fun.deaths | `!deaths` | action | public; framework.moderators when " +
-      "`operation` is `plus`, `minus`, or `reset`"
+      "`operation` is present and is not `check`"
     );
     expect(markdown).toContain(
       "`fun.deaths.manage.v1` | discord, twitch | public; " +
-      "framework.moderators when `operation` is `plus`, `minus`, or `reset`"
+      "framework.moderators when `operation` is present and is not `check`"
     );
     expect(markdown).toContain("`!announce`");
     expect(markdown).toContain("`integration.announcement.publish.v1`");

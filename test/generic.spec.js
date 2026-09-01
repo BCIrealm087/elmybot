@@ -169,6 +169,11 @@ describe('Platform-independent worker behavior', () => {
       ...counter,
       operation: 'get',
     })).data).toEqual({ value: 0 });
+    expect((await post('state/bounded-counter', {
+      ...counter,
+      operation: 'set',
+      value: 42,
+    })).data).toEqual({ value: 42 });
 
     const lives = {
       featureId: 'test.one',
@@ -212,6 +217,13 @@ describe('Platform-independent worker behavior', () => {
     });
     expect(invalidCounterAmount.response.status).toBe(422);
     expect(invalidCounterAmount.data.userFacingError).toContain('between 1 and');
+    const invalidCounterValue = await post('state/bounded-counter', {
+      ...counter,
+      operation: 'set',
+      value: -1,
+    });
+    expect(invalidCounterValue.response.status).toBe(422);
+    expect(invalidCounterValue.data.userFacingError).toContain('within the configured bounds');
 
     const cooldown = {
       featureId: 'test.one',

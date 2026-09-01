@@ -266,7 +266,7 @@ function requireBoundedCounterInput(input) {
     );
   }
   const operation = input?.operation;
-  if (!["get", "increment", "decrement", "reset"].includes(operation)) {
+  if (!["get", "set", "increment", "decrement", "reset"].includes(operation)) {
     throw new FeatureStorageUserFacingError("The bounded counter operation is invalid.");
   }
   const amount = input?.amount;
@@ -279,7 +279,16 @@ function requireBoundedCounterInput(input) {
       `${MAX_INCREMENT_AMOUNT}.`
     );
   }
-  return { featureId, name, subject, min, max, initial, operation, amount };
+  const value = input?.value;
+  if (
+    operation === "set" &&
+    (!Number.isSafeInteger(value) || value < min || value > max)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "Bounded counter values must be safe integers within the configured bounds."
+    );
+  }
+  return { featureId, name, subject, min, max, initial, operation, amount, value };
 }
 
 async function boundedCounterKey(name, subject) {
@@ -317,8 +326,10 @@ async function boundedCounterState(state, input) {
     }
     if (descriptor.operation === "get") return { value: current };
 
-    let value = descriptor.initial;
-    if (descriptor.operation !== "reset") {
+    let value = descriptor.operation === "set"
+      ? descriptor.value
+      : descriptor.initial;
+    if (!["reset", "set"].includes(descriptor.operation)) {
       const direction = descriptor.operation === "increment" ? 1n : -1n;
       const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
       value = Number(

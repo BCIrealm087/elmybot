@@ -998,3 +998,38 @@ completed successfully for implementation commit `9bd3f202`: the locked
 install, all 245 tests, lint and generated-document checks, tracked-source
 syntax checks, and the non-deploying Wrangler Worker dry run passed. Wrangler
 4.126.0 reported a 555.51 KiB upload and 104.55 KiB gzip size.
+
+## Follow-up: exact numeric assignment
+
+The command's first optional argument now accepts either `check`, `plus`,
+`minus`, `reset`, or a decimal non-negative safe integer. A moderator can use
+that integer to assign the selected game's count exactly. The optional game
+position and remembered-game rules do not change: `deaths 42` assigns the
+remembered game's count, `deaths 42 Hades` assigns and remembers Hades for a
+moderator, and `deaths check 1999` still checks a numerically named game.
+Ordinary members cannot assign counts.
+
+Implementing assignment exposed a useful framework boundary. Composing
+`reset()` and `increment()` would be non-atomic and the increment helper's
+intentional one-million step limit would reject valid larger counts. The
+bounded-counter handle therefore gained a validated `set(value)` operation.
+The production Durable Object performs the bound check and write in one storage
+transaction, while the feature test runtime implements the same contract.
+
+The existing literal-list conditional-access metadata also could not describe
+an open-ended integer mode. The additive `exceptValues` form now documents that
+a capability is required whenever an optional argument is present and is not a
+small public value such as `check`; omission still follows the baseline public
+access. Runtime authorization remains explicit in the action.
+
+**Assessment:** the final feature change is approachable for a hobby
+contributor: parse one semantic argument, call `deaths.set(value)`, and add
+behavior tests. Discovering that atomic assignment and truthful catalog
+metadata were missing would be too much framework design for a casual command
+contribution, but those additions are reusable and leave the next contributor
+with a simpler API. Keeping numeric game names behind explicit `check` is a
+small, teachable ambiguity rule rather than adding platform-specific parsing.
+
+Local verification passed all 21 test files and 250 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, and the whitespace/error-marker check also passed.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import {
   createFeatureTestRuntime,
   defaultTestLink,
@@ -128,6 +128,11 @@ describe("fun.deaths", () => {
       actor: discordTestActor(),
       args: { operation: "reset", game: "Hades" }
     })).toReply("Only moderators can change death counts.");
+    (await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestActor(),
+      args: { operation: "7" }
+    })).toReply("Only moderators can change death counts.");
   });
 
   it("increments, floors decrements at zero, and resets", async () => {
@@ -144,6 +149,52 @@ describe("fun.deaths", () => {
     (await invoke("minus")).toReply("Elden Ring deaths: 1");
     (await invoke("reset")).toReply("Elden Ring deaths: 0");
     (await invoke("minus")).toReply("Elden Ring deaths: 0");
+  });
+
+  it("lets moderators assign an exact count on Twitch and Discord", async () => {
+    const { runtime, discordGroup, twitchGroup } = linkedRuntime();
+
+    (await runtime.twitch.commandText('!deaths 42 "Dark Souls"', {
+      group: twitchGroup,
+      actor: twitchTestModerator()
+    })).toReply("Dark Souls deaths: 42");
+    (await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestActor(),
+      args: { operation: "check", game: "Dark Souls" }
+    })).toReply("Dark Souls deaths: 42");
+    (await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestModerator(),
+      args: { operation: "0012", game: "Hades" }
+    })).toReply("Hades deaths: 12");
+    (await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestActor()
+    })).toReply("Hades deaths: 12");
+  });
+
+  it("uses an exact count without a game against the remembered game", async () => {
+    const { runtime, twitchGroup } = linkedRuntime();
+    const moderator = twitchTestModerator();
+
+    await runtime.twitch.commandText("!deaths check Control", {
+      group: twitchGroup,
+      actor: moderator
+    });
+    (await runtime.twitch.commandText("!deaths 9007199254740991", {
+      group: twitchGroup,
+      actor: moderator
+    })).toReply("Control deaths: 9007199254740991");
+  });
+
+  it("keeps numeric game names available through an explicit check", async () => {
+    const { runtime, twitchGroup } = linkedRuntime();
+
+    (await runtime.twitch.commandText("!deaths check 1999", {
+      group: twitchGroup,
+      actor: twitchTestActor()
+    })).toReply("1999 deaths: 0");
   });
 
   it("selects the ledger through the current directional default", async () => {
@@ -263,15 +314,28 @@ describe("fun.deaths", () => {
       group: discordGroup,
       actor: discordTestActor(),
       args: { game: "Hades" }
-    })).toReply("Choose check, plus, minus, or reset before naming a game.");
+    })).toReply(
+      "Choose check, plus, minus, reset, or a non-negative safe integer before naming a game."
+    );
   });
 
   it("rejects unsupported operations", async () => {
     const { runtime, discordGroup } = linkedRuntime();
-    await expect(runtime.discord.command("deaths", {
-      group: discordGroup,
-      actor: discordTestModerator(),
-      args: { game: "Hades", operation: "multiply" }
-    })).rejects.toMatchObject({ code: "action_arguments_invalid" });
+    for (const operation of [
+      "multiply",
+      "-1",
+      "+1",
+      "1.5",
+      "1e3",
+      "9007199254740992"
+    ]) {
+      (await runtime.discord.command("deaths", {
+        group: discordGroup,
+        actor: discordTestModerator(),
+        args: { game: "Hades", operation }
+      })).toReply(
+        "Choose check, plus, minus, reset, or a non-negative safe integer."
+      );
+    }
   });
 });

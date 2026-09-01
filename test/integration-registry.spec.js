@@ -516,9 +516,9 @@ describe("Cross-platform integration linking", () => {
       "test.integration-state",
       discordLink,
       descriptor,
-      "increment",
-      1
-    )).resolves.toBe(1);
+      "set",
+      37
+    )).resolves.toBe(37);
 
     const twitchInvocation = createCommandInvocation({
       kind: "test.integration-state.read.v1",
@@ -541,7 +541,7 @@ describe("Cross-platform integration linking", () => {
       twitchLink,
       descriptor,
       "get"
-    )).resolves.toBe(1);
+    )).resolves.toBe(37);
 
     await expect(discordRuntime.featureServices.integrationState.get(
       "test.integration-state",

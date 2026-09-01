@@ -164,13 +164,17 @@ export function createFeatureServiceRuntime(env, invocation) {
           );
           return result.value;
         },
-        async boundedCounter(featureId, link, descriptor, operation, amount) {
+        async boundedCounter(featureId, link, descriptor, operation, operand) {
           const result = await integrationStateRequest(
             env,
             invocation,
             link,
             "state/bounded-counter",
-            input(featureId, { ...descriptor, operation, amount })
+            input(featureId, {
+              ...descriptor,
+              operation,
+              ...(operation === "set" ? { value: operand } : { amount: operand })
+            })
           );
           return result.value;
         }
@@ -220,12 +224,16 @@ export function createFeatureServiceRuntime(env, invocation) {
           );
           return result.value;
         },
-        async boundedCounter(featureId, descriptor, operation, amount) {
+        async boundedCounter(featureId, descriptor, operation, operand) {
           const result = await storageRequest(
             env,
             invocation,
             "state/bounded-counter",
-            input(featureId, { ...descriptor, operation, amount })
+            input(featureId, {
+              ...descriptor,
+              operation,
+              ...(operation === "set" ? { value: operand } : { amount: operand })
+            })
           );
           return result.value;
         }

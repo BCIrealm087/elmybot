@@ -409,7 +409,7 @@ describe('Discord platform', () => {
       guildId,
       options: [
         { name: 'game', value: 'Dark Souls' },
-        { name: 'operation', value: 'plus' },
+        { name: 'operation', value: '42' },
       ],
     });
     await expect(commands.deaths.exec(memberWrite, env, 'deaths', {
@@ -422,7 +422,7 @@ describe('Discord platform', () => {
       permissions: '8192',
       options: [
         { name: 'game', value: 'Dark Souls' },
-        { name: 'operation', value: 'plus' },
+        { name: 'operation', value: '42' },
       ],
     });
     await expect(commands.deaths.exec(moderatorWrite, env, 'deaths', {

@@ -67,8 +67,8 @@ registry.
 
 The `state` service includes the additive `boundedCounter(name, subject,
 options)` API. It safely derives storage keys for arbitrary subjects and makes
-each saturating read, increment, decrement, or reset one atomic operation. All
-configuration and `ctx.state` remain scoped to the action's origin group,
+each read, assignment, saturating increment or decrement, or reset one atomic
+operation. All configuration and `ctx.state` remain scoped to the action's origin group,
 including when that group is linked to another platform.
 
 The additive `integrationState` service deliberately exposes mutable state
@@ -82,8 +82,9 @@ deleting data; and relinking creates a new ledger. See
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and
-matching normalized values for catalog and review purposes; the action still
-performs the runtime check through `ctx.authorization.allows()`.
+either matching normalized values or normalized exceptions for catalog and
+review purposes; the action still performs the runtime check through
+`ctx.authorization.allows()`.
 
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
