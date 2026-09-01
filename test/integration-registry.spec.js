@@ -246,6 +246,9 @@ describe("Cross-platform integration linking", () => {
     const html = await page.text();
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("content-security-policy")).toContain(
+      "form-action 'self' https://id.twitch.tv"
+    );
     expect(html).toContain("Link Twitch to Discord");
 
     const { response, authorizationUrl } = await beginIntegrationOAuth(token);

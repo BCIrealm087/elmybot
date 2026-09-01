@@ -48,7 +48,9 @@ function pageResponse({ title, body, status = 200, script = "" }) {
 		headers: {
 			"cache-control": "no-store",
 			"content-type": "text/html; charset=utf-8",
-			"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+			// Chrome applies form-action to redirects after a form submission. The
+			// connect form posts locally, then redirects to Twitch for OAuth.
+			"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self' https://id.twitch.tv; base-uri 'none'; frame-ancestors 'none'`,
 			"cross-origin-opener-policy": "same-origin",
 			"cross-origin-resource-policy": "same-origin",
 			"permissions-policy": "camera=(), microphone=(), geolocation=()",
