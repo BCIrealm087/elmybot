@@ -790,3 +790,85 @@ completed successfully for step 6 commit `5e4b22c4`: the locked install, all
 239 tests, lint and generated-document checks, tracked-source syntax checks,
 and the non-deploying Wrangler Worker dry run passed. Wrangler 4.126.0 reported
 a 546.01 KiB upload and 103.52 KiB gzip size.
+
+## Default-link work: step 7 behavior and management documentation
+
+### Identify the documentation problem
+
+Steps 1–6 had already added accurate fragments: the linking guide explained the
+directional lifecycle, the management guide named the two Discord default
+commands, README summarized first assignment and fallback, and feature docs
+described `ctx.links.default()`. The problem was fragmentation rather than an
+undocumented feature. An operator could not find the complete lifecycle,
+permissions, many-link behavior, concurrency guarantees, audit events, and
+route/state boundary in one place.
+
+The stale opening of `integration-management.md` also described the entire
+operational surface as an old numbered implementation step. That made a current
+reference read like a temporary plan.
+
+**Assessment:** a consolidation pass was more appropriate than creating another
+default-link document. For a hobby contributor, several overlapping guides
+would increase the chance of reading an incomplete or outdated one. Assigning
+one document canonical ownership lets the quickstart and authoring guide remain
+short while giving maintainers and operators a deeper reference when needed.
+
+### Make the management guide canonical
+
+`integration-management.md` now defines the exact directional key and seven
+registry invariants, followed by a transition table mapping first assignment,
+unchanged later links, explicit switch, no-op re-selection, fallback,
+unavailability, and relinking to their audit behavior. It explicitly notes that
+upgrade backfill uses the same deterministic oldest-edge ordering but does not
+invent historical user-action audit entries.
+
+A complete 2×2 example shows two Discord guilds and two Twitch channels making
+four independent choices. The concurrency section documents invariant
+postconditions rather than promise order: simultaneous first completions may
+choose either valid winner but cannot create two rows or duplicate assignment
+audits; revocation racing replacement completion must end with an active
+replacement and no stale revoked edge. These statements correspond directly to
+the adversarial tests added in step 6.
+
+The manager surface now distinguishes `/integration_list`,
+`/integration_default_set`, and `/integration_unlink`; states the strict
+owner/Administrator/Manage Server policy; explains the registry's independent
+membership and platform checks; and records that Discord cannot manage a Twitch
+channel's outgoing direction. There remains no unset operation.
+
+**Assessment:** the lifecycle and command tables make the design substantially
+easier to inspect than prose alone. The concurrency section is maintainer-level
+material, but keeping it beside the invariants helps future changes preserve
+the contract without burdening an ordinary feature tutorial.
+
+### Separate defaults, routes, and state across audiences
+
+The management guide now includes a decision table for selected identity,
+routed fan-out, route mutation, default mutation, per-group state, and the still
+unsupported integration-owned state case. It states explicitly that defaults do
+not enable, disable, retarget, or filter routes, and that routes do not change a
+default.
+
+The linking guide retains the authenticated lifecycle narrative but points to
+the canonical manager reference for commands, topology, authorization, and
+concurrency. README adds only the operational essentials: directions are
+independent, unset is unavailable, Twitch has no native selector yet, and
+defaults remain separate from routes and feature state. The feature authoring
+guide sends lifecycle and mutation questions away from contributor code and to
+the authenticated management surface.
+
+**Assessment:** this layering fits the hobbyist path well. Someone implementing
+a command still needs only `uses.services: ["links"]` and one resolver call.
+They encounter the larger lifecycle model only if their feature depends on
+selection changes or integration-owned data. Operators, meanwhile, now have
+one place that answers what a command can change and what happens afterward.
+
+### Step 7 verification record
+
+The complete local suite passed 21 files and 239 tests. ESLint, the public
+feature-boundary check, workspace-package validation, generated-catalog
+freshness, tracked JavaScript syntax checks, and the whitespace/error-marker
+check also passed. The new relative links and heading anchors were checked
+against their files. The non-deploying Wrangler dry run remains for GitHub
+Actions, whose result will be recorded after the documentation commit is
+verified.

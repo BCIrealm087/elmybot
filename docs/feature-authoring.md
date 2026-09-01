@@ -462,6 +462,10 @@ The promise resolves to `null` or a frozen object containing only
 `integration`, `sourceGroup`, and `targetGroup`. The source group is fixed to
 the invocation; feature code cannot inspect every candidate, choose on behalf
 of another group, update the default, or read registry history.
+Default lifecycle and manager operations belong to the authenticated platform
+surface described in the
+[integration management reference](integration-management.md#default-link-management-surface),
+not to contributor feature code.
 
 Model both directions explicitly in a feature test:
 

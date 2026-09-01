@@ -171,11 +171,17 @@ The first link becomes the directional default for both groups. Later links do
 not replace an existing choice. Discord managers can identify the current link
 in `/integration_list` and change the guild's choice with
 `/integration_default_set`; unlinking a selected relationship falls back to the
-oldest remaining active link.
+oldest remaining active link. Discord-to-Twitch and Twitch-to-Discord choices
+are independent, and there is no explicit unset while an eligible link remains.
+Twitch currently follows automatic assignment and fallback but has no native
+default-management command.
 
 Routes can be disabled or retargeted independently. A Twitch channel may link
 to multiple Discord guilds. Revoking a link preserves its audit history and
-does not remove the broadcaster's platform-local authorization.
+does not remove the broadcaster's platform-local authorization. Default
+selection is also independent from routes and feature state; see the
+[management reference](docs/integration-management.md#default-link-model-and-invariants)
+for the lifecycle, many-link, authorization, and concurrency guarantees.
 
 ## Twitch EventSub and delivery
 

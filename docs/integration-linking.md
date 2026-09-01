@@ -108,6 +108,10 @@ bounded without weakening eventual deactivation.
 
 ## Directional default-link lifecycle
 
+For the complete manager command surface, lifecycle table, many-link example,
+authorization boundaries, and concurrency guarantees, see
+[`integration-management.md`](integration-management.md#default-link-model-and-invariants).
+
 The registry schema reserves one default-link edge for each source group and
 target platform:
 
@@ -156,6 +160,9 @@ group. The resolver returns `null` or a frozen integration/source/target
 snapshot; it does not expose candidate listing, mutation, audit history,
 timestamps, or registry storage. It also does not merge the groups'
 configuration or state namespaces or provide integration-scoped mutable state.
+Default selection is independent from route configuration: changing a default
+does not enable, disable, retarget, or filter routes, and route resolution may
+still fan out across several active integrations.
 
 ## Initial routes
 
