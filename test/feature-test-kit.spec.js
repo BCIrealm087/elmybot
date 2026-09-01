@@ -96,6 +96,8 @@ describe("Feature test kit", () => {
     const runtime = createFeatureTestRuntime(aliveFeature);
 
     (await runtime.twitch.commandText("  !ALIVE  ")).toReply("I'm here!!1");
+    (await runtime.twitch.commandText("!ALIVE \u034F")).toReply("I'm here!!1");
+    (await runtime.twitch.commandText("!ALIVE \u{E0000}")).toReply("I'm here!!1");
     await expect(runtime.twitch.commandText("hello chat")).rejects.toMatchObject({
       code: "feature_test_twitch_command_text_invalid"
     });

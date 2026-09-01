@@ -234,6 +234,28 @@ describe("fun.deaths", () => {
     })).toReply("Dark Souls deaths: 1");
   });
 
+  it("ignores trailing Twitch duplicate-message bypass characters", async () => {
+    const { runtime, twitchGroup } = linkedRuntime();
+    const moderator = twitchTestModerator();
+    const member = twitchTestActor();
+
+    (await runtime.twitch.commandText("!deaths plus Control", {
+      group: twitchGroup,
+      actor: moderator
+    })).toReply("Control deaths: 1");
+    for (const commandText of [
+      "!deaths \u034F",
+      "!deaths check \u034F",
+      "!deaths check Control \u034F",
+      "!deaths check Control \u{E0000}"
+    ]) {
+      (await runtime.twitch.commandText(commandText, {
+        group: twitchGroup,
+        actor: member
+      })).toReply("Control deaths: 1");
+    }
+  });
+
   it("requires an operation before a Discord game argument", async () => {
     const { runtime, discordGroup } = linkedRuntime();
 
