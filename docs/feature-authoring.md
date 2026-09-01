@@ -100,6 +100,7 @@ are otherwise identical.
 | Discord- or Twitch-specific presentation | Native command |
 | Same semantic behavior on both platforms | One action with two command adapters |
 | Send something to a linked platform | Action + route + routed effect |
+| Read the selected relationship to another platform | Action using the links service |
 | Run automatically from an authenticated event | Event binding + action |
 | Run later or repeatedly | Schedule definition + action |
 | Remember scores, quotes, or counters | Action using namespaced state |
@@ -124,6 +125,8 @@ helps.
 - Protected action commands inherit the action's baseline capability and
   conditional-access metadata.
 - Actions declare every route, effect, and optional service they may use.
+- Default-link reads declare `links`; the source is always the current origin
+  group and the returned relationship is read-only.
 - Argument-dependent protected modes declare `conditionalAccess`, use the
   `authorization` service for the runtime check, and never inspect platform
   roles or badges.
@@ -140,6 +143,7 @@ Import test helpers from the test-only module:
 ```js
 import {
   createFeatureTestRuntime,
+  defaultTestLink,
   discordTestActor,
   discordTestGroup,
   linkedTestRoute,
@@ -173,6 +177,7 @@ facilities:
 | Scheduled occurrences | `runtime.schedules.runDue()` |
 | Stored-plan replay | `runtime.schedules.replay(plan)` |
 | Current routes | `runtime.routes.set(routes)` |
+| Directional default links | `defaultLinks: [defaultTestLink(...)]` and `runtime.links.set(...)` |
 | Feature logs | `runtime.logs.all()` |
 
 Command and trigger results expose `reply`, `output`, `effects`, `schedules`,
@@ -424,6 +429,55 @@ result.toEmitDiscordMessage("We did it!");
 
 Add or change the platform EventSub definition separately when a genuinely new
 authenticated domain event is required.
+
+## Read the selected linked group
+
+Use the `links` service when behavior needs the single relationship selected as
+the current origin group's default, without sending an effect yet. Declare the
+dependency and ask for the other platform:
+
+```js
+defineAction({
+  kind: "fun.example.inspect-link.v1",
+  supportedOrigins: ["discord", "twitch"],
+  uses: { services: ["links"] },
+  async execute(ctx) {
+    const targetPlatform = ctx.origin.group.platform === "discord"
+      ? "twitch"
+      : "discord";
+    const link = await ctx.links.default(targetPlatform);
+    return {
+      output: {
+        message: link === null
+          ? "No linked default is available."
+          : `Default target: ${link.targetGroup.id}`
+      },
+      effects: []
+    };
+  }
+});
+```
+
+The promise resolves to `null` or a frozen object containing only
+`integration`, `sourceGroup`, and `targetGroup`. The source group is fixed to
+the invocation; feature code cannot inspect every candidate, choose on behalf
+of another group, update the default, or read registry history.
+
+Model both directions explicitly in a feature test:
+
+```js
+const runtime = createFeatureTestRuntime(feature, {
+  defaultLinks: [defaultTestLink({
+    sourceGroup: discordGroup,
+    targetGroup: twitchGroup
+  })]
+});
+```
+
+A link identifies the selected relationship; it does not make `ctx.state`
+integration-owned or shared. Read the
+[state-ownership decision](feature-state.md#choose-the-state-boundary-first)
+before storing data that both sides must mutate.
 
 ## Cookbook 6: stateful command
 

@@ -1,4 +1,8 @@
-import { createEffect } from "../integrations/contracts.js";
+import {
+  createEffect,
+  createIntegrationRef,
+  createPlatformGroupRef
+} from "../integrations/contracts.js";
 import { frameworkApiVersion } from "./api-version.js";
 import { isRegisteredCapability } from "./access.js";
 
@@ -297,6 +301,47 @@ async function authorizationAllows(action, invocation, runtimeContext, capabilit
   return allowed;
 }
 
+async function defaultLink(action, invocation, runtimeContext, targetPlatform) {
+  requireDeclaredService(action, "links");
+  if (
+    !["discord", "twitch"].includes(targetPlatform) ||
+    targetPlatform === invocation.origin.group.platform
+  ) {
+    throw new FeatureContextError(
+      "A default link must target another supported platform.",
+      { code: "feature_link_target_invalid" }
+    );
+  }
+  const implementation = runtimeContext.featureServices?.links?.default;
+  if (typeof implementation !== "function") return unavailable("links")();
+  const value = await implementation(action.featureId, targetPlatform);
+  if (value === null) return null;
+
+  let integration;
+  let sourceGroup;
+  let targetGroup;
+  try {
+    integration = createIntegrationRef(value?.integration);
+    sourceGroup = createPlatformGroupRef(value?.sourceGroup);
+    targetGroup = createPlatformGroupRef(value?.targetGroup);
+  } catch {
+    throw new FeatureContextError(
+      "Feature default-link resolver returned an invalid value.",
+      { code: "feature_link_result_invalid" }
+    );
+  }
+  if (
+    sourceGroup.key !== invocation.origin.group.key ||
+    targetGroup.platform !== targetPlatform
+  ) {
+    throw new FeatureContextError(
+      "Feature default-link resolver returned an invalid value.",
+      { code: "feature_link_result_invalid" }
+    );
+  }
+  return Object.freeze({ integration, sourceGroup, targetGroup });
+}
+
 function logger(runtimeContext, action, invocation) {
   const write = (level, event, metadata) => {
     if (typeof runtimeContext.log === "function") {
@@ -347,6 +392,14 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         invocation,
         runtimeContext,
         capability
+      )
+    }),
+    links: Object.freeze({
+      default: (targetPlatform) => defaultLink(
+        action,
+        invocation,
+        runtimeContext,
+        targetPlatform
       )
     }),
     routes: routed.routes,

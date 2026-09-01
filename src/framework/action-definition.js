@@ -18,6 +18,7 @@ const SUPPORTED_ORIGINS = new Set(["discord", "twitch"]);
 const SUPPORTED_SERVICES = new Set([
   "authorization",
   "config",
+  "links",
   "state",
   "random"
 ]);

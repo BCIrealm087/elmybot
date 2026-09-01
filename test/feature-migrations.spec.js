@@ -86,6 +86,7 @@ describe("Representative feature migrations", () => {
     expect(featureRegistry.services).toEqual([
       "authorization",
       "config",
+      "links",
       "random",
       "state"
     ]);

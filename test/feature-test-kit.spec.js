@@ -18,13 +18,71 @@ import {
   streamOnlineFeature
 } from "../src/features/stream-online/feature.js";
 import {
+  defineAction,
+  defineFeature,
+  discordActionCommand,
+  discordTextResult,
+  frameworkApiVersion,
+  schema,
+  twitchActionCommand,
+  twitchNoArgs,
+  twitchTextResult
+} from "../src/framework/index.js";
+import {
   createFeatureTestRuntime,
+  defaultTestLink,
   discordTestActor,
   discordTestGroup,
   linkedTestRoute,
   twitchTestActor,
   twitchTestGroup
 } from "../src/framework/testing.js";
+
+const DEFAULT_LINK_ACTION_KIND = "test.default-link.show.v1";
+const defaultLinkFeature = defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "test.default-link",
+  description: "Exercises the contributor-facing default-link resolver.",
+  actions: [
+    defineAction({
+      kind: DEFAULT_LINK_ACTION_KIND,
+      supportedOrigins: ["discord", "twitch"],
+      input: schema.object({}),
+      uses: { services: ["links"] },
+      async execute(ctx) {
+        const target = ctx.origin.group.platform === "discord"
+          ? "twitch"
+          : "discord";
+        const link = await ctx.links.default(target);
+        return {
+          output: {
+            message: link === null ? "No default link." : link.targetGroup.id,
+            snapshotFrozen: link === null || Object.isFrozen(link)
+          },
+          effects: []
+        };
+      }
+    })
+  ],
+  commands: {
+    discord: [discordActionCommand({
+      name: "default_link",
+      description: "Show the default linked Twitch channel.",
+      availability: "guild",
+      deferred: false,
+      actionKind: DEFAULT_LINK_ACTION_KIND,
+      options: [],
+      render: discordTextResult
+    })],
+    twitch: [twitchActionCommand({
+      name: "default_link",
+      description: "Show the default linked Discord server.",
+      actionKind: DEFAULT_LINK_ACTION_KIND,
+      parse: twitchNoArgs(),
+      render: twitchTextResult
+    })]
+  }
+});
 
 describe("Feature test kit", () => {
   it("executes one shared action through Discord and Twitch commands", async () => {
@@ -91,6 +149,52 @@ describe("Feature test kit", () => {
     result
       .toReply("Announcement queued for 1 Twitch channel.")
       .toEmitTwitchChat("Hello from Discord");
+  });
+
+  it("models directional default links without exposing registry mutation", async () => {
+    const discordGroup = discordTestGroup({ id: "default-guild" });
+    const twitchGroup = twitchTestGroup({ id: "default-channel" });
+    const reverseDiscordGroup = discordTestGroup({ id: "reverse-guild" });
+    const runtime = createFeatureTestRuntime(defaultLinkFeature, {
+      defaultLinks: [
+        defaultTestLink({
+          sourceGroup: discordGroup,
+          targetGroup: twitchGroup,
+          integrationId: "integration-forward"
+        }),
+        defaultTestLink({
+          sourceGroup: twitchGroup,
+          targetGroup: reverseDiscordGroup,
+          integrationId: "integration-reverse"
+        })
+      ]
+    });
+
+    const discordResult = await runtime.discord.command("default_link", {
+      group: discordGroup
+    });
+    discordResult.toReply("default-channel");
+    expect(discordResult.output.snapshotFrozen).toBe(true);
+    (await runtime.twitch.command("default_link", { group: twitchGroup }))
+      .toReply("reverse-guild");
+
+    runtime.links.set([]);
+    (await runtime.discord.command("default_link", { group: discordGroup }))
+      .toReply("No default link.");
+
+    expect(() => defaultTestLink({
+      sourceGroup: discordGroup,
+      targetGroup: discordTestGroup({ id: "same-platform" })
+    })).toThrow("must connect different platforms");
+    expect(() => createFeatureTestRuntime(defaultLinkFeature, {
+      defaultLinks: [
+        defaultTestLink({ sourceGroup: discordGroup, targetGroup: twitchGroup }),
+        defaultTestLink({
+          sourceGroup: discordGroup,
+          targetGroup: twitchTestGroup({ id: "duplicate-direction" })
+        })
+      ]
+    })).toThrow("must not contain duplicate directions");
   });
 
   it("maps authenticated events into actions and Discord effects", async () => {

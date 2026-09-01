@@ -45,6 +45,7 @@ it and skip this table. Otherwise, open only the relevant reference:
 | Public reads but moderator-only changes | [Conditional-access cookbook](feature-authoring.md#cookbook-7-conditionally-protected-command-modes) |
 | A Discord-specific option or response | [Native-command cookbook](feature-authoring.md#cookbook-1-platform-native-command) |
 | Sending to a linked Discord or Twitch group | [Routed-command cookbook](feature-authoring.md#cookbook-3-routed-cross-platform-command) |
+| Reading the one selected linked group without sending yet | [Default-link resolver](feature-authoring.md#read-the-selected-linked-group) |
 | Running later or repeatedly | [Scheduled-action cookbook](feature-authoring.md#cookbook-4-scheduled-action) |
 | Reacting to a Twitch or Discord event | [Event-action cookbook](feature-authoring.md#cookbook-5-event-driven-action) |
 

@@ -265,8 +265,8 @@ Requirements:
 
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
-requires, chosen from `authorization`, `config`, `state`, and `random` in API
-v1.
+requires, chosen from `authorization`, `config`, `links`, `state`, and `random`
+in API v1.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
@@ -339,6 +339,9 @@ The action context has this exact API v1 surface:
   authorization: {
     allows(capability): Promise<boolean>
   },
+  links: {
+    default(targetPlatform): Promise<DefaultLinkSnapshot | null>
+  },
   routes: {
     resolve(routeKind): Promise<readonly RouteSnapshot[]>
   },
@@ -394,13 +397,22 @@ Rules:
   stable idempotency metadata from the current invocation.
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
-- `authorization`, `config`, `state`, and `random` may be used only when declared in
-  `uses.services`. Undeclared access is a framework error. The namespace shape
-  remains stable so feature code does not branch on service presence.
+- `authorization`, `config`, `links`, `state`, and `random` may be used only
+  when declared in `uses.services`. Undeclared access is a framework error. The
+  namespace shape remains stable so feature code does not branch on service
+  presence.
 - `authorization.allows()` accepts only a reviewed registered capability and
   delegates to the current platform policy. It exposes no claims, roles,
   badges, or replacement authorizer and is intended for validated command
   modes with different access requirements.
+- `links.default()` accepts the other supported platform and always resolves
+  from `origin.group`; feature code cannot select a different source group. It
+  returns `null` when that direction has no active default, or a frozen snapshot
+  containing only normalized `integration`, `sourceGroup`, and `targetGroup`
+  references. A same-platform or unsupported target is an error.
+- The links service is read-only. It exposes no default mutation, candidate
+  listing, audit/history, timestamps, registry handle, route configuration, or
+  storage access.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
   them by feature ID and origin group.
 - A shared action and an active integration do not merge group namespaces.
@@ -424,16 +436,17 @@ Rules:
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `authorization`, `config`, `state`, and `random` are part of the
-approved v1 surface,
+Although `authorization`, `config`, `links`, `state`, and `random` are part of
+the approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
 
-Implementation status: all four API v1 services are available in the installed
-composition. Authorization delegates to the platform policy. Config and state
-are scoped through `GroupConfig`; declarative cooldowns use the same per-group
-boundary and are enforced before action code.
+Implementation status: all five API v1 services are available in the installed
+composition. Authorization delegates to the platform policy. Links resolves
+the origin group's selected cross-platform relationship through the integration
+registry. Config and state are scoped through `GroupConfig`; declarative
+cooldowns use the same per-group boundary and are enforced before action code.
 
 ## Command definitions
 

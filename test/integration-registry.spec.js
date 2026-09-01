@@ -12,6 +12,7 @@ import {
 } from "../src/platforms/discord/discord-permissions.js";
 import {
   completeIntegrationInvitation,
+  createCommandInvocation,
   createIntegrationInvitation,
   getIntegrationDefaultLink,
   INTEGRATION_INVITATION_RETENTION_MS,
@@ -22,6 +23,7 @@ import {
   revokeIntegration,
   setIntegrationDefaultLink
 } from "../src/integrations/index.js";
+import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { initializeRegistryTables } from "../src/integrations/registry-schema.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
 
@@ -452,6 +454,26 @@ describe("Cross-platform integration linking", () => {
         ]);
       }
     );
+  });
+
+  it("exposes the invocation group's default through the feature service runtime", async () => {
+    const linked = await activateIntegration();
+    const invocation = createCommandInvocation({
+      kind: "test.default-link.read.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:feature-default-link"
+    });
+    const runtime = createFeatureServiceRuntime(integrationEnv, invocation);
+
+    await expect(runtime.featureServices.links.default(
+      "test.default-link",
+      "twitch"
+    )).resolves.toMatchObject({
+      sourceGroup: linked.group,
+      targetPlatform: "twitch",
+      integration: { id: linked.completion.integration.id },
+      targetGroup: linked.channel
+    });
   });
 
   it("backfills defaults for active links created before the default table", async () => {

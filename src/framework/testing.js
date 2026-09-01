@@ -183,6 +183,59 @@ export function linkedTestRoute({
   });
 }
 
+export function defaultTestLink({
+  sourceGroup,
+  targetGroup,
+  integrationId = "test-integration"
+}) {
+  const source = createPlatformGroupRef(sourceGroup);
+  const target = createPlatformGroupRef(targetGroup);
+  if (source.platform === target.platform) {
+    throw new FeatureTestRuntimeError(
+      "A test default link must connect different platforms."
+    );
+  }
+  return Object.freeze({
+    integration: createIntegrationRef({ id: integrationId }),
+    sourceGroup: source,
+    targetGroup: target
+  });
+}
+
+function normalizedDefaultLinks(values) {
+  if (!Array.isArray(values)) {
+    throw new FeatureTestRuntimeError("Test default links must be an array.");
+  }
+  const normalized = values.map((link, index) => {
+    let value;
+    try {
+      if (typeof link?.integration?.id !== "string") throw new TypeError();
+      value = defaultTestLink({
+        sourceGroup: link?.sourceGroup,
+        targetGroup: link?.targetGroup,
+        integrationId: link?.integration?.id
+      });
+    } catch (cause) {
+      if (cause instanceof FeatureTestRuntimeError) throw cause;
+      throw new FeatureTestRuntimeError(
+        `Test default link at index ${index} is invalid.`,
+        { code: "feature_test_default_link_invalid" }
+      );
+    }
+    return value;
+  });
+  const keys = normalized.map((link) =>
+    `${link.sourceGroup.key}\u0000${link.targetGroup.platform}`
+  );
+  if (new Set(keys).size !== keys.length) {
+    throw new FeatureTestRuntimeError(
+      "Test default links must not contain duplicate directions.",
+      { code: "feature_test_default_link_duplicate" }
+    );
+  }
+  return normalized;
+}
+
 function effectAdaptersFor(features) {
   const adapters = { discord: Object.create(null), twitch: Object.create(null) };
   for (const feature of features) {
@@ -481,6 +534,7 @@ function scheduleUnix(timing, clock, randomInteger) {
 
 export function createFeatureTestRuntime(featureOrFeatures, {
   initialTime,
+  defaultLinks = [],
   routes = [],
   randomInteger = ({ min }) => min
 } = {}) {
@@ -492,6 +546,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   const actions = createActionRegistry(registry.actions);
   const clock = createClock(initialTime);
   const memory = createMemoryServices(clock);
+  const configuredDefaultLinks = normalizedDefaultLinks(defaultLinks);
   const configuredRoutes = [...routes];
   const pendingSchedules = [];
   const logs = [];
@@ -519,6 +574,17 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     const memoryRuntime = memory.runtime(invocation.origin.group.key);
     return {
       ...memoryRuntime,
+      featureServices: Object.freeze({
+        ...memoryRuntime.featureServices,
+        links: Object.freeze({
+          async default(_featureId, targetPlatform) {
+            return configuredDefaultLinks.find((link) =>
+              link.sourceGroup.key === invocation.origin.group.key &&
+              link.targetGroup.platform === targetPlatform
+            ) ?? null;
+          }
+        })
+      }),
       triggerKind,
       clock,
       random: { integer: randomInteger },
@@ -837,6 +903,17 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }),
     event,
     clock,
+    links: Object.freeze({
+      set(nextLinks) {
+        const normalized = normalizedDefaultLinks(nextLinks);
+        configuredDefaultLinks.splice(
+          0,
+          configuredDefaultLinks.length,
+          ...normalized
+        );
+      },
+      all: () => Object.freeze([...configuredDefaultLinks])
+    }),
     routes: Object.freeze({
       set(nextRoutes) {
         if (!Array.isArray(nextRoutes)) {

@@ -211,6 +211,7 @@ ctx.reply
 ctx.routes
 ctx.effects
 ctx.schedule
+ctx.links
 ctx.config
 ctx.state
 ctx.log
@@ -415,7 +416,8 @@ so those representations cannot silently drift.
    installed `/integration_schedule_twitch` proof repeatedly invokes the same
    announcement action at bounded-random intervals.
 7. **Add namespaced configuration, state, and cooldowns — completed.** Actions
-   opt into frozen `authorization`, `config`, `state`, and `random` services;
+   opt into frozen `authorization`, `config`, `links`, `state`, and `random`
+   services;
    conditional authorization delegates to platform policy, while per-group
    SQLite namespaces enforce key, value-size, and entry-count bounds; and declarative
    actor or group cooldowns are claimed atomically before execution. Protected
@@ -453,6 +455,14 @@ so those representations cannot silently drift.
     names, exports, framework peer versions, metadata, and feature definitions;
     and ESLint prevents package source from escaping into Worker internals.
     Runtime-loaded code and external package publication remain out of scope.
+11. **Expose directional default-link identity — completed.** Actions explicitly
+    opt into the read-only `links` service and call
+    `ctx.links.default(targetPlatform)`. The runtime fixes the source to the
+    invocation group and returns only a frozen integration/source/target
+    snapshot or `null`; mutation, candidate listing, audit history, and registry
+    storage remain platform-owned. The test kit models each direction with
+    `defaultTestLink()`. Resolving identity does not merge the two groups'
+    `ctx.state` namespaces or add arbitrary integration-owned feature state.
 
 ## Success criteria
 

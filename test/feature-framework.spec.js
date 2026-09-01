@@ -475,6 +475,100 @@ describe("Command and feature framework", () => {
     });
   });
 
+  it("resolves only the invocation group's declared default link", async () => {
+    const linkedAction = defineAction({
+      kind: "test.links.default.v1",
+      supportedOrigins: ["discord", "twitch"],
+      input: schema.object({ target: schema.enum(["discord", "twitch"]) }),
+      uses: { services: ["links"] },
+      async execute(ctx, { target }) {
+        const link = await ctx.links.default(target);
+        return {
+          output: {
+            link,
+            frozen: link === null || (
+              Object.isFrozen(link) &&
+              Object.isFrozen(link.integration) &&
+              Object.isFrozen(link.sourceGroup) &&
+              Object.isFrozen(link.targetGroup)
+            )
+          },
+          effects: []
+        };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [linkedAction] })
+    ], { availableServices: ["links"] });
+    const input = createCommandInvocation({
+      kind: linkedAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      args: { target: "twitch" },
+      sourceEventId: "discord:interaction:default-link"
+    });
+    const resolveDefault = vi.fn(async () => ({
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "guild-1" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" },
+      updatedAtMs: 123
+    }));
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).resolves.toMatchObject({
+      output: {
+        link: {
+          integration: {
+            id: "integration-1",
+            key: "integration:integration-1"
+          },
+          sourceGroup: {
+            platform: "discord",
+            kind: "guild",
+            id: "guild-1",
+            key: "discord:guild:guild-1"
+          },
+          targetGroup: {
+            platform: "twitch",
+            kind: "channel",
+            id: "channel-1",
+            key: "twitch:channel:channel-1"
+          }
+        },
+        frozen: true
+      },
+      effects: []
+    });
+    expect(resolveDefault).toHaveBeenCalledWith("test.feature", "twitch");
+
+    const samePlatformInput = createCommandInvocation({
+      ...input,
+      args: { target: "discord" },
+      sourceEventId: "discord:interaction:same-platform-link"
+    });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      samePlatformInput,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).rejects.toMatchObject({ code: "feature_link_target_invalid" });
+
+    resolveDefault.mockResolvedValueOnce({
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "other-guild" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" }
+    });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).rejects.toMatchObject({ code: "feature_link_result_invalid" });
+  });
+
   it("rejects invalid bounded-counter bounds at the author API", async () => {
     const invalidCounterAction = defineAction({
       kind: "test.counter.invalid.v1",
@@ -647,6 +741,30 @@ describe("Command and feature framework", () => {
         sourceEventId: "discord:interaction:undeclared"
       }),
       { featureServices: { state: { get: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_service_undeclared" });
+
+    const undeclaredLinksAction = defineAction({
+      kind: "test.links.undeclared.v1",
+      supportedOrigins: ["discord"],
+      execute: async (ctx) => {
+        await ctx.links.default("twitch");
+        return { output: {}, effects: [] };
+      }
+    });
+    const linksCatalog = createFeatureRegistry([
+      feature({ actions: [undeclaredLinksAction] })
+    ]);
+    await expect(executeAction(
+      createActionRegistry(linksCatalog.actions),
+      createCommandInvocation({
+        kind: undeclaredLinksAction.kind,
+        origin: {
+          group: { platform: "discord", kind: "guild", id: "guild-1" },
+          actor: { platform: "discord", id: "user-1", claims: [] }
+        },
+        sourceEventId: "discord:interaction:undeclared-links"
+      }),
+      { featureServices: { links: { default: vi.fn() } } }
     )).rejects.toMatchObject({ code: "feature_service_undeclared" });
   });
 

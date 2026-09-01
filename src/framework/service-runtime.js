@@ -1,8 +1,10 @@
 import { FEATURE_STORAGE_PATH_PREFIX } from "./feature-storage.js";
+import { getIntegrationDefaultLink } from "../integrations/registry-client.js";
 
 export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "authorization",
   "config",
+  "links",
   "state",
   "random"
 ]);
@@ -73,6 +75,15 @@ export function createFeatureServiceRuntime(env, invocation) {
             input(featureId, { key })
           );
           return result.value;
+        }
+      }),
+      links: Object.freeze({
+        async default(_featureId, targetPlatform) {
+          const result = await getIntegrationDefaultLink(env, {
+            sourceGroup: invocation.origin.group,
+            targetPlatform
+          });
+          return result.defaultLink;
         }
       }),
       state: Object.freeze({

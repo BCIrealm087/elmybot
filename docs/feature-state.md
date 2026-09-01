@@ -12,6 +12,10 @@ Discord guild and a Twitch channel, `ctx.state` still resolves two independent
 namespaces because the invocations have different origin groups. Linking those
 groups does not merge their configuration, state, or cooldowns.
 
+`await ctx.links.default(otherPlatform)` can identify the origin group's
+selected active relationship. That read-only identity lookup does not change
+the owner or namespace of `ctx.state`.
+
 Use this decision table before adding state:
 
 | Product requirement | State owner | Supported contributor shape |
@@ -36,16 +40,19 @@ Examples:
 
 True integration-owned state needs more decisions than a different key:
 
-1. Which integration owns the value when one group belongs to several links?
+1. Does the directional default own the value when one group belongs to several
+   links, and what should happen when that default changes?
 2. What happens when the integration is revoked and later recreated?
 3. Which actors from each platform may read or mutate it?
 4. What happens when a command is used without an active link?
 5. Which mutations must be atomic or idempotent across retries?
 
 Framework API v1 intentionally stops the ordinary contributor at that boundary.
-It does not provide `ctx.integration.state`. Propose the ownership and lifecycle
-answers above for maintainer review before adding an integration-scoped service
-or a purpose-built integration action.
+It provides `ctx.links.default()` for selection but does not provide
+`ctx.integration.state`. The resolver answers “which relationship is selected
+now,” not whether data follows that choice or survives a later switch. Propose
+the ownership and lifecycle answers above for maintainer review before adding
+an integration-scoped service or a purpose-built integration action.
 
 Do not imitate shared state by embedding another platform's group ID or an
 integration ID in a local `ctx.state` key. The value remains owned by the origin

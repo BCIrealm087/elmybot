@@ -612,3 +612,90 @@ GitHub Actions [run 33447114260](https://github.com/BCIrealm087/elmybot/actions/
 completed successfully for implementation commit `469fc529`: the locked
 install, all 231 tests, lint and repository checks, tracked-source syntax
 checks, and the non-deploying Wrangler Worker dry run passed.
+
+## Default-link work: step 5 contributor-facing resolver
+
+### Define the smallest public contract
+
+Framework API v1 now accepts `links` in an action's explicit service
+dependencies. Feature code calls `await ctx.links.default(targetPlatform)` and
+receives either `null` or a frozen snapshot containing only `integration`,
+`sourceGroup`, and `targetGroup`. The runtime always supplies the invocation's
+origin as the source; the action cannot read on behalf of another guild or
+channel. Same-platform and unsupported targets fail at the context boundary.
+
+The method deliberately omits candidate links, default mutation, audit events,
+timestamps, route settings, raw registry responses, and Durable Object access.
+The API policy already classifies a newly requested context service as an
+additive v1 change, and actions must opt in, so existing contributors receive
+no new ambient authority.
+
+**Assessment:** appropriate and small from a hobby programmer's point of view.
+The useful path is one dependency declaration and one async call, and the
+returned vocabulary matches the route snapshots contributors already see. The
+strictly reduced result takes more maintainer work than returning the internal
+registry object, but it keeps lifecycle details out of ordinary command code
+and makes future registry changes less likely to break features.
+
+### Bridge production without changing ownership
+
+The production service asks the integration registry for the directional
+default using the normalized invocation origin. The action context then
+re-normalizes the three public references and verifies that the returned source
+and target still match the request before exposing them. A malformed or
+mis-scoped runtime result fails closed.
+
+Resolving the selected integration is intentionally separate from feature
+storage. `ctx.config` and `ctx.state` remain scoped to the invocation group;
+the integration ID is not accepted as an alternate namespace. This resolver
+therefore enables selection-dependent behavior but does not yet provide the
+shared mutable death count contemplated by the `fun.deaths` redesign.
+
+**Assessment:** the separation is honest but important to document. A hobbyist
+can now discover “which Twitch channel is this Discord server's default?” or
+the reverse without learning registry internals. They still need maintainer
+help when the product requires one authoritative value that both sides mutate,
+because default switching, revocation, and retry semantics remain product
+decisions rather than storage-key tricks.
+
+### Make it testable like an ordinary feature
+
+The deployment-free runtime accepts directional fixtures built with
+`defaultTestLink({ sourceGroup, targetGroup, integrationId })`. Tests may supply
+them in `defaultLinks` and replace them through `runtime.links.set(...)`. The
+fixture rejects same-platform edges and duplicate source/target-platform
+directions. A framework test proves the public snapshot is frozen and reduced;
+a test-kit feature proves Discord-to-Twitch and Twitch-to-Discord choices can
+be independent and that an absent choice returns `null`; and a Worker test
+exercises the production bridge against the real registry.
+
+**Assessment:** very good for contributors. No Durable Object setup, invitation
+flow, OAuth, or registry SQL is needed in a feature package test. The only
+conceptual cost is understanding that defaults are directional, which is made
+visible by requiring a source and target group in every fixture.
+
+The first focused run passed 48 of 50 tests. Both failures were test-author
+assumptions rather than runtime defects: the normalized action result includes
+its schema version and integration key, and the test-kit result exposes semantic
+output directly as `result.output`. Updating those assertions made the focused
+run pass without changing the implementation. This was a useful contributor
+signal—the failure diffs were precise, although remembering the normalized
+result wrapper is a small framework-specific detail.
+
+### Documentation and verification record
+
+The quickstart now routes selection-only features to a focused authoring
+example. The detailed guide, state-ownership guide, integration lifecycle,
+public API policy, normative contract, and framework design record all describe
+the same boundary: read one selected relationship, mutate none of its lifecycle,
+and do not infer shared state from it.
+
+The focused framework, test-kit, registry, and migration run passed 4 files and
+50 tests. The complete local suite passed 21 files and 234 tests. ESLint, the
+public feature-boundary check, workspace-package validation,
+generated-catalog freshness, tracked JavaScript syntax checks, and the
+whitespace/error-marker check also passed. The non-deploying Wrangler dry run
+remains for GitHub Actions, as required by the repository instructions.
+
+The GitHub Actions run will be added after the implementation commit has
+completed CI.

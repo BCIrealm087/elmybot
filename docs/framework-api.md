@@ -54,15 +54,24 @@ surface consists of:
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
 Actions may explicitly request the controlled `authorization`, `config`,
-`state`, and `random` context services. `authorization` delegates conditional
+`links`, `state`, and `random` context services. `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
+The read-only `links` service provides
+`await ctx.links.default(targetPlatform)`. It resolves only from the current
+origin group and returns either `null` or a frozen relationship snapshot with
+`integration`, `sourceGroup`, and `targetGroup` references. It cannot list
+candidate links, change a default, inspect lifecycle history, or expose the
+registry.
+
 The `state` service includes the additive `boundedCounter(name, subject,
 options)` API. It safely derives storage keys for arbitrary subjects and makes
 each saturating read, increment, decrement, or reset one atomic operation. All
 configuration and state remain scoped to the action's origin group, including
 when that group is linked to another platform. API v1 does not expose mutable
-integration-scoped feature state.
+integration-scoped feature state. Resolving a default link supplies identity
+for an intentional cross-platform operation; it does not change the ownership
+or namespace of `ctx.config` or `ctx.state`.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and
@@ -75,7 +84,9 @@ performs the runtime check through `ctx.authorization.allows()`.
 Feature tests may additionally import the documented test kit from
 `src/framework/testing.js`. The test kit follows the v1 feature contract but is
 not a production feature dependency. Workspace tests use the equivalent
-`@elmybot/framework/testing` export. Its Twitch runtime accepts either parsed
+`@elmybot/framework/testing` export. `defaultTestLink()` and the runtime's
+`defaultLinks` option model directional selections without exposing production
+registry infrastructure. Its Twitch runtime accepts either parsed
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
 

@@ -149,9 +149,13 @@ edge remains, the row is removed because those platforms are no longer linked;
 this is lifecycle cleanup, not a user-visible unset operation. A later new link
 becomes the default normally. Fallback and unavailable transitions are audited.
 
-These steps complete default-link lifecycle management. A contributor-facing
-feature resolver remains a separate step; feature code still cannot access a
-default through Framework API v1.
+Framework actions can read this selection by declaring
+`uses.services: ["links"]` and calling
+`await ctx.links.default(targetPlatform)`. The source is always the invocation
+group. The resolver returns `null` or a frozen integration/source/target
+snapshot; it does not expose candidate listing, mutation, audit history,
+timestamps, or registry storage. It also does not merge the groups'
+configuration or state namespaces or provide integration-scoped mutable state.
 
 ## Initial routes
 
