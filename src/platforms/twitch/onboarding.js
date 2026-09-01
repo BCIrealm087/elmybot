@@ -48,9 +48,7 @@ function pageResponse({ title, body, status = 200, script = "" }) {
 		headers: {
 			"cache-control": "no-store",
 			"content-type": "text/html; charset=utf-8",
-			// Chrome applies form-action to redirects after a form submission. The
-			// connect form posts locally, then redirects to Twitch for OAuth.
-			"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self' https://id.twitch.tv; base-uri 'none'; frame-ancestors 'none'`,
+			"content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
 			"cross-origin-opener-policy": "same-origin",
 			"cross-origin-resource-policy": "same-origin",
 			"permissions-policy": "camera=(), microphone=(), geolocation=()",
@@ -129,6 +127,28 @@ export function renderTwitchIntegrationConnectPage() {
     } else {
       notice.textContent = "This invitation link is incomplete or invalid.";
     }`
+	});
+}
+
+export function renderTwitchOAuthTransition(authorizationUrl) {
+	let url;
+	try {
+		url = new URL(authorizationUrl);
+	} catch {
+		return renderTwitchOnboardingError("Twitch authorization is temporarily unavailable.", 503);
+	}
+	if (url.origin !== "https://id.twitch.tv" || url.pathname !== "/oauth2/authorize") {
+		return renderTwitchOnboardingError("Twitch authorization is temporarily unavailable.", 503);
+	}
+	return pageResponse({
+		title: "Continue to Twitch",
+		body: `
+    <p class="eyebrow">Elmybot for Twitch</p>
+    <h1>Continue to Twitch</h1>
+    <p>You are being redirected to Twitch to authorize your channel.</p>
+    <p>If the redirect does not start, <a id="oauth-continue" href="${escapeHtml(url.href)}">continue with Twitch</a>.</p>`,
+		script: `
+    window.location.replace(document.getElementById("oauth-continue").href);`
 	});
 }
 

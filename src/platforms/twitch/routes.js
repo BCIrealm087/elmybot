@@ -13,6 +13,7 @@ import {
 	renderTwitchConnectPage,
 	renderTwitchIntegrationConnectPage,
 	renderTwitchIntegrationSuccess,
+	renderTwitchOAuthTransition,
 	renderTwitchOnboardingError,
 	renderTwitchOnboardingSuccess
 } from "./onboarding.js";
@@ -158,14 +159,7 @@ async function beginInvitedTwitchChannelOAuth(request, env) {
 		);
 	}
 	const result = await response.json();
-	return new Response(null, {
-		status: 303,
-		headers: {
-			"cache-control": "no-store",
-			location: result.authorizationUrl,
-			"referrer-policy": "no-referrer"
-		}
-	});
+	return renderTwitchOAuthTransition(result.authorizationUrl);
 }
 
 async function beginInvitedTwitchIntegrationOAuth(request, env) {
@@ -194,14 +188,7 @@ async function beginInvitedTwitchIntegrationOAuth(request, env) {
 		);
 	}
 	const result = await response.json();
-	return new Response(null, {
-		status: 303,
-		headers: {
-			"cache-control": "no-store",
-			location: result.authorizationUrl,
-			"referrer-policy": "no-referrer"
-		}
-	});
+	return renderTwitchOAuthTransition(result.authorizationUrl);
 }
 
 async function finishTwitchChannelOAuth(request, env) {

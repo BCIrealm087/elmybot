@@ -110,10 +110,12 @@ async function beginIntegrationOAuth(token) {
     integrationEnv,
     createExecutionContext()
   );
-  const location = response.headers.get("location");
+  const html = await response.clone().text();
+  const href = html.match(/id="oauth-continue" href="([^"]+)"/)?.[1]
+    .replaceAll("&amp;", "&");
   return {
     response,
-    authorizationUrl: location ? new URL(location) : null
+    authorizationUrl: href ? new URL(href) : null
   };
 }
 
@@ -246,13 +248,12 @@ describe("Cross-platform integration linking", () => {
     const html = await page.text();
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
-    expect(page.headers.get("content-security-policy")).toContain(
-      "form-action 'self' https://id.twitch.tv"
-    );
+    expect(page.headers.get("content-security-policy")).toContain("form-action 'self'");
     expect(html).toContain("Link Twitch to Discord");
 
     const { response, authorizationUrl } = await beginIntegrationOAuth(token);
-    expect(response.status).toBe(303);
+    expect(response.status).toBe(200);
+    expect(await response.clone().text()).toContain("window.location.replace");
     expect(authorizationUrl.origin).toBe("https://id.twitch.tv");
     expect(authorizationUrl.searchParams.get("scope")).toBe("channel:bot");
 
