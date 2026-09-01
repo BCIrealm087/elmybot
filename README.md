@@ -92,7 +92,7 @@ script. All commands except `/alive` are guild-only.
 |---|---|---|
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
-| `/deaths` | `game`, optional `operation` (`plus`, `minus`, `reset`) | Show a game's deaths; moderators may update them |
+| `/deaths` | optional `operation` (`check`, `plus`, `minus`, `reset`), optional `game` | Check or update shared deaths on the server's default Twitch link |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -137,13 +137,17 @@ characters and are resolved at delivery time.
 |---|---|---|
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
-| `!deaths <game> [plus|minus|reset]` | Any chatter reads; broadcaster or moderator updates | Show or update a game's deaths |
+| `!deaths [check|plus|minus|reset] [<game>]` | Any chatter checks; broadcaster or moderator updates | Check or update shared deaths on the channel's default Discord link |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
-Command names are case-insensitive. Quote multi-word death-game names, for
-example `!deaths "Dark Souls" plus`. `!announce` accepts at most 2,000
-characters. Ordinary chat and unknown commands are acknowledged after HMAC
-verification without creating a durable inbox row.
+Command names are case-insensitive. `!deaths` and `!deaths check` use the last
+game selected on Twitch by a broadcaster or moderator. Name a game only after
+an operation and quote multi-word names, for example
+`!deaths plus "Dark Souls"`. Discord remembers its own selected game, while
+death counts are shared when both directional defaults select the same active
+integration. `!announce` accepts at most 2,000 characters. Ordinary chat and
+unknown commands are acknowledged after HMAC verification without creating a
+durable inbox row.
 
 `/counter` and `!counter` demonstrate the contributor state API. Each platform
 group has an independent count, and each actor has a five-second atomic
@@ -179,7 +183,8 @@ default-management command.
 Routes can be disabled or retargeted independently. A Twitch channel may link
 to multiple Discord guilds. Revoking a link preserves its audit history and
 does not remove the broadcaster's platform-local authorization. Default
-selection is also independent from routes and feature state; see the
+selection is independent from routes and origin-group state, but it selects
+the ledger for features that explicitly use integration-owned state; see the
 [management reference](docs/integration-management.md#default-link-model-and-invariants)
 for the lifecycle, many-link, authorization, and concurrency guarantees.
 

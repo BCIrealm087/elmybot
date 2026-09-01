@@ -877,3 +877,118 @@ completed successfully for step 7 commit `cbd1a01a`: the locked install, all
 239 tests, lint and generated-document checks, tracked-source syntax checks,
 and the non-deploying Wrangler Worker dry run passed. Wrangler 4.126.0 reported
 a 546.01 KiB upload and 103.52 KiB gzip size.
+
+## Integration-state and `deaths` redesign: step 8
+
+### Settle ownership and lifecycle before editing the command
+
+The redesign has two different kinds of memory. Death totals are meaningful to
+the Discord–Twitch relationship and must be shared. “The last game we talked
+about here” is a platform-group convenience and must remain different for the
+Discord server and Twitch channel. The implementation therefore deliberately
+uses two owners: integration state for counts and ordinary origin-group state
+for the remembered game.
+
+The current directional default chooses the integration ledger for each
+invocation. Switching the default does not copy or merge values; it selects the
+new integration's ledger, and switching back makes the earlier ledger visible
+again. Revocation blocks access but does not erase durable data. A later relink
+has a new integration ID, so it begins with a new ledger instead of silently
+resurrecting the revoked relationship's data. An unlinked group has no valid
+integration owner and receives a clear unavailable response rather than a
+temporary local counter that would later need an ambiguous merge.
+
+**Assessment:** deciding this first was essential and appropriately
+maintainer-led. A hobby contributor can understand the resulting rule—local
+preferences use `ctx.state`, genuinely shared values use integration state—but
+should not be expected to invent revocation, default-switch, or relink
+semantics while adding a fun command. The state-ownership guide now owns those
+answers.
+
+### Add a narrow integration-state capability
+
+Actions now declare `integrationState` explicitly. Feature code must first call
+`ctx.links.default(otherPlatform)` and then pass that exact frozen snapshot to
+`ctx.integrationState.for(link)`. The returned scope mirrors the existing
+`get`, `set`, `delete`, `increment`, and `boundedCounter` operations. A copied
+object, a hand-written integration ID, or a snapshot from another action
+invocation is rejected.
+
+Production storage reuses the existing per-integration coordinator Durable
+Object and the bounded feature-storage implementation. Before an operation, the
+coordinator verifies that the relationship remains active and that both source
+and target groups are members. The feature ID and accepted integration scope
+form the namespace; features receive no binding, SQL handle, registry client,
+or object name. The deployment-free test runtime models the same integration-ID
+ledger so two directional defaults can be tested without registry setup.
+
+**Assessment:** the contributor-facing part is small—declare two services,
+resolve one link, and scope the familiar state API. That is suitable for a
+hobby programmer who has read the short state-ownership section. The storage
+and membership enforcement are necessarily framework work and would be too
+cumbersome for a first feature contribution, but they are now reusable rather
+than command-specific.
+
+### Redesign the command around an optional operation and remembered game
+
+The current behavior matrix is:
+
+| Invocation | Result |
+| --- | --- |
+| `deaths` or `deaths check` | Check the platform group's remembered game |
+| `deaths <operation> <game>` | Use the named game; only moderators remember it |
+| `deaths plus`, `minus`, or `reset` | Update the remembered game; moderator only |
+| Member `deaths check <game>` | Check that game once without changing memory |
+| A game without an operation | Return a bounded usage message |
+| Any valid check/update without a default link | Return a default-link-required message |
+
+Discord options now put optional `operation` before optional `game`. Twitch
+uses `!deaths [check|plus|minus|reset] [<game>]`; quoted multi-word names follow
+the operation, for example `!deaths plus "Dark Souls"`. Missing operation means
+`check`, but a supplied game requires the operation to be explicit. The
+existing conditional-access metadata still marks `plus`, `minus`, and `reset`
+as moderator-only.
+
+After a successful operation, an explicit game is written to local
+`ctx.state` only when the caller is a moderator. The death operation itself
+uses `ctx.integrationState.for(link).boundedCounter(...)`. The integration
+mutation completes before the convenience memory is updated; there is no false
+promise of an atomic transaction across two Durable Object owners.
+
+**Assessment:** the final action reads like the product behavior instead of a
+storage workaround. Optional positional input is a little subtle, especially
+because Discord named options can supply `game` without `operation`, so the
+action needs one explicit cross-field usage check. Quoting multi-word Twitch
+games remains a small platform-specific concept, but the raw-text test makes
+the actual syntax visible and protects it from argument-order regressions.
+
+### Test the ownership boundaries, not just the happy path
+
+The focused verification covers both platforms sharing one ledger, separate
+remembered games, a member's one-off check not changing memory, operation-only
+updates, member mutation denial before memory lookup, zero-floor decrement and
+reset, Unicode subjects, raw Twitch text, game-without-operation handling,
+missing-link behavior, and default switching between two integration ledgers.
+
+Framework tests additionally prove that only an invocation-resolved link can
+open integration state. The production Durable Object test writes from the
+Discord member, reads the same value from the Twitch member, rejects a forged
+non-member scope, and rejects the previously valid snapshot after revocation.
+The first focused run passed 5 files and 71 tests.
+
+**Assessment:** most of these tests remain ordinary feature tests and use only
+`defaultTestLink()` plus the familiar Discord/Twitch runtime. That is a good
+future for hobby contributions: authors describe topology declaratively and
+test user-visible behavior. The membership and revocation cases stay in the
+framework suite, where infrastructure complexity belongs.
+
+### Step 8 local verification record
+
+After updating the two platform-adapter expectations and the installed-service
+inventory for the new command contract, the complete local suite passed 21
+files and 245 tests. ESLint, the public feature-boundary check,
+workspace-package validation, generated-catalog freshness, tracked JavaScript
+syntax checks, and the whitespace/error-marker check also passed. The local
+Cloudflare runtime emitted its existing restricted-network Twitch token DNS
+warning after the suite, but no test failed. The non-deploying Wrangler dry run
+remains for GitHub Actions.

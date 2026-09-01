@@ -12,9 +12,9 @@ per-integration execution ledger and effect outbox. See
 
 An active link does not merge feature configuration or state between its member
 groups. `ctx.state` remains scoped to the command or event's origin group. A
-feature that truly needs one mutable value owned by the relationship must first
-follow the [state-ownership guidance](feature-state.md#choose-the-state-boundary-first);
-Framework API v1 does not expose arbitrary integration-scoped state.
+feature that truly needs one mutable value owned by the relationship must
+follow the [state-ownership guidance](feature-state.md#choose-the-state-boundary-first)
+and use the controlled default-link-scoped integration state service.
 
 ## Discord commands
 
@@ -158,8 +158,10 @@ Framework actions can read this selection by declaring
 `await ctx.links.default(targetPlatform)`. The source is always the invocation
 group. The resolver returns `null` or a frozen integration/source/target
 snapshot; it does not expose candidate listing, mutation, audit history,
-timestamps, or registry storage. It also does not merge the groups'
-configuration or state namespaces or provide integration-scoped mutable state.
+timestamps, or registry storage. It does not merge the groups' configuration
+or `ctx.state` namespaces. A feature may deliberately make that selected
+integration the owner by declaring `integrationState` and passing the exact
+snapshot to `ctx.integrationState.for(link)`.
 Default selection is independent from route configuration: changing a default
 does not enable, disable, retarget, or filter routes, and route resolution may
 still fan out across several active integrations.

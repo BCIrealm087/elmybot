@@ -54,7 +54,8 @@ surface consists of:
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
 Actions may explicitly request the controlled `authorization`, `config`,
-`links`, `state`, and `random` context services. `authorization` delegates conditional
+`integrationState`, `links`, `state`, and `random` context services.
+`authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
 The read-only `links` service provides
@@ -67,11 +68,17 @@ registry.
 The `state` service includes the additive `boundedCounter(name, subject,
 options)` API. It safely derives storage keys for arbitrary subjects and makes
 each saturating read, increment, decrement, or reset one atomic operation. All
-configuration and state remain scoped to the action's origin group, including
-when that group is linked to another platform. API v1 does not expose mutable
-integration-scoped feature state. Resolving a default link supplies identity
-for an intentional cross-platform operation; it does not change the ownership
-or namespace of `ctx.config` or `ctx.state`.
+configuration and `ctx.state` remain scoped to the action's origin group,
+including when that group is linked to another platform.
+
+The additive `integrationState` service deliberately exposes mutable state
+owned by one active integration. The action must first resolve the current
+directional default and pass that exact invocation-local snapshot to
+`ctx.integrationState.for(link)`. The resulting scope mirrors the state
+operations, but its namespace is keyed by integration ID and feature ID.
+Changing a default selects another ledger; revocation blocks access without
+deleting data; and relinking creates a new ledger. See
+[`feature-state.md`](feature-state.md) for the full ownership contract.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and
@@ -85,8 +92,8 @@ Feature tests may additionally import the documented test kit from
 `src/framework/testing.js`. The test kit follows the v1 feature contract but is
 not a production feature dependency. Workspace tests use the equivalent
 `@elmybot/framework/testing` export. `defaultTestLink()` and the runtime's
-`defaultLinks` option model directional selections without exposing production
-registry infrastructure. Its Twitch runtime accepts either parsed
+`defaultLinks` option model directional selections and integration-ledger
+identity without exposing production registry infrastructure. Its Twitch runtime accepts either parsed
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
 

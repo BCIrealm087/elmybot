@@ -214,6 +214,7 @@ ctx.schedule
 ctx.links
 ctx.config
 ctx.state
+ctx.integrationState
 ctx.log
 ctx.correlationId
 ```
@@ -314,8 +315,10 @@ await ctx.schedule.action({
 Fun commands commonly need counters, quotes, scores, cooldowns, and per-group
 settings. Provide distinct facilities:
 
-- `ctx.config` for operator-controlled settings; and
-- `ctx.state` for feature-owned durable state.
+- `ctx.config` for operator-controlled settings;
+- `ctx.state` for feature-owned durable state local to the origin group; and
+- `ctx.integrationState.for(link)` for feature-owned durable state shared by
+  the active integration selected through an invocation-local default link.
 
 Both are automatically scoped by feature and platform group. Storage size and
 operation limits prevent one feature from becoming an unbounded shared-state
@@ -323,9 +326,9 @@ consumer or reading another feature's data.
 
 Shared action code does not imply shared storage, and linking groups does not
 merge their namespaces. Intentionally shared mutable data belongs to an
-integration identity and requires explicit lifecycle, authorization,
-cardinality, atomicity, and revocation semantics. Framework API v1 keeps that
-boundary closed rather than presenting origin-group state as integration state.
+integration identity. The integration-state service keeps that choice explicit:
+the current directional default selects the ledger, switches do not copy data,
+and revocation blocks access without erasing the old integration's namespace.
 
 Cooldowns should be declarative where possible:
 
@@ -416,7 +419,8 @@ so those representations cannot silently drift.
    installed `/integration_schedule_twitch` proof repeatedly invokes the same
    announcement action at bounded-random intervals.
 7. **Add namespaced configuration, state, and cooldowns — completed.** Actions
-   opt into frozen `authorization`, `config`, `links`, `state`, and `random`
+   opt into frozen `authorization`, `config`, `integrationState`, `links`,
+   `state`, and `random`
    services;
    conditional authorization delegates to platform policy, while per-group
    SQLite namespaces enforce key, value-size, and entry-count bounds; and declarative
@@ -462,7 +466,14 @@ so those representations cannot silently drift.
     snapshot or `null`; mutation, candidate listing, audit history, and registry
     storage remain platform-owned. The test kit models each direction with
     `defaultTestLink()`. Resolving identity does not merge the two groups'
-    `ctx.state` namespaces or add arbitrary integration-owned feature state.
+    `ctx.state` namespaces.
+12. **Expose controlled integration-owned feature state — completed.** Actions
+    resolve a default-link snapshot and pass that exact invocation-local
+    capability to `ctx.integrationState.for(link)`. The per-integration
+    coordinator verifies active membership and stores a feature namespace with
+    the same bounded operations as group state. The redesigned `fun.deaths`
+    feature keeps its remembered game local to each platform group while both
+    directions of one selected integration share a death ledger.
 
 ## Success criteria
 

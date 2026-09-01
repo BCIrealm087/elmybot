@@ -380,10 +380,81 @@ function createClock(initialTime) {
 function createMemoryServices(clock) {
   const config = new Map();
   const state = new Map();
+  const integrationState = new Map();
   const cooldowns = new Map();
-  const storageKey = (groupKey, featureId, key) =>
-    `${groupKey}\u0000${featureId}\u0000${key}`;
+  const storageKey = (ownerKey, featureId, key) =>
+    `${ownerKey}\u0000${featureId}\u0000${key}`;
   const value = (map, key) => map.has(key) ? freezeJson(map.get(key)) : null;
+
+  function stateService(map, ownerKey, { integrationScoped = false } = {}) {
+    const argumentsAfterOwner = (args) => integrationScoped ? args.slice(1) : args;
+    return Object.freeze({
+      get: async (featureId, ...args) => {
+        const [key] = argumentsAfterOwner(args);
+        return value(map, storageKey(ownerKey(args), featureId, key));
+      },
+      set: async (featureId, ...args) => {
+        const [key, nextValue] = argumentsAfterOwner(args);
+        map.set(
+          storageKey(ownerKey(args), featureId, key),
+          freezeJson(nextValue)
+        );
+      },
+      delete: async (featureId, ...args) => {
+        const [key] = argumentsAfterOwner(args);
+        return map.delete(storageKey(ownerKey(args), featureId, key));
+      },
+      increment: async (featureId, ...args) => {
+        const [key, amount = 1] = argumentsAfterOwner(args);
+        const namespaced = storageKey(ownerKey(args), featureId, key);
+        const current = map.get(namespaced) ?? 0;
+        if (!Number.isSafeInteger(current) || !Number.isSafeInteger(amount) ||
+            !Number.isSafeInteger(current + amount)) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory state value is not safely incrementable."
+          );
+        }
+        const nextValue = current + amount;
+        map.set(namespaced, nextValue);
+        return nextValue;
+      },
+      boundedCounter: async (featureId, ...args) => {
+        const [descriptor, operation, amount] = argumentsAfterOwner(args);
+        const namespaced = storageKey(
+          ownerKey(args),
+          featureId,
+          `bounded-counter\u0000${descriptor.name}\u0000${descriptor.subject}`
+        );
+        const current = map.get(namespaced) ?? descriptor.initial;
+        if (
+          !Number.isSafeInteger(current) ||
+          current < descriptor.min ||
+          current > descriptor.max
+        ) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory state value is not a valid bounded counter."
+          );
+        }
+        if (operation === "get") return current;
+        let nextValue = descriptor.initial;
+        if (operation !== "reset") {
+          const direction = operation === "increment" ? 1n : -1n;
+          const candidate = BigInt(current) + direction * BigInt(amount);
+          nextValue = Number(
+            candidate < BigInt(descriptor.min)
+              ? BigInt(descriptor.min)
+              : candidate > BigInt(descriptor.max)
+                ? BigInt(descriptor.max)
+                : candidate
+          );
+        }
+        if (map.has(namespaced) || nextValue !== descriptor.initial) {
+          map.set(namespaced, nextValue);
+        }
+        return nextValue;
+      }
+    });
+  }
 
   return Object.freeze({
     runtime(groupKey) {
@@ -395,64 +466,12 @@ function createMemoryServices(clock) {
               storageKey(groupKey, featureId, key)
             )
           }),
-          state: Object.freeze({
-            get: async (featureId, key) => value(
-              state,
-              storageKey(groupKey, featureId, key)
-            ),
-            set: async (featureId, key, nextValue) => {
-              state.set(storageKey(groupKey, featureId, key), freezeJson(nextValue));
-            },
-            delete: async (featureId, key) =>
-              state.delete(storageKey(groupKey, featureId, key)),
-            increment: async (featureId, key, amount = 1) => {
-              const namespaced = storageKey(groupKey, featureId, key);
-              const current = state.get(namespaced) ?? 0;
-              if (!Number.isSafeInteger(current) || !Number.isSafeInteger(amount) ||
-                  !Number.isSafeInteger(current + amount)) {
-                throw new FeatureTestRuntimeError(
-                  "The in-memory state value is not safely incrementable."
-                );
-              }
-              const nextValue = current + amount;
-              state.set(namespaced, nextValue);
-              return nextValue;
-            },
-            boundedCounter: async (featureId, descriptor, operation, amount) => {
-              const namespaced = storageKey(
-                groupKey,
-                featureId,
-                `bounded-counter\u0000${descriptor.name}\u0000${descriptor.subject}`
-              );
-              const current = state.get(namespaced) ?? descriptor.initial;
-              if (
-                !Number.isSafeInteger(current) ||
-                current < descriptor.min ||
-                current > descriptor.max
-              ) {
-                throw new FeatureTestRuntimeError(
-                  "The in-memory state value is not a valid bounded counter."
-                );
-              }
-              if (operation === "get") return current;
-              let nextValue = descriptor.initial;
-              if (operation !== "reset") {
-                const direction = operation === "increment" ? 1n : -1n;
-                const candidate = BigInt(current) + direction * BigInt(amount);
-                nextValue = Number(
-                  candidate < BigInt(descriptor.min)
-                    ? BigInt(descriptor.min)
-                    : candidate > BigInt(descriptor.max)
-                      ? BigInt(descriptor.max)
-                      : candidate
-                );
-              }
-              if (state.has(namespaced) || nextValue !== descriptor.initial) {
-                state.set(namespaced, nextValue);
-              }
-              return nextValue;
-            }
-          })
+          state: stateService(state, () => groupKey),
+          integrationState: stateService(
+            integrationState,
+            (args) => args[0]?.integration?.id,
+            { integrationScoped: true }
+          )
         }),
         async claimFeatureCooldown({ featureId, actionKind, scopeKey, seconds }) {
           const key = `${groupKey}\u0000${featureId}\u0000${actionKind}\u0000${scopeKey}`;
@@ -490,7 +509,16 @@ function createMemoryServices(clock) {
       },
       clear() {
         state.clear();
+        integrationState.clear();
         cooldowns.clear();
+      }
+    }),
+    integrationState: Object.freeze({
+      get(integrationId, featureId, key) {
+        return value(
+          integrationState,
+          storageKey(integrationId, featureId, key)
+        );
       }
     })
   });
@@ -925,6 +953,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }),
     config: memory.config,
     state: memory.state,
+    integrationState: memory.integrationState,
     schedules: Object.freeze({
       pending: () => Object.freeze(pendingSchedules.map((record) =>
         Object.freeze({ ...record })

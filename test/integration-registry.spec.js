@@ -485,6 +485,89 @@ describe("Cross-platform integration linking", () => {
     });
   });
 
+  it("shares feature state through an active integration and blocks it after revocation", async () => {
+    const linked = await activateIntegration();
+    const discordInvocation = createCommandInvocation({
+      kind: "test.integration-state.read.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:integration-state"
+    });
+    const discordRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      discordInvocation
+    );
+    const discordLink = await discordRuntime.featureServices.links.default(
+      "test.integration-state",
+      "twitch"
+    );
+    const descriptor = {
+      name: "score",
+      subject: "shared-game",
+      min: 0,
+      max: 100,
+      initial: 0
+    };
+
+    await expect(discordRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      discordLink,
+      descriptor,
+      "increment",
+      1
+    )).resolves.toBe(1);
+
+    const twitchInvocation = createCommandInvocation({
+      kind: "test.integration-state.read.v1",
+      origin: {
+        group: linked.channel,
+        actor: twitchActor(linked.channel.id)
+      },
+      sourceEventId: "twitch:chat:integration-state"
+    });
+    const twitchRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      twitchInvocation
+    );
+    const twitchLink = await twitchRuntime.featureServices.links.default(
+      "test.integration-state",
+      "discord"
+    );
+    await expect(twitchRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      twitchLink,
+      descriptor,
+      "get"
+    )).resolves.toBe(1);
+
+    await expect(discordRuntime.featureServices.integrationState.get(
+      "test.integration-state",
+      {
+        ...discordLink,
+        sourceGroup: discordGroup("outside-guild")
+      },
+      "value"
+    )).rejects.toMatchObject({
+      status: 403,
+      code: "integration_feature_state_member_invalid"
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: linked.completion.integration.id,
+      group: linked.group,
+      actor: linked.actor,
+      reason: "test_revocation"
+    });
+    await expect(discordRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      discordLink,
+      descriptor,
+      "get"
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "integration_inactive"
+    });
+  });
+
   it("backfills defaults for active links created before the default table", async () => {
     const linked = await activateIntegration();
     await runInDurableObject(

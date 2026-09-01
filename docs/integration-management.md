@@ -132,12 +132,15 @@ channel; Discord must not manage that direction on Twitch's behalf.
 | Enable, disable, or retarget an integration route | `/integration_route_set` |
 | Change the Discord guild's selected Twitch relationship | `/integration_default_set` |
 | Store data owned independently by the invoking guild or channel | `ctx.state` or `ctx.config` |
-| Store one authoritative value owned by an integration | Not exposed by Framework API v1; requires a separate design |
+| Store one authoritative value owned by the selected integration | Declare `links` and `integrationState`, resolve the default, then call `ctx.integrationState.for(link)` |
 
 A default does not enable, disable, retarget, or filter route definitions.
 Likewise, changing a route does not change the default. The read-only feature
 resolver returns identity only; it does not grant management authority, expose
-the registry, or merge the source and target groups' state namespaces.
+the registry, or merge the source and target groups' `ctx.state` namespaces.
+Passing the exact resolver snapshot to the separately declared
+`integrationState` service selects an integration-owned feature ledger; it
+does not change route or default management authority.
 
 ## Status and route management
 

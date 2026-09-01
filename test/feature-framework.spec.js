@@ -569,6 +569,89 @@ describe("Command and feature framework", () => {
     )).rejects.toMatchObject({ code: "feature_link_result_invalid" });
   });
 
+  it("scopes integration state to a default link resolved by the invocation", async () => {
+    const scopedAction = defineAction({
+      kind: "test.integration-state.use.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["integrationState", "links"] },
+      async execute(ctx) {
+        const link = await ctx.links.default("twitch");
+        const count = await ctx.integrationState
+          .for(link)
+          .boundedCounter("score", "game", { min: 0, max: 10 })
+          .increment(2);
+        return { output: { count }, effects: [] };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [scopedAction] })
+    ], { availableServices: ["integrationState", "links"] });
+    const invocation = createCommandInvocation({
+      kind: scopedAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:integration-state"
+    });
+    const link = {
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "guild-1" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" }
+    };
+    const boundedCounter = vi.fn(async () => 2);
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      {
+        featureServices: {
+          links: { default: vi.fn(async () => link) },
+          integrationState: { boundedCounter }
+        }
+      }
+    )).resolves.toMatchObject({ output: { count: 2 } });
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      expect.objectContaining({
+        integration: { id: "integration-1", key: "integration:integration-1" }
+      }),
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "increment",
+      2
+    );
+
+    const forgedAction = defineAction({
+      kind: "test.integration-state.forged.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["integrationState", "links"] },
+      async execute(ctx) {
+        const resolved = await ctx.links.default("twitch");
+        await ctx.integrationState.for({ ...resolved }).get("value");
+        return { output: {}, effects: [] };
+      }
+    });
+    const forgedCatalog = createFeatureRegistry([
+      feature({ actions: [forgedAction] })
+    ], { availableServices: ["integrationState", "links"] });
+    await expect(executeAction(
+      createActionRegistry(forgedCatalog.actions),
+      createCommandInvocation({
+        ...invocation,
+        kind: forgedAction.kind,
+        sourceEventId: "discord:interaction:forged-integration-state"
+      }),
+      {
+        featureServices: {
+          links: { default: vi.fn(async () => link) },
+          integrationState: { get: vi.fn() }
+        }
+      }
+    )).rejects.toMatchObject({
+      code: "feature_integration_state_link_invalid"
+    });
+  });
+
   it("rejects invalid bounded-counter bounds at the author API", async () => {
     const invalidCounterAction = defineAction({
       kind: "test.counter.invalid.v1",

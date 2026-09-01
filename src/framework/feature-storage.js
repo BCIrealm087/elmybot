@@ -12,6 +12,8 @@ const MAX_COOLDOWN_ROWS = 10_000;
 const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 
 export const FEATURE_STORAGE_PATH_PREFIX = "/internal/framework/";
+export const INTEGRATION_FEATURE_STATE_PATH_PREFIX =
+  "/internal/framework/integration-state/";
 
 export class FeatureStorageUserFacingError extends Error {
   constructor(message, status = 422) {
@@ -421,6 +423,23 @@ function claimCooldown(state, input) {
   });
 }
 
+export async function handleFeatureStateStorageOperation(state, operation, input) {
+  switch (operation) {
+    case "state/get":
+      return getValue(state.storage.sql, "state", input);
+    case "state/set":
+      return setValue(state, "state", input);
+    case "state/delete":
+      return deleteValue(state, "state", input);
+    case "state/increment":
+      return incrementState(state, input);
+    case "state/bounded-counter":
+      return await boundedCounterState(state, input);
+    default:
+      return null;
+  }
+}
+
 export async function handleFeatureStorageRequest(state, request, pathname) {
   if (request.method !== "POST" || !pathname.startsWith(FEATURE_STORAGE_PATH_PREFIX)) {
     return null;
@@ -434,20 +453,10 @@ export async function handleFeatureStorageRequest(state, request, pathname) {
       return setValue(state, "config", input);
     case "config/delete":
       return deleteValue(state, "config", input);
-    case "state/get":
-      return getValue(state.storage.sql, "state", input);
-    case "state/set":
-      return setValue(state, "state", input);
-    case "state/delete":
-      return deleteValue(state, "state", input);
-    case "state/increment":
-      return incrementState(state, input);
-    case "state/bounded-counter":
-      return await boundedCounterState(state, input);
     case "cooldown/claim":
       return claimCooldown(state, input);
     default:
-      return null;
+      return await handleFeatureStateStorageOperation(state, operation, input);
   }
 }
 

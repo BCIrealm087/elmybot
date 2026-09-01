@@ -393,11 +393,16 @@ describe('Discord platform', () => {
     const memberRead = buildSlashInteraction({
       name: 'deaths',
       guildId,
-      options: [{ name: 'game', value: 'Dark Souls' }],
+      options: [
+        { name: 'operation', value: 'check' },
+        { name: 'game', value: 'Dark Souls' },
+      ],
     });
     await expect(commands.deaths.exec(memberRead, env, 'deaths', {
       sourceInteraction: memberRead,
-    })).resolves.toMatchObject({ content: 'Dark Souls deaths: 0' });
+    })).resolves.toMatchObject({
+      content: 'Death counts require a default linked Twitch channel.',
+    });
 
     const memberWrite = buildSlashInteraction({
       name: 'deaths',
@@ -422,7 +427,9 @@ describe('Discord platform', () => {
     });
     await expect(commands.deaths.exec(moderatorWrite, env, 'deaths', {
       sourceInteraction: moderatorWrite,
-    })).resolves.toMatchObject({ content: 'Dark Souls deaths: 1' });
+    })).resolves.toMatchObject({
+      content: 'Death counts require a default linked Twitch channel.',
+    });
   });
 
   it.each([

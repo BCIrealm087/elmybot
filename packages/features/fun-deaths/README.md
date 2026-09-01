@@ -1,17 +1,24 @@
 # `@elmybot/feature-fun-deaths`
 
-Tracks a non-negative death count for each game in a Discord server or Twitch
-channel. Counts are scoped to the platform group where the command is used, so
-a Discord server and a Twitch channel keep independent registries.
+Tracks one non-negative death count per game in the active integration selected
+by a Discord server's or Twitch channel's directional default. Both directions
+share counts when they select the same integration. Each platform group keeps
+its own remembered game.
 
 Ordinary members can read a count. Broadcasters, moderators, Discord owners,
 intrinsic Discord moderators, and configured trusted Discord roles can use the
 `plus`, `minus`, and `reset` operations.
 
+Using a named game updates the remembered game only for a moderator. An
+ordinary member may check a named game once without changing what a later
+argument-free command checks. The command requires an active default link.
+
 ## Commands
 
-- Discord: `/deaths game:<game> [operation:plus|minus|reset]`
-- Twitch: `!deaths <game> [plus|minus|reset]`
+- Discord: `/deaths [operation:check|plus|minus|reset] [game:<game>]`
+- Twitch: `!deaths [check|plus|minus|reset] [<game>]`
 
-Quote a multi-word Twitch game name, for example `!deaths "Dark Souls" plus`.
-Omitting the operation displays the current count. `minus` stops at zero.
+The game argument requires an operation. Quote a multi-word Twitch game name,
+for example `!deaths plus "Dark Souls"`. Omitting both arguments, or using
+`check` without a game, checks the locally remembered game. `minus` stops at
+zero.

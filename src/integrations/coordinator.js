@@ -1,9 +1,17 @@
 import { jsonResponse, logError } from "../common.js";
 import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 import {
+  createIntegrationRef,
   createIntegrationExecution,
+  createPlatformGroupRef,
   IntegrationContractError
 } from "./contracts.js";
+import {
+  FeatureStorageUserFacingError,
+  handleFeatureStateStorageOperation,
+  initializeFeatureStorageTables,
+  INTEGRATION_FEATURE_STATE_PATH_PREFIX
+} from "../framework/feature-storage.js";
 import {
   getIntegrationById,
   IntegrationRegistryError
@@ -132,6 +140,86 @@ export class IntegrationCoordinatorBackend {
     this.env = env;
     this.effectHandlers = effectHandlers;
     initializeCoordinatorTables(state);
+    initializeFeatureStorageTables(state);
+  }
+
+  ensureCoordinatorIdentity(integrationId) {
+    const meta = this.state.storage.sql.exec(
+      "SELECT integration_id FROM integration_coordinator_meta WHERE singleton = 1"
+    ).toArray()[0];
+    if (meta && meta.integration_id !== integrationId) {
+      throw new IntegrationCoordinatorError(
+        "This coordinator belongs to a different integration.",
+        { status: 409, code: "integration_coordinator_identity_mismatch" }
+      );
+    }
+    if (!meta) {
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_coordinator_meta (singleton, integration_id)
+         VALUES (1, ?)`,
+        integrationId
+      );
+    }
+  }
+
+  async featureStateRequest(input, operation) {
+    let integration;
+    let sourceGroup;
+    let targetGroup;
+    try {
+      integration = createIntegrationRef(input?.integration);
+      sourceGroup = createPlatformGroupRef(input?.sourceGroup);
+      targetGroup = createPlatformGroupRef(input?.targetGroup);
+    } catch (error) {
+      if (error instanceof IntegrationContractError) {
+        throw new IntegrationCoordinatorError(
+          "The integration feature-state scope is invalid.",
+          { status: 422, code: "integration_feature_state_scope_invalid" }
+        );
+      }
+      throw error;
+    }
+    if (sourceGroup.platform === targetGroup.platform) {
+      throw new IntegrationCoordinatorError(
+        "Integration feature state requires groups on different platforms.",
+        { status: 422, code: "integration_feature_state_scope_invalid" }
+      );
+    }
+
+    let result;
+    try {
+      result = await getIntegrationById(this.env, integration.id);
+    } catch (error) {
+      if (error instanceof IntegrationRegistryError && error.status === 404) {
+        throw new IntegrationCoordinatorError("The integration was not found.", {
+          status: 404,
+          code: "integration_not_found"
+        });
+      }
+      throw error;
+    }
+    if (result.integration.status !== "active") {
+      throw new IntegrationCoordinatorError("The integration is not active.", {
+        status: 409,
+        code: "integration_inactive"
+      });
+    }
+    const memberKeys = new Set(
+      result.integration.members.map((member) => member.group.key)
+    );
+    if (!memberKeys.has(sourceGroup.key) || !memberKeys.has(targetGroup.key)) {
+      throw new IntegrationCoordinatorError(
+        "The integration feature-state scope contains a non-member group.",
+        { status: 403, code: "integration_feature_state_member_invalid" }
+      );
+    }
+
+    this.ensureCoordinatorIdentity(integration.id);
+    return await handleFeatureStateStorageOperation(
+      this.state,
+      operation,
+      input?.storage
+    );
   }
 
   validateExecution(input) {
@@ -259,16 +347,7 @@ export class IntegrationCoordinatorBackend {
     const result = this.state.storage.transactionSync(() => {
       const concurrentReplay = this.replayIfPresent(execution, fingerprint);
       if (concurrentReplay) return concurrentReplay;
-      const meta = this.state.storage.sql.exec(
-        "SELECT integration_id FROM integration_coordinator_meta WHERE singleton = 1"
-      ).toArray()[0];
-      if (!meta) {
-        this.state.storage.sql.exec(
-          `INSERT INTO integration_coordinator_meta (singleton, integration_id)
-           VALUES (1, ?)`,
-          execution.integration.id
-        );
-      }
+      this.ensureCoordinatorIdentity(execution.integration.id);
 
       for (const effect of execution.effects) {
         const conflict = this.state.storage.sql.exec(
@@ -571,6 +650,23 @@ export class IntegrationCoordinatorBackend {
   async fetch(request) {
     const url = new URL(request.url);
     try {
+      if (
+        request.method === "POST" &&
+        url.pathname.startsWith(INTEGRATION_FEATURE_STATE_PATH_PREFIX)
+      ) {
+        let input;
+        try {
+          input = await request.json();
+        } catch {
+          throw new IntegrationCoordinatorError("Request body must be valid JSON.");
+        }
+        const operation = url.pathname.slice(
+          INTEGRATION_FEATURE_STATE_PATH_PREFIX.length
+        );
+        const result = await this.featureStateRequest(input, operation);
+        if (result === null) return new Response("Not found", { status: 404 });
+        return noStoreJson(result);
+      }
       if (request.method === "POST" && url.pathname === "/executions") {
         let input;
         try {
@@ -662,6 +758,9 @@ export class IntegrationCoordinatorBackend {
       }
       return new Response("Not found", { status: 404 });
     } catch (error) {
+      if (error instanceof FeatureStorageUserFacingError) {
+        return noStoreJson({ userFacingError: error.message }, error.status);
+      }
       if (error instanceof IntegrationCoordinatorError) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }

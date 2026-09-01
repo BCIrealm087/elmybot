@@ -265,8 +265,8 @@ Requirements:
 
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
-requires, chosen from `authorization`, `config`, `links`, `state`, and `random`
-in API v1.
+requires, chosen from `authorization`, `config`, `integrationState`, `links`,
+`state`, and `random` in API v1.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
@@ -342,6 +342,24 @@ The action context has this exact API v1 surface:
   links: {
     default(targetPlatform): Promise<DefaultLinkSnapshot | null>
   },
+  integrationState: {
+    for(link: DefaultLinkSnapshot): {
+      get(key): Promise<JSONValue | null>,
+      set(key, value): Promise<void>,
+      delete(key): Promise<boolean>,
+      increment(key, amount = 1): Promise<number>,
+      boundedCounter(name, subject, {
+        min = 0,
+        max = Number.MAX_SAFE_INTEGER,
+        initial = min
+      } = {}): {
+        get(): Promise<number>,
+        increment(amount = 1): Promise<number>,
+        decrement(amount = 1): Promise<number>,
+        reset(): Promise<number>
+      }
+    }
+  },
   routes: {
     resolve(routeKind): Promise<readonly RouteSnapshot[]>
   },
@@ -382,8 +400,8 @@ The action context has this exact API v1 surface:
 ```
 
 Context and service objects are frozen. Service methods enforce the current
-feature ID and origin group; callers cannot select another feature namespace or
-arbitrary storage object.
+feature ID and either the origin group or an accepted integration snapshot;
+callers cannot select another feature namespace or arbitrary storage object.
 
 Rules:
 
@@ -397,8 +415,8 @@ Rules:
   stable idempotency metadata from the current invocation.
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
-- `authorization`, `config`, `links`, `state`, and `random` may be used only
-  when declared in `uses.services`. Undeclared access is a framework error. The
+- `authorization`, `config`, `integrationState`, `links`, `state`, and `random`
+  may be used only when declared in `uses.services`. Undeclared access is a framework error. The
   namespace shape remains stable so feature code does not branch on service
   presence.
 - `authorization.allows()` accepts only a reviewed registered capability and
@@ -414,11 +432,16 @@ Rules:
   listing, audit/history, timestamps, registry handle, route configuration, or
   storage access.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
-  them by feature ID and origin group.
+  `ctx.state` by feature ID and origin group.
 - A shared action and an active integration do not merge group namespaces.
-  API v1 exposes no mutable integration-scoped feature-state service; features
-  MUST NOT simulate one by reaching into integration internals or synchronizing
-  multiple local copies as though they were one authoritative value.
+  `integrationState.for()` requires the exact frozen link returned by
+  `links.default()` during the same invocation; copied objects, arbitrary
+  integration IDs, and snapshots from another invocation are errors.
+- Integration-state storage verifies that the selected relationship remains
+  active and that both source and target groups remain members. Its namespace
+  is integration ID plus feature ID. Switching a directional default selects a
+  different ledger without copying data. Revocation blocks access without
+  erasing data, and a later relink receives a new integration ID and ledger.
 - `state.boundedCounter()` accepts a normal feature key as its name and an
   arbitrary non-empty subject of at most 300 characters. Storage maps the pair
   to a collision-resistant internal key; subject normalization remains an
@@ -428,25 +451,27 @@ Rules:
   1,000,000. Updates saturate at the selected bound, `reset()` returns to the
   initial value, and the returned counter handle is frozen.
 - Each state operation is atomic by itself. API v1 does not promise a
-  multi-operation transaction. One bounded-counter mutation, including its
-  floor or ceiling check, is one atomic operation.
+  multi-operation or cross-owner transaction. One bounded-counter mutation,
+  including its floor or ceiling check, is one atomic operation.
 - Log metadata is bounded, JSON-safe, and automatically receives feature,
   action, platform, group, and correlation fields. Secrets and complete raw
   payloads MUST NOT be logged.
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `authorization`, `config`, `links`, `state`, and `random` are part of
+Although `authorization`, `config`, `integrationState`, `links`, `state`, and
+`random` are part of
 the approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
 
-Implementation status: all five API v1 services are available in the installed
+Implementation status: all six API v1 services are available in the installed
 composition. Authorization delegates to the platform policy. Links resolves
 the origin group's selected cross-platform relationship through the integration
-registry. Config and state are scoped through `GroupConfig`; declarative
-cooldowns use the same per-group boundary and are enforced before action code.
+registry. Config and state are scoped through `GroupConfig`; integration state
+is scoped through the per-integration coordinator. Declarative cooldowns use
+the per-group boundary and are enforced before action code.
 
 ## Command definitions
 

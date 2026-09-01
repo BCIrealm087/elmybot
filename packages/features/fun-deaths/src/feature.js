@@ -14,7 +14,8 @@ import {
 
 export const FUN_DEATHS_ACTION_KIND = "fun.deaths.manage.v1";
 
-const OPERATIONS = Object.freeze(["show", "plus", "minus", "reset"]);
+const OPERATIONS = Object.freeze(["check", "plus", "minus", "reset"]);
+const LAST_GAME_KEY = "last_game";
 
 function displayName(game) {
   return game.trim().replace(/\s+/g, " ");
@@ -25,13 +26,23 @@ function gameIdentity(game) {
 }
 
 function countMessage(game, count) {
-  return `${displayName(game)} deaths: ${count}`;
+  return `${game} deaths: ${count}`;
+}
+
+function otherPlatform(platform) {
+  return platform === "discord" ? "twitch" : "discord";
+}
+
+function missingLinkMessage(platform) {
+  return platform === "discord"
+    ? "Death counts require a default linked Twitch channel."
+    : "Death counts require a default linked Discord server.";
 }
 
 export const feature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "fun.deaths",
-  description: "Tracks per-game death counts in a Discord server or Twitch channel.",
+  description: "Tracks shared per-game deaths for linked Discord and Twitch groups.",
   actions: [
     defineAction({
       kind: FUN_DEATHS_ACTION_KIND,
@@ -47,34 +58,77 @@ export const feature = defineFeature({
       ],
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
-        game: schema.string({ minLength: 1, maxLength: 80, trim: true }),
-        operation: schema.enum(OPERATIONS, { optional: true, default: "show" })
+        operation: schema.enum(OPERATIONS, { optional: true }),
+        game: schema.string({
+          minLength: 1,
+          maxLength: 80,
+          trim: true,
+          optional: true
+        })
       }),
-      uses: { services: ["authorization", "state"] },
+      uses: {
+        services: ["authorization", "integrationState", "links", "state"]
+      },
       async execute(ctx, { game, operation }) {
-        const deaths = ctx.state.boundedCounter("game", gameIdentity(game));
-        if (
-          operation !== "show" &&
-          !await ctx.authorization.allows(access.moderators)
-        ) {
+        if (game !== undefined && operation === undefined) {
+          return {
+            output: {
+              message: "Choose check, plus, minus, or reset before naming a game."
+            },
+            effects: []
+          };
+        }
+
+        const selectedOperation = operation ?? "check";
+        const isModerator = await ctx.authorization.allows(access.moderators);
+        if (selectedOperation !== "check" && !isModerator) {
           return {
             output: { message: "Only moderators can change death counts." },
             effects: []
           };
         }
 
+        const selectedGame = game === undefined
+          ? await ctx.state.get(LAST_GAME_KEY)
+          : displayName(game);
+        if (selectedGame === null) {
+          return {
+            output: {
+              message: "No game is selected yet. A moderator must check or update a named game first."
+            },
+            effects: []
+          };
+        }
+
+        const link = await ctx.links.default(
+          otherPlatform(ctx.origin.group.platform)
+        );
+        if (link === null) {
+          return {
+            output: { message: missingLinkMessage(ctx.origin.group.platform) },
+            effects: []
+          };
+        }
+
+        const deaths = ctx.integrationState
+          .for(link)
+          .boundedCounter("game", gameIdentity(selectedGame));
+
         let count;
-        if (operation === "plus") {
+        if (selectedOperation === "plus") {
           count = await deaths.increment();
-        } else if (operation === "minus") {
+        } else if (selectedOperation === "minus") {
           count = await deaths.decrement();
-        } else if (operation === "reset") {
+        } else if (selectedOperation === "reset") {
           count = await deaths.reset();
         } else {
           count = await deaths.get();
         }
+        if (game !== undefined && isModerator) {
+          await ctx.state.set(LAST_GAME_KEY, selectedGame);
+        }
         return {
-          output: { message: countMessage(game, count) },
+          output: { message: countMessage(selectedGame, count) },
           effects: []
         };
       }
@@ -84,27 +138,27 @@ export const feature = defineFeature({
     discord: [
       discordActionCommand({
         name: "deaths",
-        description: "Show or update this server's deaths for a game.",
+        description: "Check or update shared deaths for a linked game.",
         availability: "guild",
         actionKind: FUN_DEATHS_ACTION_KIND,
         options: [
           discordOption({
-            arg: "game",
-            name: "game",
-            description: "Game whose deaths should be shown or updated.",
-            type: "string",
-            required: true,
-            minLength: 1,
-            maxLength: 80
-          }),
-          discordOption({
             arg: "operation",
             name: "operation",
-            description: "Optional moderator action: plus, minus, or reset.",
+            description: "Check, plus, minus, or reset; defaults to check.",
             type: "string",
             required: false,
             minLength: 4,
             maxLength: 5
+          }),
+          discordOption({
+            arg: "game",
+            name: "game",
+            description: "Optional game; requires an operation.",
+            type: "string",
+            required: false,
+            minLength: 1,
+            maxLength: 80
           })
         ],
         render: discordTextResult
@@ -113,11 +167,11 @@ export const feature = defineFeature({
     twitch: [
       twitchActionCommand({
         name: "deaths",
-        description: "Show or update this channel's deaths for a game.",
+        description: "Check or update shared deaths for a linked game.",
         actionKind: FUN_DEATHS_ACTION_KIND,
         parse: twitchTokens([
-          { arg: "game", type: "string" },
-          { arg: "operation", type: "string", optional: true, default: "show" }
+          { arg: "operation", type: "string", optional: true },
+          { arg: "game", type: "string", optional: true }
         ]),
         render: twitchTextResult
       })

@@ -1,9 +1,14 @@
-import { FEATURE_STORAGE_PATH_PREFIX } from "./feature-storage.js";
+import {
+  FEATURE_STORAGE_PATH_PREFIX,
+  INTEGRATION_FEATURE_STATE_PATH_PREFIX
+} from "./feature-storage.js";
+import { integrationCoordinatorStub } from "../integrations/coordinator-client.js";
 import { getIntegrationDefaultLink } from "../integrations/registry-client.js";
 
 export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "authorization",
   "config",
+  "integrationState",
   "links",
   "state",
   "random"
@@ -62,6 +67,48 @@ async function storageRequest(env, invocation, operation, input) {
   return result;
 }
 
+async function integrationStateRequest(env, invocation, link, operation, input) {
+  const response = await integrationCoordinatorStub(
+    env,
+    link.integration.id
+  ).fetch(
+    `https://integration-coordinator${INTEGRATION_FEATURE_STATE_PATH_PREFIX}${operation}`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-correlation-id": invocation.correlationId
+      },
+      body: JSON.stringify({
+        integration: link.integration,
+        sourceGroup: link.sourceGroup,
+        targetGroup: link.targetGroup,
+        storage: input
+      })
+    }
+  );
+  let result;
+  try {
+    result = await response.json();
+  } catch (cause) {
+    throw new FeatureServiceRuntimeError(
+      "Integration feature storage returned an invalid response.",
+      { code: "integration_feature_storage_invalid_response", status: 502, cause }
+    );
+  }
+  if (!response.ok) {
+    throw new FeatureServiceRuntimeError(
+      result?.userFacingError ?? result?.error ??
+        "Integration feature storage request failed.",
+      {
+        code: result?.code ?? "integration_feature_storage_request_failed",
+        status: response.status
+      }
+    );
+  }
+  return result;
+}
+
 export function createFeatureServiceRuntime(env, invocation) {
   const input = (featureId, values = {}) => ({ featureId, ...values });
   return Object.freeze({
@@ -73,6 +120,57 @@ export function createFeatureServiceRuntime(env, invocation) {
             invocation,
             "config/get",
             input(featureId, { key })
+          );
+          return result.value;
+        }
+      }),
+      integrationState: Object.freeze({
+        async get(featureId, link, key) {
+          const result = await integrationStateRequest(
+            env,
+            invocation,
+            link,
+            "state/get",
+            input(featureId, { key })
+          );
+          return result.value;
+        },
+        async set(featureId, link, key, value) {
+          await integrationStateRequest(
+            env,
+            invocation,
+            link,
+            "state/set",
+            input(featureId, { key, value })
+          );
+        },
+        async delete(featureId, link, key) {
+          const result = await integrationStateRequest(
+            env,
+            invocation,
+            link,
+            "state/delete",
+            input(featureId, { key })
+          );
+          return result.deleted;
+        },
+        async increment(featureId, link, key, amount = 1) {
+          const result = await integrationStateRequest(
+            env,
+            invocation,
+            link,
+            "state/increment",
+            input(featureId, { key, amount })
+          );
+          return result.value;
+        },
+        async boundedCounter(featureId, link, descriptor, operation, amount) {
+          const result = await integrationStateRequest(
+            env,
+            invocation,
+            link,
+            "state/bounded-counter",
+            input(featureId, { ...descriptor, operation, amount })
           );
           return result.value;
         }

@@ -197,7 +197,7 @@ validation, execution, and rendering:
 
 ```js
 const result = await runtime.twitch.commandText(
-  '!deaths "Dark Souls" plus',
+  '!deaths plus "Dark Souls"',
   { actor: twitchTestModerator() }
 );
 
@@ -224,7 +224,7 @@ Convenience helpers are also available: `discordTestModerator()`,
 
 `twitchTokens()` accepts ordinary whitespace-delimited tokens and double-quoted
 multi-word strings. For example, a two-field parser can normalize
-`"Dark Souls" plus` into `{ game: "Dark Souls", operation: "plus" }`.
+`plus "Dark Souls"` into `{ operation: "plus", game: "Dark Souls" }`.
 
 The harness does not replace platform ingress or durability integration tests.
 Use the existing Worker tests when verifying signatures, raw Discord/Twitch
@@ -479,7 +479,8 @@ const runtime = createFeatureTestRuntime(feature, {
 ```
 
 A link identifies the selected relationship; it does not make `ctx.state`
-integration-owned or shared. Read the
+integration-owned or shared. It can be passed to the separately declared
+`integrationState` service when the relationship should own the data. Read the
 [state-ownership decision](feature-state.md#choose-the-state-boundary-first)
 before storing data that both sides must mutate.
 
@@ -531,6 +532,31 @@ const value = await deaths.decrement(); // atomically stops at zero
 The framework safely maps the subject to an internal key. Normalize subject
 identity in the feature only when the domain requires it—for example, if game
 names should be case-insensitive.
+
+When both members of the selected relationship must update one authoritative
+value, declare `links` and `integrationState`, then scope the same state API
+through the resolved default:
+
+```js
+const targetPlatform = ctx.origin.group.platform === "discord"
+  ? "twitch"
+  : "discord";
+const link = await ctx.links.default(targetPlatform);
+if (link === null) {
+  return { output: { message: "A default link is required." }, effects: [] };
+}
+
+const deaths = ctx.integrationState
+  .for(link)
+  .boundedCounter("deaths", normalizedGameName);
+const value = await deaths.increment();
+```
+
+Only the exact snapshot returned during this action invocation is accepted.
+Changing the directional default selects another integration ledger, and a
+revoked relationship cannot be read or mutated. Keep group-local convenience
+state—such as the last selected game—in `ctx.state`; there is no transaction
+spanning the two owners.
 
 ## Cookbook 7: conditionally protected command modes
 

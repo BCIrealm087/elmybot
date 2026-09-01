@@ -219,11 +219,20 @@ function requireCounterAmount(amount) {
   return amount;
 }
 
-function boundedCounter(action, runtimeContext, name, subject, options) {
-  requireDeclaredService(action, "state");
+function boundedCounter(
+  action,
+  runtimeContext,
+  service,
+  serviceArguments,
+  name,
+  subject,
+  options
+) {
+  requireDeclaredService(action, service);
   const descriptor = boundedCounterDescriptor(name, subject, options);
   const run = (operation, amount) =>
-    serviceMethod(action, runtimeContext, "state", "boundedCounter")(
+    serviceMethod(action, runtimeContext, service, "boundedCounter")(
+      ...serviceArguments,
       descriptor,
       operation,
       amount
@@ -301,7 +310,13 @@ async function authorizationAllows(action, invocation, runtimeContext, capabilit
   return allowed;
 }
 
-async function defaultLink(action, invocation, runtimeContext, targetPlatform) {
+async function defaultLink(
+  action,
+  invocation,
+  runtimeContext,
+  resolvedDefaultLinks,
+  targetPlatform
+) {
   requireDeclaredService(action, "links");
   if (
     !["discord", "twitch"].includes(targetPlatform) ||
@@ -339,7 +354,45 @@ async function defaultLink(action, invocation, runtimeContext, targetPlatform) {
       { code: "feature_link_result_invalid" }
     );
   }
-  return Object.freeze({ integration, sourceGroup, targetGroup });
+  const snapshot = Object.freeze({ integration, sourceGroup, targetGroup });
+  resolvedDefaultLinks.add(snapshot);
+  return snapshot;
+}
+
+function integrationStateScope(
+  action,
+  runtimeContext,
+  resolvedDefaultLinks,
+  link
+) {
+  requireDeclaredService(action, "integrationState");
+  if (!resolvedDefaultLinks.has(link)) {
+    throw new FeatureContextError(
+      "Integration state requires a default link resolved by this action invocation.",
+      { code: "feature_integration_state_link_invalid" }
+    );
+  }
+  const call = (method, ...args) =>
+    serviceMethod(action, runtimeContext, "integrationState", method)(link, ...args);
+  return Object.freeze({
+    get: (key) => call("get", requireFeatureKey(key)),
+    set: (key, value) => call("set", requireFeatureKey(key), value),
+    delete: (key) => call("delete", requireFeatureKey(key)),
+    increment: (key, amount = 1) => call(
+      "increment",
+      requireFeatureKey(key),
+      amount
+    ),
+    boundedCounter: (name, subject, options) => boundedCounter(
+      action,
+      runtimeContext,
+      "integrationState",
+      [link],
+      name,
+      subject,
+      options
+    )
+  });
 }
 
 function logger(runtimeContext, action, invocation) {
@@ -367,6 +420,7 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
     ? runtimeContext.clock.now.bind(runtimeContext.clock)
     : () => new Date();
   const routed = routedServices(action, invocation, runtimeContext);
+  const resolvedDefaultLinks = new WeakSet();
   return Object.freeze({
     apiVersion: frameworkApiVersion,
     featureId: action.featureId,
@@ -399,7 +453,16 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         action,
         invocation,
         runtimeContext,
+        resolvedDefaultLinks,
         targetPlatform
+      )
+    }),
+    integrationState: Object.freeze({
+      for: (link) => integrationStateScope(
+        action,
+        runtimeContext,
+        resolvedDefaultLinks,
+        link
       )
     }),
     routes: routed.routes,
@@ -428,6 +491,8 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
       boundedCounter: (name, subject, options) => boundedCounter(
         action,
         runtimeContext,
+        "state",
+        [],
         name,
         subject,
         options

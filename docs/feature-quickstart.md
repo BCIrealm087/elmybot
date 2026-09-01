@@ -46,6 +46,7 @@ it and skip this table. Otherwise, open only the relevant reference:
 | A Discord-specific option or response | [Native-command cookbook](feature-authoring.md#cookbook-1-platform-native-command) |
 | Sending to a linked Discord or Twitch group | [Routed-command cookbook](feature-authoring.md#cookbook-3-routed-cross-platform-command) |
 | Reading the one selected linked group without sending yet | [Default-link resolver](feature-authoring.md#read-the-selected-linked-group) |
+| Sharing one authoritative value across the selected link | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) |
 | Running later or repeatedly | [Scheduled-action cookbook](feature-authoring.md#cookbook-4-scheduled-action) |
 | Reacting to a Twitch or Discord event | [Event-action cookbook](feature-authoring.md#cookbook-5-event-driven-action) |
 
@@ -54,8 +55,8 @@ Two complete features are useful as nearby examples:
 - [`core.alive`](../packages/features/alive/src/feature.js) is the smallest
   shared Discord and Twitch command.
 - [`fun.deaths`](../packages/features/fun-deaths/src/feature.js) combines shared
-  behavior, quoted Twitch input, namespaced counters, and conditional moderator
-  access.
+  behavior, quoted Twitch input, integration-owned counters, per-platform
+  remembered state, and conditional moderator access.
 
 ## 3. Install it explicitly
 
@@ -101,7 +102,7 @@ For Twitch syntax that matters, test the actual chat text:
 
 ```js
 const result = await runtime.twitch.commandText(
-  '!deaths "Dark Souls" plus',
+  '!deaths plus "Dark Souls"',
   { actor: twitchTestModerator() }
 );
 
