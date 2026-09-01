@@ -870,5 +870,10 @@ feature-boundary check, workspace-package validation, generated-catalog
 freshness, tracked JavaScript syntax checks, and the whitespace/error-marker
 check also passed. The new relative links and heading anchors were checked
 against their files. The non-deploying Wrangler dry run remains for GitHub
-Actions, whose result will be recorded after the documentation commit is
-verified.
+Actions.
+
+GitHub Actions [run 33464550550](https://github.com/BCIrealm087/elmybot/actions/runs/33464550550)
+completed successfully for step 7 commit `cbd1a01a`: the locked install, all
+239 tests, lint and generated-document checks, tracked-source syntax checks,
+and the non-deploying Wrangler Worker dry run passed. Wrangler 4.126.0 reported
+a 546.01 KiB upload and 103.52 KiB gzip size.
