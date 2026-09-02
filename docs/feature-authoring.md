@@ -508,11 +508,11 @@ Omitted compatibility, summary, and limits normalize to `[schemaVersion]`,
 `presence`, 100 entries, and 16 KiB per value. `entry_count` is the only other
 summary policy. Neither policy can render stored keys or values.
 
-This declaration currently changes only validation and generated documentation.
-It does not add a context service, reclassify `ctx.state`, inspect an integration
-ledger, or make an unlinked command work. Feature contributors should continue
-using the implemented ownership guidance below until the later realm service is
-available. See the
+This declaration is now also consumed by internal standalone-realm persistence,
+but it still does not add a feature context service, reclassify `ctx.state`,
+inspect an integration ledger, or make an existing command use that realm.
+Feature contributors should continue using the implemented ownership guidance
+below until effective-realm resolution is exposed. See the
 [`shareable-state lifecycle contract`](shareable-state-lifecycle.md) for the
 staged behavior and constraints.
 

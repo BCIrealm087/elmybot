@@ -489,7 +489,12 @@ when groups link. Each step is intended to land and pass CI independently:
    declare frozen namespace IDs, labels, schema compatibility, safe collision
    summaries, and bounded limits. The metadata appears in the generated catalog
    but remains inert until the realm and resolution stages.
-3. **Implement standalone shareable-state realms.**
+3. **Implement standalone shareable-state realms — completed.** The internal
+   [`ShareableStateRealm`](shareable-state-realms.md) Durable Object now gives
+   each platform group an isolated, declaration-gated realm with canonical
+   values, namespace limits, schema identity, and atomic mutation versions.
+   It is not yet exposed to feature actions; effective selection belongs to
+   the next step.
 4. **Add effective-state resolution.**
 5. **Add snapshot, fingerprint, and cloning primitives.**
 6. **Introduce the pending-integration lifecycle.**

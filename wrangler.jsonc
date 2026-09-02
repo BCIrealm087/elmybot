@@ -28,7 +28,8 @@
 			{ "name": "TWITCH_EVENTSUB_INBOX", "class_name": "TwitchEventSubInbox" },
 			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
 			{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
-			{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" }
+			{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
+			{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" }
 		]
 	},
 
@@ -88,6 +89,10 @@
 		{
 			"tag": "v13",
 			"new_sqlite_classes": ["TwitchEventSubInbox"]
+		},
+		{
+			"tag": "v14",
+			"new_sqlite_classes": ["ShareableStateRealm"]
 		}
 	],
 
@@ -110,7 +115,8 @@
 					{ "name": "TWITCH_EVENTSUB_INBOX", "class_name": "TwitchEventSubInbox" },
 					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
 					{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
-					{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" }
+					{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
+					{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" }
 				]
 			}
 		}

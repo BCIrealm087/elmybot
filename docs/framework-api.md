@@ -59,6 +59,9 @@ v1 definition. Declarations contain stable IDs, labels, schema compatibility,
 safe collision-summary policy, and bounded limits; they are metadata only in
 the current stage and expose no state service or migration capability. This is
 the compatible addition of an optional manifest field with a stable default.
+The Worker now has internal standalone-realm persistence for these declarations,
+but that storage is deliberately absent from Framework API v1 until effective
+realm resolution can pin one safe owner for an invocation.
 
 Actions may explicitly request the controlled `authorization`, `config`,
 `integrationState`, `links`, `state`, and `random` context services.

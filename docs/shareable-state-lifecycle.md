@@ -6,6 +6,10 @@ v1 and is not implemented merely because it is documented. Until the staged
 implementation reaches a feature, that feature continues to follow the current
 [`integrationState` contract](feature-state.md).
 
+Implementation progress: namespace declarations and internal standalone realms
+are implemented. Default-aware effective-realm resolution, snapshots, linking
+collision handling, revocation successors, and feature migration remain staged.
+
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
 linked. It defines state ownership, linking collision resolution, concurrency,
@@ -317,9 +321,11 @@ may render stored keys or values. Limits can only narrow the current framework
 caps of 100 entries and 16 KiB per value. Definitions omit the field entirely
 or declare at most 20 unique namespaces, and every normalized object is frozen.
 
-This metadata does not yet create a realm, expose a state service, inspect
-existing storage, or change link activation. It gives later infrastructure a
-safe catalog to enumerate without loading feature code into migration logic.
+The metadata itself does not create storage. The internal standalone-realm
+layer now consumes the installed catalog to gate lazy realm materialization and
+state operations. It still exposes no feature action-context service, inspects
+no integration ledger, and changes no link activation behavior. See
+[`Standalone shareable-state realms`](shareable-state-realms.md).
 
 The framework may copy an opaque canonical snapshot, but it must enumerate only
 declared shareable namespaces. It must never infer shareability from ordinary
