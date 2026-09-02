@@ -6,6 +6,13 @@ or SQL handle. The runtime derives the feature namespace and allows an
 integration scope only through a default-link snapshot resolved by the current
 action invocation.
 
+The current implemented contract below intentionally requires a default link
+for integration-owned state. The staged
+[`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
+defines the future opt-in model in which declared state remains usable in a
+standalone group and can be reconciled into an integration realm. Documentation
+of that target does not make it part of Framework API v1.
+
 ## Choose the state boundary first
 
 A shared action shares behavior, not storage. When the same action runs from a

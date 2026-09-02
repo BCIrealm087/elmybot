@@ -23,6 +23,13 @@ or authorization model.
 
 ## Default-link model and invariants
 
+The staged
+[`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
+adds standalone and integration state realms around this model. It does not
+change the directional-default invariants: pending links own no default, later
+active links do not replace established choices, and switching a default
+selects an existing realm without copying it.
+
 A default is directional. Its key and selected value are:
 
 ```text

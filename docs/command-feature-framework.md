@@ -475,6 +475,28 @@ so those representations cannot silently drift.
     feature keeps its remembered game local to each platform group while both
     directions of one selected integration share a death ledger.
 
+## Shareable-state follow-up sequence
+
+The next initiative lets declared feature state work standalone and reconcile
+when groups link. Each step is intended to land and pass CI independently:
+
+1. **Define the shareable-state lifecycle contract — completed.** The
+   [lifecycle contract](shareable-state-lifecycle.md) fixes realm ownership,
+   discovery, collision outcomes, concurrency seals, directional defaults,
+   cancellation, revocation successors, relinking, recovery, privacy, and
+   compatibility before adding storage APIs.
+2. **Add declarative shareable-state metadata.**
+3. **Implement standalone shareable-state realms.**
+4. **Add effective-state resolution.**
+5. **Add snapshot, fingerprint, and cloning primitives.**
+6. **Introduce the pending-integration lifecycle.**
+7. **Implement generic collision discovery.**
+8. **Add the collision-resolution page.**
+9. **Make finalization concurrency-safe and idempotent.**
+10. **Implement revocation and standalone continuation.**
+11. **Add lifecycle, security, concurrency, and many-link tests.**
+12. **Migrate `fun.deaths` to shareable state.**
+
 ## Success criteria
 
 The contributor framework is ready for creative feature authors when:

@@ -112,6 +112,14 @@ For the complete manager command surface, lifecycle table, many-link example,
 authorization boundaries, and concurrency guarantees, see
 [`integration-management.md`](integration-management.md#default-link-model-and-invariants).
 
+The current flow activates a relationship when Twitch verification and registry
+completion succeed. The staged
+[`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
+defines the future pending-resolution phase that must complete before activation
+once features can reconcile standalone state. It preserves the default-link
+invariants described here and is not implemented merely because it is
+documented.
+
 The registry schema reserves one default-link edge for each source group and
 target platform:
 

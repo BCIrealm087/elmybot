@@ -417,6 +417,7 @@ npm run feature:workspaces
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
+- [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 
