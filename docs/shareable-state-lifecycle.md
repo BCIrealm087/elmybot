@@ -6,9 +6,10 @@ v1 and is not implemented merely because it is documented. Until the staged
 implementation reaches a feature, that feature continues to follow the current
 [`integrationState` contract](feature-state.md).
 
-Implementation progress: namespace declarations and internal standalone realms
-are implemented. Default-aware effective-realm resolution, snapshots, linking
-collision handling, revocation successors, and feature migration remain staged.
+Implementation progress: namespace declarations, standalone and integration
+realm persistence, and default-aware effective-realm resolution are
+implemented. Snapshots, linking collision handling, revocation successors, and
+feature migration remain staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -81,12 +82,12 @@ Every implementation must preserve these invariants:
 
 ## Effective-realm resolution
 
-An action will eventually declare a shareable-state service and request the
-current scope for the other supported platform. The final API name is deferred,
-but its semantic operation is:
+An action belonging to a feature with a declared namespace may request the
+`shareableState` service and resolve that namespace for the other supported
+platform:
 
 ```js
-const state = await ctx.shareableState.current(otherPlatform);
+const state = await ctx.shareableState.current(otherPlatform, namespaceId);
 ```
 
 The runtime fixes the source group to the authenticated invocation and resolves
@@ -107,6 +108,12 @@ operation to a different owner.
 There is no feature-level fallback from a failed integration operation to a
 standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
+
+This resolution API is implemented, but the current active-link lifecycle
+predates collision discovery. Until the finalization stages land, maintainers
+must not migrate an existing production feature whose standalone or legacy
+integration data would need reconciliation. No installed feature uses the new
+service yet.
 
 ## Link lifecycle
 
@@ -296,7 +303,7 @@ silently becomes writable or active again.
 
 ## Namespace declarations and versioning requirements
 
-`defineFeature()` now accepts validated, inert `shareableState` metadata:
+`defineFeature()` accepts validated `shareableState` metadata:
 
 ```js
 shareableState: [{

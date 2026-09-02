@@ -20,6 +20,7 @@ const SUPPORTED_SERVICES = new Set([
   "config",
   "integrationState",
   "links",
+  "shareableState",
   "state",
   "random"
 ]);

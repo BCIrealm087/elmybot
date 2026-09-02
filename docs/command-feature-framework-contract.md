@@ -136,10 +136,11 @@ command features SHOULD use already registered effect factories.
 
 ### Shareable-state declarations
 
-`shareableState` is optional, defaults to a frozen empty array, and is inert in
-the current framework stage. It declares state that later realm and linking
-infrastructure may enumerate; it does not create storage, change action context,
-or make an existing `ctx.state` or `integrationState` value shareable.
+`shareableState` is optional and defaults to a frozen empty array. It declares
+state that the realm and linking infrastructure may enumerate. A declaration
+does not reclassify an existing `ctx.state` or `integrationState` value; an
+action must explicitly request the `shareableState` service and resolve the
+declared namespace.
 
 ```js
 shareableState: [{
@@ -313,7 +314,7 @@ Requirements:
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
 requires, chosen from `authorization`, `config`, `integrationState`, `links`,
-`state`, and `random` in API v1.
+`shareableState`, `state`, and `random` in API v1.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
@@ -411,6 +412,25 @@ The action context has this exact API v1 surface:
       }
     }
   },
+  shareableState: {
+    current(targetPlatform, namespaceId): Promise<{
+      get(key): Promise<JSONValue | null>,
+      set(key, value): Promise<void>,
+      delete(key): Promise<boolean>,
+      increment(key, amount = 1): Promise<number>,
+      boundedCounter(name, subject, {
+        min = 0,
+        max = Number.MAX_SAFE_INTEGER,
+        initial = min
+      } = {}): {
+        get(): Promise<number>,
+        set(value): Promise<number>,
+        increment(amount = 1): Promise<number>,
+        decrement(amount = 1): Promise<number>,
+        reset(): Promise<number>
+      }
+    }>
+  },
   routes: {
     resolve(routeKind): Promise<readonly RouteSnapshot[]>
   },
@@ -467,7 +487,8 @@ Rules:
   stable idempotency metadata from the current invocation.
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
-- `authorization`, `config`, `integrationState`, `links`, `state`, and `random`
+- `authorization`, `config`, `integrationState`, `links`, `shareableState`,
+  `state`, and `random`
   may be used only when declared in `uses.services`. Undeclared access is a framework error. The
   namespace shape remains stable so feature code does not branch on service
   presence.
@@ -494,6 +515,16 @@ Rules:
   is integration ID plus feature ID. Switching a directional default selects a
   different ledger without copying data. Revocation blocks access without
   erasing data, and a later relink receives a new integration ID and ledger.
+- `shareableState.current()` accepts the other supported platform and one
+  namespace declared by the current feature. It pins a frozen scope to the
+  origin group's standalone realm when no active default exists, or to that
+  default integration's realm otherwise. Features cannot see or forge the
+  underlying realm identity, generation, link, or integration ID.
+- A shareable integration scope verifies before every operation that the pinned
+  relationship remains active and contains both groups. Revocation or another
+  transition fails closed and never redirects the operation to standalone
+  state. A default switch affects later resolutions but does not redirect an
+  already pinned scope while its integration remains active.
 - `state.boundedCounter()` accepts a normal feature key as its name and an
   arbitrary non-empty subject of at most 300 characters. Storage maps the pair
   to a collision-resistant internal key; subject normalization remains an
@@ -512,19 +543,22 @@ Rules:
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `authorization`, `config`, `integrationState`, `links`, `state`, and
-`random` are part of
+Although `authorization`, `config`, `integrationState`, `links`,
+`shareableState`, `state`, and `random` are part of
 the approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
 
-Implementation status: all six API v1 services are available in the installed
+Implementation status: all seven API v1 services are available in the installed
 composition. Authorization delegates to the platform policy. Links resolves
 the origin group's selected cross-platform relationship through the integration
 registry. Config and state are scoped through `GroupConfig`; integration state
-is scoped through the per-integration coordinator. Declarative cooldowns use
-the per-group boundary and are enforced before action code.
+is scoped through the per-integration coordinator. Shareable state resolves to
+the dedicated realm Durable Object but is unused by installed features while
+snapshot, collision-finalization, and migration work remains staged.
+Declarative cooldowns use the per-group boundary and are enforced before action
+code.
 
 ## Command definitions
 

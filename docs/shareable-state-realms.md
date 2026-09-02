@@ -1,6 +1,6 @@
 # Standalone shareable-state realms
 
-Step 3 of the shareable-state initiative implements the first concrete realm
+Step 3 of the shareable-state initiative implemented the first concrete realm
 owner without changing feature behavior. `ShareableStateRealm` is an internal
 SQLite-backed Durable Object. It is not part of Framework API v1 and feature
 packages cannot import or address it.
@@ -59,15 +59,15 @@ closed; this step does not run feature code or invent a transformation.
 
 ## Deliberately deferred behavior
 
-This step does not:
+The completed effective-resolution step now exposes declared namespaces through
+`ctx.shareableState.current(otherPlatform, namespaceId)`. The remaining stages
+still do not:
 
-- expose `ctx.shareableState` or alter `ctx.state`;
-- inspect default links or choose an effective realm;
-- create integration-owned realms;
 - snapshot, fingerprint, seal, clone, freeze, or enumerate realm contents;
 - change invitation activation or collision handling; or
 - migrate `fun.deaths` from its current integration-owned ledger.
 
-Step 4 will resolve and pin the effective owner for an invocation. Snapshot and
-transition primitives follow afterward, before any integration lifecycle begins
-moving declared state.
+Resolution pins either generation 1 of the origin group's standalone realm or
+generation 1 of the active default integration's realm. Snapshot and transition
+primitives follow next, before any integration lifecycle begins moving declared
+state.

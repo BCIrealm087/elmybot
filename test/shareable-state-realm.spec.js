@@ -3,9 +3,12 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { defineFeature, frameworkApiVersion } from "../src/framework/index.js";
 import { createFeatureRegistry } from "../src/framework/internal.js";
 import {
+  createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
   requestStandaloneRealmState,
   ShareableStateRealmBackend,
+  shareableStateRealmObjectName,
+  shareableStateRealmStub,
   standaloneRealmObjectName,
   standaloneRealmStub
 } from "../src/shareable-state/index.js";
@@ -88,11 +91,43 @@ describe("Standalone shareable-state realms", () => {
     expect(standaloneRealmObjectName(other)).not.toBe(
       standaloneRealmObjectName(first)
     );
+    const integration = createIntegrationRealmIdentity({ id: "integration-one" });
+    expect(shareableStateRealmObjectName(integration)).toBe(
+      "shareable-state:integration:g1:integration:integration-one"
+    );
     expect(
       env.SHAREABLE_STATE_REALM.idFromName(standaloneRealmObjectName(first)).toString()
     ).not.toBe(
       env.SHAREABLE_STATE_REALM.idFromName(standaloneRealmObjectName(other)).toString()
     );
+  });
+
+  it("binds integration realms to one integration owner", async () => {
+    const identity = createIntegrationRealmIdentity({ id: uniqueId("integration") });
+    const stub = shareableStateRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const request = (realm) => backend.fetch(new Request(
+        "https://shareable-state/internal/shareable-state/realm/set",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            realm,
+            namespace: { featureId: "test.score", namespaceId: "score" },
+            storage: { key: "value", value: 1 }
+          })
+        }
+      ));
+
+      expect((await request(identity)).status).toBe(200);
+      expect((await responseData(await request(createIntegrationRealmIdentity({
+        id: uniqueId("other-integration")
+      }))))).toMatchObject({
+        status: 409,
+        data: { code: "shareable_state_realm_identity_mismatch" }
+      });
+    });
   });
 
   it("persists canonical values with namespace isolation and atomic versions", async () => {

@@ -374,6 +374,66 @@ async function defaultLink(
   return snapshot;
 }
 
+function requireShareableStateTarget(invocation, targetPlatform) {
+  if (
+    !["discord", "twitch"].includes(targetPlatform) ||
+    targetPlatform === invocation.origin.group.platform
+  ) {
+    throw new FeatureContextError(
+      "Shareable state must target another supported platform.",
+      { code: "feature_shareable_state_target_invalid" }
+    );
+  }
+  return targetPlatform;
+}
+
+async function currentShareableState(
+  action,
+  invocation,
+  runtimeContext,
+  targetPlatform,
+  namespaceId
+) {
+  requireDeclaredService(action, "shareableState");
+  const implementation = runtimeContext.featureServices?.shareableState?.current;
+  if (typeof implementation !== "function") return unavailable("shareableState")();
+  const resolution = await implementation(
+    action.featureId,
+    requireShareableStateTarget(invocation, targetPlatform),
+    requireFeatureKey(namespaceId)
+  );
+  if (typeof resolution !== "object" || resolution === null) {
+    throw new FeatureContextError(
+      "Feature shareable-state resolution returned an invalid value.",
+      { code: "feature_shareable_state_result_invalid" }
+    );
+  }
+  const call = (method, ...args) =>
+    serviceMethod(action, runtimeContext, "shareableState", method)(
+      resolution,
+      ...args
+    );
+  return Object.freeze({
+    get: (key) => call("get", requireFeatureKey(key)),
+    set: (key, value) => call("set", requireFeatureKey(key), value),
+    delete: (key) => call("delete", requireFeatureKey(key)),
+    increment: (key, amount = 1) => call(
+      "increment",
+      requireFeatureKey(key),
+      amount
+    ),
+    boundedCounter: (name, subject, options) => boundedCounter(
+      action,
+      runtimeContext,
+      "shareableState",
+      [resolution],
+      name,
+      subject,
+      options
+    )
+  });
+}
+
 function integrationStateScope(
   action,
   runtimeContext,
@@ -478,6 +538,15 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         runtimeContext,
         resolvedDefaultLinks,
         link
+      )
+    }),
+    shareableState: Object.freeze({
+      current: (targetPlatform, namespaceId) => currentShareableState(
+        action,
+        invocation,
+        runtimeContext,
+        targetPlatform,
+        namespaceId
       )
     }),
     routes: routed.routes,

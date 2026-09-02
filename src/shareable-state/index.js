@@ -6,8 +6,12 @@ export {
   ShareableStateRealmError
 } from "./realm.js";
 export {
+  createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  requestShareableStateRealm,
   requestStandaloneRealmState,
+  shareableStateRealmObjectName,
+  shareableStateRealmStub,
   standaloneRealmObjectName,
   standaloneRealmStub
 } from "./realm-client.js";

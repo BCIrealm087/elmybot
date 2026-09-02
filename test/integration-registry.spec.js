@@ -572,6 +572,89 @@ describe("Cross-platform integration linking", () => {
     });
   });
 
+  it("resolves and pins standalone or active integration shareable-state realms", async () => {
+    const unlinkedGroup = discordGroup();
+    const standaloneRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      createCommandInvocation({
+        kind: "test.shareable-state.read.v1",
+        origin: { group: unlinkedGroup, actor: discordActor() },
+        sourceEventId: "discord:interaction:standalone-shareable-state"
+      })
+    );
+    const standalone = await standaloneRuntime.featureServices.shareableState.current(
+      "test.shareable-state",
+      "twitch",
+      "score"
+    );
+    expect(standalone).toMatchObject({
+      featureId: "test.shareable-state",
+      namespaceId: "score",
+      realm: {
+        kind: "standalone",
+        ownerGroup: { key: `discord:guild:${unlinkedGroup.id}` },
+        generation: 1
+      }
+    });
+
+    const linked = await activateIntegration();
+    const runtime = createFeatureServiceRuntime(
+      integrationEnv,
+      createCommandInvocation({
+        kind: "test.shareable-state.read.v1",
+        origin: { group: linked.group, actor: linked.actor },
+        sourceEventId: "discord:interaction:integration-shareable-state"
+      })
+    );
+    const shared = await runtime.featureServices.shareableState.current(
+      "test.shareable-state",
+      "twitch",
+      "score"
+    );
+    expect(shared).toMatchObject({
+      realm: {
+        kind: "integration",
+        ownerIntegration: { id: linked.completion.integration.id },
+        generation: 1
+      },
+      link: {
+        sourceGroup: linked.group,
+        targetGroup: linked.channel
+      }
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      { ...shared },
+      "value"
+    )).rejects.toMatchObject({
+      status: 403,
+      code: "shareable_state_scope_invalid"
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      shared,
+      "value"
+    )).rejects.toMatchObject({
+      status: 404,
+      code: "shareable_state_namespace_not_declared"
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: linked.completion.integration.id,
+      group: linked.group,
+      actor: linked.actor,
+      reason: "test_shareable_state_revocation"
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      shared,
+      "value"
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "shareable_state_transition"
+    });
+  });
+
   it("backfills defaults for active links created before the default table", async () => {
     const linked = await activateIntegration();
     await runInDurableObject(

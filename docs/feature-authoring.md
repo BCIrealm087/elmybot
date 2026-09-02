@@ -173,6 +173,8 @@ facilities:
 | Domain event | `runtime.event(kind, input)` |
 | Configuration | `runtime.config.set(group, featureId, key, value)` |
 | State inspection | `runtime.state.get(group, featureId, key)` |
+| Standalone shareable state | `runtime.shareableState.getStandalone(group, featureId, namespaceId, key)` |
+| Integration shareable state | `runtime.shareableState.getIntegration(integrationId, featureId, namespaceId, key)` |
 | Clock | `runtime.clock.now()` and `runtime.clock.advance(...)` |
 | Scheduled occurrences | `runtime.schedules.runDue()` |
 | Stored-plan replay | `runtime.schedules.replay(plan)` |
@@ -484,11 +486,11 @@ integration-owned or shared. It can be passed to the separately declared
 [state-ownership decision](feature-state.md#choose-the-state-boundary-first)
 before storing data that both sides must mutate.
 
-## Declare a future shareable-state namespace
+## Declare and resolve a shareable-state namespace
 
-The staged shareable-state initiative adds inert manifest metadata before it
-adds storage behavior. Maintainer-led infrastructure work may declare a future
-namespace as follows:
+The staged shareable-state initiative lets a feature declare a namespace that
+can resolve independently for an unlinked group and through its selected
+integration when linked:
 
 ```js
 defineFeature({
@@ -508,11 +510,25 @@ Omitted compatibility, summary, and limits normalize to `[schemaVersion]`,
 `presence`, 100 entries, and 16 KiB per value. `entry_count` is the only other
 summary policy. Neither policy can render stored keys or values.
 
-This declaration is now also consumed by internal standalone-realm persistence,
-but it still does not add a feature context service, reclassify `ctx.state`,
-inspect an integration ledger, or make an existing command use that realm.
-Feature contributors should continue using the implemented ownership guidance
-below until effective-realm resolution is exposed. See the
+An action using the namespace declares `shareableState` and resolves it once:
+
+```js
+const otherPlatform = ctx.origin.group.platform === "discord"
+  ? "twitch"
+  : "discord";
+const state = await ctx.shareableState.current(otherPlatform, "score");
+const value = await state.increment("value");
+```
+
+The returned frozen scope supports `get`, `set`, `delete`, `increment`, and
+`boundedCounter`. Without a default it uses the current group's standalone
+realm. With a default it uses that integration's realm. A later default switch
+affects later resolutions without moving either realm's data.
+
+This does not reclassify `ctx.state`, and local preferences remain ordinary
+group state. Snapshot and collision finalization are still staged, so do not
+migrate a production feature with existing data until its explicit migration
+step. See the
 [`shareable-state lifecycle contract`](shareable-state-lifecycle.md) for the
 staged behavior and constraints.
 

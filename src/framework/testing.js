@@ -377,16 +377,20 @@ function createClock(initialTime) {
   });
 }
 
-function createMemoryServices(clock) {
+function createMemoryServices(clock, registry) {
   const config = new Map();
   const state = new Map();
   const integrationState = new Map();
+  const shareableState = new Map();
   const cooldowns = new Map();
   const storageKey = (ownerKey, featureId, key) =>
     `${ownerKey}\u0000${featureId}\u0000${key}`;
   const value = (map, key) => map.has(key) ? freezeJson(map.get(key)) : null;
 
-  function stateService(map, ownerKey, { integrationScoped = false } = {}) {
+  function stateService(map, ownerKey, {
+    integrationScoped = false,
+    canonicalReset = false
+  } = {}) {
     const argumentsAfterOwner = (args) => integrationScoped ? args.slice(1) : args;
     return Object.freeze({
       get: async (featureId, ...args) => {
@@ -457,7 +461,9 @@ function createMemoryServices(clock) {
                 : candidate
           );
         }
-        if (map.has(namespaced) || nextValue !== descriptor.initial) {
+        if (canonicalReset && operation === "reset") {
+          map.delete(namespaced);
+        } else if (map.has(namespaced) || nextValue !== descriptor.initial) {
           map.set(namespaced, nextValue);
         }
         return nextValue;
@@ -466,24 +472,62 @@ function createMemoryServices(clock) {
   }
 
   return Object.freeze({
-    runtime(groupKey) {
+    runtime(group, resolveDefaultLink) {
+      const resolvedShareableScopes = new WeakSet();
+      const shareableOwnerKey = (args) => {
+        const scope = args[0];
+        if (!resolvedShareableScopes.has(scope)) {
+          throw new FeatureTestRuntimeError(
+            "Shareable state requires a realm resolved by this invocation."
+          );
+        }
+        return `${scope.ownerKey}\u0000${scope.namespaceId}`;
+      };
       return Object.freeze({
         featureServices: Object.freeze({
           config: Object.freeze({
             get: async (featureId, key) => value(
               config,
-              storageKey(groupKey, featureId, key)
+              storageKey(group.key, featureId, key)
             )
           }),
-          state: stateService(state, () => groupKey),
+          state: stateService(state, () => group.key),
           integrationState: stateService(
             integrationState,
             (args) => args[0]?.integration?.id,
             { integrationScoped: true }
-          )
+          ),
+          shareableState: Object.freeze({
+            async current(featureId, targetPlatform, namespaceId) {
+              const declaration = registry.featuresById[featureId]?.shareableState.find(
+                (candidate) => candidate.id === namespaceId
+              );
+              if (!declaration) {
+                throw new FeatureTestRuntimeError(
+                  "The shareable-state namespace is not declared by an installed feature.",
+                  { code: "shareable_state_namespace_not_declared" }
+                );
+              }
+              const link = resolveDefaultLink(targetPlatform);
+              const scope = Object.freeze({
+                featureId,
+                namespaceId,
+                ownerKey: link
+                  ? `integration:${link.integration.id}`
+                  : `standalone:${group.key}:g1`
+              });
+              resolvedShareableScopes.add(scope);
+              return scope;
+            },
+            ...stateService(
+              shareableState,
+              shareableOwnerKey,
+              { integrationScoped: true, canonicalReset: true }
+            )
+          })
         }),
         async claimFeatureCooldown({ featureId, actionKind, scopeKey, seconds }) {
-          const key = `${groupKey}\u0000${featureId}\u0000${actionKind}\u0000${scopeKey}`;
+          const key = `${group.key}\u0000${featureId}\u0000${actionKind}\u0000${scopeKey}`;
           const nowMs = clock.now().getTime();
           const expiresAtMs = cooldowns.get(key) ?? 0;
           if (expiresAtMs > nowMs) {
@@ -519,6 +563,7 @@ function createMemoryServices(clock) {
       clear() {
         state.clear();
         integrationState.clear();
+        shareableState.clear();
         cooldowns.clear();
       }
     }),
@@ -527,6 +572,29 @@ function createMemoryServices(clock) {
         return value(
           integrationState,
           storageKey(integrationId, featureId, key)
+        );
+      }
+    }),
+    shareableState: Object.freeze({
+      getStandalone(group, featureId, namespaceId, key) {
+        const normalized = createPlatformGroupRef(group);
+        return value(
+          shareableState,
+          storageKey(
+            `standalone:${normalized.key}:g1\u0000${namespaceId}`,
+            featureId,
+            key
+          )
+        );
+      },
+      getIntegration(integrationId, featureId, namespaceId, key) {
+        return value(
+          shareableState,
+          storageKey(
+            `integration:${integrationId}\u0000${namespaceId}`,
+            featureId,
+            key
+          )
         );
       }
     })
@@ -582,7 +650,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   });
   const actions = createActionRegistry(registry.actions);
   const clock = createClock(initialTime);
-  const memory = createMemoryServices(clock);
+  const memory = createMemoryServices(clock, registry);
   const configuredDefaultLinks = normalizedDefaultLinks(defaultLinks);
   const configuredRoutes = [...routes];
   const pendingSchedules = [];
@@ -608,17 +676,22 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   }
 
   function runtimeContext(invocation, actor, triggerKind, inputRoutes, onRoute) {
-    const memoryRuntime = memory.runtime(invocation.origin.group.key);
+    const resolveDefaultLink = (targetPlatform) =>
+      configuredDefaultLinks.find((link) =>
+        link.sourceGroup.key === invocation.origin.group.key &&
+        link.targetGroup.platform === targetPlatform
+      ) ?? null;
+    const memoryRuntime = memory.runtime(
+      invocation.origin.group,
+      resolveDefaultLink
+    );
     return {
       ...memoryRuntime,
       featureServices: Object.freeze({
         ...memoryRuntime.featureServices,
         links: Object.freeze({
           async default(_featureId, targetPlatform) {
-            return configuredDefaultLinks.find((link) =>
-              link.sourceGroup.key === invocation.origin.group.key &&
-              link.targetGroup.platform === targetPlatform
-            ) ?? null;
+            return resolveDefaultLink(targetPlatform);
           }
         })
       }),
@@ -963,6 +1036,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     config: memory.config,
     state: memory.state,
     integrationState: memory.integrationState,
+    shareableState: memory.shareableState,
     schedules: Object.freeze({
       pending: () => Object.freeze(pendingSchedules.map((record) =>
         Object.freeze({ ...record })

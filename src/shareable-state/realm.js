@@ -1,5 +1,6 @@
 import { jsonResponse, logError } from "../common.js";
 import {
+  createIntegrationRef,
   createPlatformGroupRef,
   IntegrationContractError
 } from "../integrations/contracts.js";
@@ -219,20 +220,22 @@ function normalizeRealmIdentity(value) {
     typeof value !== "object" ||
     value === null ||
     Array.isArray(value) ||
-    value.kind !== "standalone" ||
+    !new Set(["standalone", "integration"]).has(value.kind) ||
     !Number.isSafeInteger(value.generation) ||
     value.generation < 1
   ) {
-    fail("The standalone realm identity is invalid.", {
+    fail("The shareable-state realm identity is invalid.", {
       code: "shareable_state_realm_identity_invalid"
     });
   }
-  let ownerGroup;
+  let owner;
   try {
-    ownerGroup = createPlatformGroupRef(value.ownerGroup);
+    owner = value.kind === "standalone"
+      ? createPlatformGroupRef(value.ownerGroup)
+      : createIntegrationRef(value.ownerIntegration);
   } catch (cause) {
     if (cause instanceof IntegrationContractError) {
-      fail("The standalone realm owner is invalid.", {
+      fail("The shareable-state realm owner is invalid.", {
         code: "shareable_state_realm_identity_invalid",
         cause
       });
@@ -240,8 +243,8 @@ function normalizeRealmIdentity(value) {
     throw cause;
   }
   return Object.freeze({
-    kind: "standalone",
-    ownerGroup,
+    kind: value.kind,
+    owner,
     generation: value.generation
   });
 }
@@ -260,7 +263,7 @@ function bindRealmIdentity(state, identity) {
     }
     if (
       existing.realm_kind !== identity.kind ||
-      existing.owner_key !== identity.ownerGroup.key ||
+      existing.owner_key !== identity.owner.key ||
       existing.generation !== identity.generation
     ) {
       fail("This shareable-state realm belongs to a different owner.", {
@@ -277,7 +280,7 @@ function bindRealmIdentity(state, identity) {
      VALUES (1, ?, ?, ?, ?, ?)`,
     SHAREABLE_STATE_REALM_SCHEMA_VERSION,
     identity.kind,
-    identity.ownerGroup.key,
+    identity.owner.key,
     identity.generation,
     Date.now()
   );

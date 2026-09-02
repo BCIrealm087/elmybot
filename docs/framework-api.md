@@ -56,15 +56,12 @@ surface consists of:
 `defineFeature()` accepts optional, declarative `shareableState` namespace
 metadata. Omission normalizes to a frozen empty array, preserving every existing
 v1 definition. Declarations contain stable IDs, labels, schema compatibility,
-safe collision-summary policy, and bounded limits; they are metadata only in
-the current stage and expose no state service or migration capability. This is
-the compatible addition of an optional manifest field with a stable default.
-The Worker now has internal standalone-realm persistence for these declarations,
-but that storage is deliberately absent from Framework API v1 until effective
-realm resolution can pin one safe owner for an invocation.
+safe collision-summary policy, and bounded limits. This is the compatible
+addition of an optional manifest field with a stable default.
 
 Actions may explicitly request the controlled `authorization`, `config`,
-`integrationState`, `links`, `state`, and `random` context services.
+`integrationState`, `links`, `shareableState`, `state`, and `random` context
+services.
 `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
@@ -89,6 +86,18 @@ operations, but its namespace is keyed by integration ID and feature ID.
 Changing a default selects another ledger; revocation blocks access without
 deleting data; and relinking creates a new ledger. See
 [`feature-state.md`](feature-state.md) for the full ownership contract.
+
+The staged `shareableState` service is available only to features declaring at
+least one shareable namespace. `await ctx.shareableState.current(
+otherPlatform, namespaceId)` pins one frozen state scope: the origin group's
+standalone realm when no directional default exists, or that default
+integration's realm otherwise. The scope mirrors the state operations. It does
+not expose links, realm IDs, generations, snapshots, or storage enumeration.
+`integrationState` remains available for compatibility.
+
+Snapshot and collision-finalization stages are not implemented yet. Existing
+features with data to preserve must not migrate to `shareableState` until those
+stages provide reconciliation and explicit adoption of legacy ledgers.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and

@@ -767,6 +767,103 @@ describe("Command and feature framework", () => {
     });
   });
 
+  it("pins declared shareable state through an opaque resolved scope", async () => {
+    const action = defineAction({
+      kind: "test.shareable-state.use.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["shareableState"] },
+      async execute(ctx) {
+        const state = await ctx.shareableState.current("twitch", "score");
+        expect(Object.isFrozen(state)).toBe(true);
+        const count = await state
+          .boundedCounter("score", "game", { min: 0, max: 10 })
+          .increment(2);
+        return { output: { count }, effects: [] };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({
+        actions: [action],
+        shareableState: [{
+          id: "score",
+          label: "Shared score",
+          schemaVersion: 1
+        }]
+      })
+    ], { availableServices: ["shareableState"] });
+    const invocation = createCommandInvocation({
+      kind: action.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:shareable-state"
+    });
+    const resolution = Object.freeze({ token: "opaque" });
+    const current = vi.fn(async () => resolution);
+    const boundedCounter = vi.fn(async () => 2);
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      { featureServices: { shareableState: { current, boundedCounter } } }
+    )).resolves.toMatchObject({ output: { count: 2 } });
+    expect(current).toHaveBeenCalledWith("test.feature", "twitch", "score");
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      resolution,
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "increment",
+      2
+    );
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      { featureServices: { shareableState: { current: vi.fn(async () => null) } } }
+    )).rejects.toMatchObject({ code: "feature_shareable_state_result_invalid" });
+  });
+
+  it("rejects invalid shareable-state targets and missing declarations", async () => {
+    const action = defineAction({
+      kind: "test.shareable-state.invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["shareableState"] },
+      async execute(ctx) {
+        await ctx.shareableState.current("discord", "score");
+        return { output: {}, effects: [] };
+      }
+    });
+    expect(() => createFeatureRegistry([
+      feature({ actions: [action] })
+    ], { availableServices: ["shareableState"] })).toThrow(
+      "declares no shareable namespaces"
+    );
+
+    const catalog = createFeatureRegistry([
+      feature({
+        actions: [action],
+        shareableState: [{
+          id: "score",
+          label: "Shared score",
+          schemaVersion: 1
+        }]
+      })
+    ], { availableServices: ["shareableState"] });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      createCommandInvocation({
+        kind: action.kind,
+        origin: {
+          group: { platform: "discord", kind: "guild", id: "guild-1" },
+          actor: { platform: "discord", id: "user-1", claims: [] }
+        },
+        sourceEventId: "discord:interaction:invalid-shareable-state"
+      }),
+      { featureServices: { shareableState: { current: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_shareable_state_target_invalid" });
+  });
+
   it("rejects invalid bounded-counter bounds at the author API", async () => {
     const invalidCounterAction = defineAction({
       kind: "test.counter.invalid.v1",

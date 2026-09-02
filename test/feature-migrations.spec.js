@@ -89,6 +89,7 @@ describe("Representative feature migrations", () => {
       "integrationState",
       "links",
       "random",
+      "shareableState",
       "state"
     ]);
   });

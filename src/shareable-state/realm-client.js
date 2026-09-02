@@ -1,4 +1,7 @@
-import { createPlatformGroupRef } from "../integrations/contracts.js";
+import {
+  createIntegrationRef,
+  createPlatformGroupRef
+} from "../integrations/contracts.js";
 import {
   SHAREABLE_STATE_REALM_PATH_PREFIX,
   ShareableStateRealmError
@@ -17,29 +20,71 @@ export function createStandaloneRealmIdentity(group, { generation = 1 } = {}) {
   });
 }
 
+export function createIntegrationRealmIdentity(integration, { generation = 1 } = {}) {
+  if (!Number.isSafeInteger(generation) || generation < 1) {
+    throw new ShareableStateRealmError("The integration realm generation is invalid.", {
+      code: "shareable_state_realm_identity_invalid"
+    });
+  }
+  return Object.freeze({
+    kind: "integration",
+    ownerIntegration: createIntegrationRef(integration),
+    generation
+  });
+}
+
+function normalizeIdentity(identity) {
+  if (identity?.kind === "standalone") {
+    return createStandaloneRealmIdentity(
+      identity.ownerGroup,
+      { generation: identity.generation }
+    );
+  }
+  if (identity?.kind === "integration") {
+    return createIntegrationRealmIdentity(
+      identity.ownerIntegration,
+      { generation: identity.generation }
+    );
+  }
+  throw new ShareableStateRealmError("The shareable-state realm identity is invalid.", {
+    code: "shareable_state_realm_identity_invalid"
+  });
+}
+
+export function shareableStateRealmObjectName(identity) {
+  const normalized = normalizeIdentity(identity);
+  const ownerKey = normalized.kind === "standalone"
+    ? normalized.ownerGroup.key
+    : normalized.ownerIntegration.key;
+  return `shareable-state:${normalized.kind}:g${normalized.generation}:${ownerKey}`;
+}
+
 export function standaloneRealmObjectName(identity) {
   const normalized = createStandaloneRealmIdentity(
     identity?.ownerGroup,
     { generation: identity?.generation }
   );
-  return `shareable-state:standalone:g${normalized.generation}:` +
-    normalized.ownerGroup.key;
+  return shareableStateRealmObjectName(normalized);
 }
 
-export function standaloneRealmStub(env, identity) {
+export function shareableStateRealmStub(env, identity) {
   if (!env?.SHAREABLE_STATE_REALM) {
     throw new ShareableStateRealmError("Shareable-state realms are not configured.", {
       status: 503,
       code: "shareable_state_realm_not_configured"
     });
   }
-  const normalized = createStandaloneRealmIdentity(
+  const normalized = normalizeIdentity(identity);
+  return env.SHAREABLE_STATE_REALM.get(
+    env.SHAREABLE_STATE_REALM.idFromName(shareableStateRealmObjectName(normalized))
+  );
+}
+
+export function standaloneRealmStub(env, identity) {
+  return shareableStateRealmStub(env, createStandaloneRealmIdentity(
     identity?.ownerGroup,
     { generation: identity?.generation }
-  );
-  return env.SHAREABLE_STATE_REALM.get(
-    env.SHAREABLE_STATE_REALM.idFromName(standaloneRealmObjectName(normalized))
-  );
+  ));
 }
 
 async function checkedRealmResponse(response) {
@@ -64,17 +109,16 @@ async function checkedRealmResponse(response) {
   return result;
 }
 
-export async function requestStandaloneRealmState(env, {
-  group,
-  generation = 1,
+export async function requestShareableStateRealm(env, {
+  realm,
   featureId,
   namespaceId,
   operation,
   storage,
   correlationId
 }) {
-  const realm = createStandaloneRealmIdentity(group, { generation });
-  return await checkedRealmResponse(await standaloneRealmStub(env, realm).fetch(
+  const normalized = normalizeIdentity(realm);
+  return await checkedRealmResponse(await shareableStateRealmStub(env, normalized).fetch(
     `https://shareable-state${SHAREABLE_STATE_REALM_PATH_PREFIX}${operation}`,
     {
       method: "POST",
@@ -83,10 +127,21 @@ export async function requestStandaloneRealmState(env, {
         ...(correlationId ? { "x-correlation-id": correlationId } : {})
       },
       body: JSON.stringify({
-        realm,
+        realm: normalized,
         namespace: { featureId, namespaceId },
         storage
       })
     }
   ));
+}
+
+export async function requestStandaloneRealmState(env, {
+  group,
+  generation = 1,
+  ...request
+}) {
+  return await requestShareableStateRealm(env, {
+    ...request,
+    realm: createStandaloneRealmIdentity(group, { generation })
+  });
 }

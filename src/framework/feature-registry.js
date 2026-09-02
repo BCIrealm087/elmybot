@@ -275,6 +275,16 @@ export function createFeatureRegistry(features, {
         { code: "feature_action_dependency_unavailable" }
       );
     }
+    if (
+      action.uses.services.includes("shareableState") &&
+      featuresById[featureId].shareableState.length === 0
+    ) {
+      throw new FeatureRegistryError(
+        `Feature action \`${kind}\` requests shareable state but feature ` +
+        `\`${featureId}\` declares no shareable namespaces.`,
+        { code: "feature_action_shareable_state_undeclared" }
+      );
+    }
     const routeTargetPlatforms = new Set();
     for (const usedRouteKind of action.uses.routes) {
       const route = routes[usedRouteKind];

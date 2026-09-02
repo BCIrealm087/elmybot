@@ -488,14 +488,18 @@ when groups link. Each step is intended to land and pass CI independently:
 2. **Add declarative shareable-state metadata — completed.** Features may now
    declare frozen namespace IDs, labels, schema compatibility, safe collision
    summaries, and bounded limits. The metadata appears in the generated catalog
-   but remains inert until the realm and resolution stages.
+   and gates the later realm and resolution stages.
 3. **Implement standalone shareable-state realms — completed.** The internal
    [`ShareableStateRealm`](shareable-state-realms.md) Durable Object now gives
    each platform group an isolated, declaration-gated realm with canonical
    values, namespace limits, schema identity, and atomic mutation versions.
-   It is not yet exposed to feature actions; effective selection belongs to
-   the next step.
-4. **Add effective-state resolution.**
+   Effective selection is provided by the next completed step.
+4. **Add effective-state resolution — completed.** Actions belonging to a
+   feature with declared namespaces may request `shareableState` and pin one
+   namespace through `current(otherPlatform, namespaceId)`. No default selects
+   the origin group's standalone realm; an active default selects that
+   integration's realm. Existing `integrationState` remains available while
+   lifecycle reconciliation and feature migrations are still staged.
 5. **Add snapshot, fingerprint, and cloning primitives.**
 6. **Introduce the pending-integration lifecycle.**
 7. **Implement generic collision discovery.**
