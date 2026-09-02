@@ -11,17 +11,21 @@ const KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MAX_JSON_DEPTH = 20;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
 const MAX_COUNTER_SUBJECT_LENGTH = 300;
+const SNAPSHOT_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const REALM_OPERATIONS = new Set([
   "get",
   "set",
   "delete",
   "increment",
-  "bounded-counter"
+  "bounded-counter",
+  "snapshot",
+  "clone-snapshot"
 ]);
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
   "/internal/shareable-state/realm/";
 export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 1;
+export const SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION = 1;
 
 export class ShareableStateRealmError extends Error {
   constructor(message, {
@@ -101,6 +105,17 @@ function serializeValue(value, maxValueBytes) {
     fail(`Shareable-state values must not exceed ${maxValueBytes} bytes.`);
   }
   return serialized;
+}
+
+async function sha256Fingerprint(value) {
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value)
+  ));
+  return "sha256:" + Array.from(
+    digest,
+    (byte) => byte.toString(16).padStart(2, "0")
+  ).join("");
 }
 
 function requireAmount(value) {
@@ -303,7 +318,8 @@ function namespaceDeclaration(registry, input) {
 
 function ensureNamespace(state, namespace) {
   const existing = state.storage.sql.exec(
-    `SELECT schema_version FROM shareable_state_realm_namespaces
+    `SELECT schema_version, mutation_version
+     FROM shareable_state_realm_namespaces
      WHERE feature_id = ? AND namespace_id = ?`,
     namespace.featureId,
     namespace.namespaceId
@@ -332,13 +348,210 @@ function ensureNamespace(state, namespace) {
   }
   state.storage.sql.exec(
     `UPDATE shareable_state_realm_namespaces
-     SET schema_version = ?, updated_at_ms = ?
+     SET schema_version = ?, mutation_version = mutation_version + 1,
+         updated_at_ms = ?
      WHERE feature_id = ? AND namespace_id = ?`,
     namespace.declaration.schemaVersion,
     Date.now(),
     namespace.featureId,
     namespace.namespaceId
   );
+}
+
+function namespaceSnapshotRows(state, namespace) {
+  return state.storage.transactionSync(() => {
+    const metadata = state.storage.sql.exec(
+      `SELECT schema_version, mutation_version
+       FROM shareable_state_realm_namespaces
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one();
+    const entries = state.storage.sql.exec(
+      `SELECT value_key, value_json
+       FROM shareable_state_realm_values
+       WHERE feature_id = ? AND namespace_id = ?
+       ORDER BY value_key ASC`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).toArray().map((entry) => ({
+      key: entry.value_key,
+      valueJson: entry.value_json
+    }));
+    return {
+      schemaVersion: metadata.schema_version,
+      mutationVersion: metadata.mutation_version,
+      entries
+    };
+  });
+}
+
+function snapshotFingerprintInput(namespace, schemaVersion, entries) {
+  return JSON.stringify({
+    formatVersion: SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION,
+    featureId: namespace.featureId,
+    namespaceId: namespace.namespaceId,
+    schemaVersion,
+    entries: entries.map((entry) => [entry.key, entry.valueJson])
+  });
+}
+
+async function fingerprintSnapshotRows(namespace, schemaVersion, entries) {
+  return await sha256Fingerprint(
+    snapshotFingerprintInput(namespace, schemaVersion, entries)
+  );
+}
+
+function collisionSummary(declaration, entryCount) {
+  const used = entryCount > 0;
+  if (declaration.collisionSummary.kind === "entry_count") {
+    return { kind: "entry_count", used, entryCount };
+  }
+  return { kind: "presence", used };
+}
+
+async function snapshotNamespace(state, namespace) {
+  const captured = namespaceSnapshotRows(state, namespace);
+  return {
+    formatVersion: SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION,
+    namespace: {
+      featureId: namespace.featureId,
+      namespaceId: namespace.namespaceId,
+      schemaVersion: captured.schemaVersion
+    },
+    mutationVersion: captured.mutationVersion,
+    fingerprint: await fingerprintSnapshotRows(
+      namespace,
+      captured.schemaVersion,
+      captured.entries
+    ),
+    meaningful: captured.entries.length > 0,
+    summary: collisionSummary(
+      namespace.declaration,
+      captured.entries.length
+    ),
+    entries: captured.entries.map((entry) => ({
+      key: entry.key,
+      value: JSON.parse(entry.valueJson)
+    }))
+  };
+}
+
+function requireSnapshotCloneInput(namespace, input) {
+  const snapshot = input?.snapshot;
+  if (
+    typeof snapshot !== "object" ||
+    snapshot === null ||
+    Array.isArray(snapshot) ||
+    snapshot.formatVersion !== SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION ||
+    snapshot.namespace?.featureId !== namespace.featureId ||
+    snapshot.namespace?.namespaceId !== namespace.namespaceId ||
+    snapshot.namespace?.schemaVersion !== namespace.declaration.schemaVersion ||
+    !Number.isSafeInteger(snapshot.mutationVersion) ||
+    snapshot.mutationVersion < 0 ||
+    typeof snapshot.meaningful !== "boolean" ||
+    !SNAPSHOT_FINGERPRINT_PATTERN.test(snapshot.fingerprint ?? "") ||
+    !Array.isArray(snapshot.entries) ||
+    snapshot.entries.length > namespace.declaration.limits.maxEntries
+  ) {
+    fail("The shareable-state snapshot is invalid.", {
+      code: "shareable_state_snapshot_invalid"
+    });
+  }
+  const keys = new Set();
+  const entries = snapshot.entries.map((entry) => {
+    const key = requireKey(entry?.key);
+    if (keys.has(key)) {
+      fail("The shareable-state snapshot contains duplicate keys.", {
+        code: "shareable_state_snapshot_invalid"
+      });
+    }
+    keys.add(key);
+    return {
+      key,
+      valueJson: serializeValue(
+        entry?.value,
+        namespace.declaration.limits.maxValueBytes
+      )
+    };
+  }).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  if (snapshot.meaningful !== (entries.length > 0)) {
+    fail("The shareable-state snapshot usage marker is invalid.", {
+      code: "shareable_state_snapshot_invalid"
+    });
+  }
+  const expectedTargetMutationVersion = input?.expectedTargetMutationVersion ?? 0;
+  if (
+    !Number.isSafeInteger(expectedTargetMutationVersion) ||
+    expectedTargetMutationVersion < 0
+  ) {
+    fail("The expected target mutation version is invalid.", {
+      code: "shareable_state_snapshot_invalid"
+    });
+  }
+  return { snapshot, entries, expectedTargetMutationVersion };
+}
+
+async function cloneSnapshot(state, namespace, input) {
+  const normalized = requireSnapshotCloneInput(namespace, input);
+  const fingerprint = await fingerprintSnapshotRows(
+    namespace,
+    namespace.declaration.schemaVersion,
+    normalized.entries
+  );
+  if (fingerprint !== normalized.snapshot.fingerprint) {
+    fail("The shareable-state snapshot fingerprint does not match its content.", {
+      status: 409,
+      code: "shareable_state_snapshot_fingerprint_mismatch"
+    });
+  }
+  return state.storage.transactionSync(() => {
+    const target = state.storage.sql.exec(
+      `SELECT mutation_version
+       FROM shareable_state_realm_namespaces
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one();
+    const targetEntryCount = Number(state.storage.sql.exec(
+      `SELECT COUNT(*) AS total
+       FROM shareable_state_realm_values
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one().total);
+    if (target.mutation_version !== normalized.expectedTargetMutationVersion) {
+      fail("The target shareable-state namespace changed before cloning.", {
+        status: 409,
+        code: "shareable_state_clone_target_stale"
+      });
+    }
+    if (target.mutation_version !== 0 || targetEntryCount !== 0) {
+      fail("Snapshots may only be cloned into a fresh namespace.", {
+        status: 409,
+        code: "shareable_state_clone_target_not_fresh"
+      });
+    }
+    const nowMs = Date.now();
+    for (const entry of normalized.entries) {
+      state.storage.sql.exec(
+        `INSERT INTO shareable_state_realm_values
+          (feature_id, namespace_id, value_key, value_json, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?)`,
+        namespace.featureId,
+        namespace.namespaceId,
+        entry.key,
+        entry.valueJson,
+        nowMs
+      );
+    }
+    touchNamespace(state.storage.sql, namespace, nowMs);
+    return {
+      cloned: true,
+      mutationVersion: 1,
+      fingerprint
+    };
+  });
 }
 
 function valueRow(sql, namespace, key) {
@@ -571,6 +784,10 @@ async function runOperation(state, namespace, operation, input) {
       return incrementValue(state, namespace, input);
     case "bounded-counter":
       return await boundedCounterValue(state, namespace, input);
+    case "snapshot":
+      return await snapshotNamespace(state, namespace);
+    case "clone-snapshot":
+      return await cloneSnapshot(state, namespace, input);
     default:
       return null;
   }

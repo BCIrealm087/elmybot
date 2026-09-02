@@ -3,12 +3,16 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { defineFeature, frameworkApiVersion } from "../src/framework/index.js";
 import { createFeatureRegistry } from "../src/framework/internal.js";
 import {
+  cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
   requestStandaloneRealmState,
+  shareableStateSnapshotHasMeaningfulState,
+  shareableStateSnapshotsEqual,
   ShareableStateRealmBackend,
   shareableStateRealmObjectName,
   shareableStateRealmStub,
+  snapshotShareableStateNamespace,
   standaloneRealmObjectName,
   standaloneRealmStub
 } from "../src/shareable-state/index.js";
@@ -44,6 +48,7 @@ function featureRegistry({ schemaVersion = 1, compatibleVersions = [1] } = {}) {
           id: "counter",
           label: "Shared counter",
           schemaVersion: 1,
+          collisionSummary: { kind: "entry_count" },
           limits: { maxEntries: 20, maxValueBytes: 64 }
         },
         {
@@ -58,18 +63,45 @@ function featureRegistry({ schemaVersion = 1, compatibleVersions = [1] } = {}) {
 }
 
 function realmRequest(backend, group, namespaceId, operation, storage = {}) {
+  return identityRealmRequest(
+    backend,
+    createStandaloneRealmIdentity(group),
+    namespaceId,
+    operation,
+    storage
+  );
+}
+
+function identityRealmRequest(
+  backend,
+  realm,
+  namespaceId,
+  operation,
+  storage = {}
+) {
   return backend.fetch(new Request(
     `https://shareable-state/internal/shareable-state/realm/${operation}`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        realm: createStandaloneRealmIdentity(group),
+        realm,
         namespace: { featureId: "test.score", namespaceId },
         storage
       })
     }
   ));
+}
+
+function clientEnvironment(backend) {
+  return {
+    SHAREABLE_STATE_REALM: {
+      idFromName: (name) => name,
+      get: () => ({
+        fetch: (url, init) => backend.fetch(new Request(url, init))
+      })
+    }
+  };
 }
 
 async function responseData(response) {
@@ -194,6 +226,218 @@ describe("Standalone shareable-state realms", () => {
         `SELECT mutation_version FROM shareable_state_realm_namespaces
          WHERE feature_id = 'test.score' AND namespace_id = 'counter'`
       ).one().mutation_version).toBe(10);
+    });
+  });
+
+  it("captures immutable, deterministic, safely summarized snapshots", async () => {
+    const group = discordGroup();
+    const identity = createStandaloneRealmIdentity(group);
+    const stub = standaloneRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      const capture = (namespaceId = "score") =>
+        snapshotShareableStateNamespace(clientEnv, {
+          realm: identity,
+          featureId: "test.score",
+          namespaceId
+        });
+
+      const empty = await capture();
+      expect(empty).toMatchObject({
+        formatVersion: 1,
+        namespace: {
+          featureId: "test.score",
+          namespaceId: "score",
+          schemaVersion: 1
+        },
+        mutationVersion: 0,
+        meaningful: false,
+        summary: { kind: "presence", used: false },
+        entries: []
+      });
+      expect(empty.fingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(Object.isFrozen(empty)).toBe(true);
+      expect(Object.isFrozen(empty.namespace)).toBe(true);
+      expect(Object.isFrozen(empty.summary)).toBe(true);
+      expect(Object.isFrozen(empty.entries)).toBe(true);
+      expect(shareableStateSnapshotHasMeaningfulState(empty)).toBe(false);
+
+      await realmRequest(backend, group, "score", "set", {
+        key: "value",
+        value: { z: 1, a: [2, { y: true, x: false }] }
+      });
+      const first = await capture();
+      expect(first.mutationVersion).toBe(1);
+      expect(first.meaningful).toBe(true);
+      expect(first.summary).toEqual({ kind: "presence", used: true });
+      expect(Object.isFrozen(first.entries[0])).toBe(true);
+      expect(Object.isFrozen(first.entries[0].value)).toBe(true);
+      expect(Object.isFrozen(first.entries[0].value.a)).toBe(true);
+
+      await realmRequest(backend, group, "score", "set", {
+        key: "value",
+        value: { a: [2, { x: false, y: true }], z: 1 }
+      });
+      const canonicalNoOp = await capture();
+      expect(canonicalNoOp.mutationVersion).toBe(1);
+      expect(canonicalNoOp.fingerprint).toBe(first.fingerprint);
+      expect(shareableStateSnapshotsEqual(first, canonicalNoOp)).toBe(true);
+
+      await realmRequest(backend, group, "counter", "set", {
+        key: "one",
+        value: 1
+      });
+      await realmRequest(backend, group, "counter", "set", {
+        key: "two",
+        value: 2
+      });
+      const counted = await capture("counter");
+      expect(counted.summary).toEqual({
+        kind: "entry_count",
+        used: true,
+        entryCount: 2
+      });
+    });
+  });
+
+  it("clones a verified snapshot into a fresh realm and preserves its source", async () => {
+    const sourceIdentity = createStandaloneRealmIdentity(discordGroup());
+    const sourceStub = shareableStateRealmStub(env, sourceIdentity);
+    let sourceSnapshot;
+    await runInDurableObject(sourceStub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      await identityRealmRequest(backend, sourceIdentity, "score", "set", {
+        key: "alpha",
+        value: { z: 3, a: 1 }
+      });
+      await identityRealmRequest(backend, sourceIdentity, "score", "set", {
+        key: "beta",
+        value: 2
+      });
+      sourceSnapshot = await snapshotShareableStateNamespace(
+        clientEnvironment(backend),
+        {
+          realm: sourceIdentity,
+          featureId: "test.score",
+          namespaceId: "score"
+        }
+      );
+      expect(sourceSnapshot.mutationVersion).toBe(2);
+    });
+
+    const targetIdentity = createIntegrationRealmIdentity({
+      id: uniqueId("integration")
+    });
+    const targetStub = shareableStateRealmStub(env, targetIdentity);
+    await runInDurableObject(targetStub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      const tampered = JSON.parse(JSON.stringify(sourceSnapshot));
+      tampered.entries[0].value = 99;
+      await expect(cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: tampered
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_snapshot_fingerprint_mismatch"
+      });
+      expect((await snapshotShareableStateNamespace(clientEnv, {
+        realm: targetIdentity,
+        featureId: "test.score",
+        namespaceId: "score"
+      })).mutationVersion).toBe(0);
+
+      await expect(cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: sourceSnapshot,
+        expectedTargetMutationVersion: 1
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_clone_target_stale"
+      });
+
+      expect(await cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: sourceSnapshot
+      })).toEqual({
+        cloned: true,
+        mutationVersion: 1,
+        fingerprint: sourceSnapshot.fingerprint
+      });
+      const cloned = await snapshotShareableStateNamespace(clientEnv, {
+        realm: targetIdentity,
+        featureId: "test.score",
+        namespaceId: "score"
+      });
+      expect(cloned.mutationVersion).toBe(1);
+      expect(cloned.entries).toEqual(sourceSnapshot.entries);
+      expect(shareableStateSnapshotsEqual(sourceSnapshot, cloned)).toBe(true);
+
+      await expect(cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: sourceSnapshot
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_clone_target_stale"
+      });
+      await identityRealmRequest(backend, targetIdentity, "score", "set", {
+        key: "alpha",
+        value: 7
+      });
+      const diverged = await snapshotShareableStateNamespace(clientEnv, {
+        realm: targetIdentity,
+        featureId: "test.score",
+        namespaceId: "score"
+      });
+      expect(diverged.mutationVersion).toBe(2);
+      expect(shareableStateSnapshotsEqual(sourceSnapshot, diverged)).toBe(false);
+    });
+
+    await runInDurableObject(sourceStub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const unchanged = await snapshotShareableStateNamespace(
+        clientEnvironment(backend),
+        {
+          realm: sourceIdentity,
+          featureId: "test.score",
+          namespaceId: "score"
+        }
+      );
+      expect(unchanged.mutationVersion).toBe(2);
+      expect(shareableStateSnapshotsEqual(sourceSnapshot, unchanged)).toBe(true);
+    });
+  });
+
+  it("records empty clone initialization as a monotonic target version", async () => {
+    const sourceIdentity = createStandaloneRealmIdentity(twitchGroup());
+    const sourceStub = shareableStateRealmStub(env, sourceIdentity);
+    let empty;
+    await runInDurableObject(sourceStub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      empty = await snapshotShareableStateNamespace(clientEnvironment(backend), {
+        realm: sourceIdentity,
+        featureId: "test.score",
+        namespaceId: "score"
+      });
+    });
+
+    const targetIdentity = createIntegrationRealmIdentity({ id: uniqueId("empty") });
+    const targetStub = shareableStateRealmStub(env, targetIdentity);
+    await runInDurableObject(targetStub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      expect((await cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: empty
+      })).mutationVersion).toBe(1);
+      const cloned = await snapshotShareableStateNamespace(clientEnv, {
+        realm: targetIdentity,
+        featureId: "test.score",
+        namespaceId: "score"
+      });
+      expect(cloned).toMatchObject({ mutationVersion: 1, meaningful: false });
+      expect(shareableStateSnapshotsEqual(empty, cloned)).toBe(true);
     });
   });
 
@@ -354,6 +598,10 @@ describe("Standalone shareable-state realms", () => {
         `SELECT schema_version FROM shareable_state_realm_namespaces
          WHERE feature_id = 'test.score' AND namespace_id = 'score'`
       ).one().schema_version).toBe(2);
+      expect(state.storage.sql.exec(
+        `SELECT mutation_version FROM shareable_state_realm_namespaces
+         WHERE feature_id = 'test.score' AND namespace_id = 'score'`
+      ).one().mutation_version).toBe(2);
 
       const incompatible = new ShareableStateRealmBackend(
         state,

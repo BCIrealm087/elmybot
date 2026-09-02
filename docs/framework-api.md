@@ -95,9 +95,11 @@ integration's realm otherwise. The scope mirrors the state operations. It does
 not expose links, realm IDs, generations, snapshots, or storage enumeration.
 `integrationState` remains available for compatibility.
 
-Snapshot and collision-finalization stages are not implemented yet. Existing
-features with data to preserve must not migrate to `shareableState` until those
-stages provide reconciliation and explicit adoption of legacy ledgers.
+Protected snapshot, fingerprint, comparison, and cloning infrastructure is now
+implemented but is intentionally not part of the feature-facing scope. Pending
+link collision discovery and finalization are still staged. Existing features
+with data to preserve must not migrate to `shareableState` until those stages
+provide reconciliation and explicit adoption of legacy ledgers.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and

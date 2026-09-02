@@ -167,7 +167,8 @@ Requirements:
   ascending order. Omission means only the current version is compatible.
 - Compatibility means an older canonical representation can be consumed and
   identity-upgraded without a feature-specific transformation. Nonidentity
-  migration declarations are deferred until snapshot infrastructure exists.
+  migration declarations remain deferred; the implemented snapshot
+  infrastructure rejects representations requiring feature-specific code.
 - `collisionSummary.kind` is `presence` or `entry_count`; omission defaults to
   `presence`. Arbitrary summary callbacks and raw-value rendering are rejected.
 - `limits.maxEntries` is 1–100 and defaults to 100.
@@ -556,7 +557,9 @@ the origin group's selected cross-platform relationship through the integration
 registry. Config and state are scoped through `GroupConfig`; integration state
 is scoped through the per-integration coordinator. Shareable state resolves to
 the dedicated realm Durable Object but is unused by installed features while
-snapshot, collision-finalization, and migration work remains staged.
+pending-link collision-finalization and feature migration remain staged. Its
+snapshot, fingerprint, comparison, and cloning operations are protected
+infrastructure capabilities and never appear in an action context.
 Declarative cooldowns use the per-group boundary and are enforced before action
 code.
 

@@ -775,6 +775,13 @@ describe("Command and feature framework", () => {
       async execute(ctx) {
         const state = await ctx.shareableState.current("twitch", "score");
         expect(Object.isFrozen(state)).toBe(true);
+        expect(Object.keys(state).sort()).toEqual([
+          "boundedCounter",
+          "delete",
+          "get",
+          "increment",
+          "set"
+        ]);
         const count = await state
           .boundedCounter("score", "game", { min: 0, max: 10 })
           .increment(2);

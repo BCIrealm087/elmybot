@@ -500,7 +500,12 @@ when groups link. Each step is intended to land and pass CI independently:
    the origin group's standalone realm; an active default selects that
    integration's realm. Existing `integrationState` remains available while
    lifecycle reconciliation and feature migrations are still staged.
-5. **Add snapshot, fingerprint, and cloning primitives.**
+5. **Add snapshot, fingerprint, and cloning primitives — completed.** Internal
+   realm infrastructure can capture one declared namespace as an immutable,
+   versioned snapshot, derive a deterministic content fingerprint and bounded
+   feature-approved summary, compare compatible snapshots, and clone verified
+   content into a fresh realm. These capabilities are deliberately absent from
+   feature action contexts.
 6. **Introduce the pending-integration lifecycle.**
 7. **Implement generic collision discovery.**
 8. **Add the collision-resolution page.**

@@ -8,8 +8,9 @@ implementation reaches a feature, that feature continues to follow the current
 
 Implementation progress: namespace declarations, standalone and integration
 realm persistence, and default-aware effective-realm resolution are
-implemented. Snapshots, linking collision handling, revocation successors, and
-feature migration remain staged.
+implemented. Protected namespace snapshots, fingerprints, meaningful-state
+checks, comparisons, and fresh-realm cloning are also implemented. Linking
+collision handling, revocation successors, and feature migration remain staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -321,17 +322,20 @@ resolution identities; labels are bounded presentation text. Schema versions
 are positive integers. `compatibleVersions` identifies representations that
 can be consumed and identity-upgraded without running feature code, and always
 includes the current version. A nonidentity migration mechanism remains
-deferred until the snapshot stage.
+deliberately deferred; this stage supports only declared identity-compatible
+schema upgrades and rejects representations requiring feature code.
 
 Collision summaries are limited to `presence` and `entry_count`. Neither policy
 may render stored keys or values. Limits can only narrow the current framework
 caps of 100 entries and 16 KiB per value. Definitions omit the field entirely
 or declare at most 20 unique namespaces, and every normalized object is frozen.
 
-The metadata itself does not create storage. The internal standalone-realm
-layer now consumes the installed catalog to gate lazy realm materialization and
-state operations. It still exposes no feature action-context service, inspects
-no integration ledger, and changes no link activation behavior. See
+The metadata itself does not create storage. The internal realm layer consumes
+the installed catalog to gate lazy realm materialization, state operations,
+snapshots, safe summaries, and cloning. Feature actions access declared state
+only through the effective `shareableState` scope; snapshot payloads and realm
+identities remain infrastructure-only. This stage still inspects no pending
+link lifecycle and changes no link activation behavior. See
 [`Standalone shareable-state realms`](shareable-state-realms.md).
 
 The framework may copy an opaque canonical snapshot, but it must enumerate only

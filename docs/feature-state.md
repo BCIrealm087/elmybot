@@ -8,9 +8,10 @@ integration scope only through a default-link snapshot resolved by the current
 action invocation.
 
 The `shareableState` service now resolves declared namespaces to standalone or
-default-integration realms. Snapshot reconciliation and the pending-link
-lifecycle remain staged; `integrationState` continues to support existing
-features until they can migrate without losing legacy data. See the
+default-integration realms. Protected snapshot and cloning primitives exist,
+but pending-link discovery and reconciliation remain staged; `integrationState`
+continues to support existing features until they can migrate without losing
+legacy data. See the
 [`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md).
 
 ## Choose the state boundary first
