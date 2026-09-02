@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
   createEffect,
   createEffectHandlerRegistry,
   createIntegrationExecution,
@@ -13,7 +13,8 @@ import {
   reserveIntegrationInvitation,
   retryIntegrationEffect,
   revokeIntegration,
-  submitIntegrationExecution
+  submitIntegrationExecution,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
 import { DISCORD_EFFECT_KINDS } from "../src/platforms/discord/integration-effects.js";
 import { ALARM_DRAIN_TIME_BUDGET_MS } from "../src/alarm-drain.js";
@@ -58,7 +59,7 @@ async function activateIntegration() {
     reservationId,
     reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
   });
-  const completion = await completeIntegrationInvitation(integrationEnv, {
+  await verifyIntegrationInvitation(integrationEnv, {
     invitationId: reservation.invitationId,
     reservationId,
     group: channel,
@@ -67,6 +68,10 @@ async function activateIntegration() {
       id: channel.id,
       claims: ["twitch.broadcaster"]
     }
+  });
+  const completion = await activatePendingIntegration(integrationEnv, {
+    invitationId: reservation.invitationId,
+    reservationId
   });
   return { group, actor, channel, integration: completion.integration };
 }

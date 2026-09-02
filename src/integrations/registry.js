@@ -22,7 +22,8 @@ import {
 } from "./registry-validation.js";
 
 export {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
+  cancelPendingIntegration,
   createIntegrationInvitation,
   getIntegrationById,
   getIntegrationDefaultLink,
@@ -32,16 +33,19 @@ export {
   listIntegrationAudit,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
+  resumePendingIntegration,
   resolveIntegrationRoutes,
   revokeIntegration,
   revokeIntegrationsForGroup,
   setIntegrationDefaultLink,
-  updateIntegrationRoute
+  updateIntegrationRoute,
+  verifyIntegrationInvitation
 } from "./registry-client.js";
 export { IntegrationRegistryError } from "./registry-validation.js";
 
 export const INTEGRATION_INVITATION_TTL_MS = 15 * 60 * 1000;
 export const INTEGRATION_INVITATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+export const INTEGRATION_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
 
 const MAX_OAUTH_RESERVATION_TTL_MS = 15 * 60 * 1000;
 const REGISTRY_MAINTENANCE_BATCH_SIZE = 50;
@@ -65,22 +69,22 @@ export class IntegrationRegistry {
     const nextMaintenance = this.state.storage.sql.exec(
       `WITH next_maintenance(next_at_ms) AS (VALUES
          ((SELECT MIN(expires_at_ms)
-           FROM integration_invitations WHERE status = 'pending')),
+           FROM integration_invitations WHERE status IN ('invited', 'pending'))),
          ((SELECT MIN(reservation_expires_at_ms)
            FROM integration_invitations WHERE status = 'reserved')),
-         ((SELECT MIN(completed_at_ms) + ?
-           FROM integration_invitations WHERE status = 'completed')),
-         ((SELECT MIN(expires_at_ms) + ?
+         ((SELECT MIN(COALESCE(
+             completed_at_ms,
+             reservation_expires_at_ms,
+             expires_at_ms
+           )) + ?
            FROM integration_invitations
-           WHERE status = 'expired' AND reservation_expires_at_ms IS NULL)),
-         ((SELECT MIN(reservation_expires_at_ms) + ?
-           FROM integration_invitations
-           WHERE status = 'expired' AND reservation_expires_at_ms IS NOT NULL)),
+           WHERE status IN ('active', 'completed', 'cancelled', 'expired'))),
+         ((SELECT MIN(expires_at_ms)
+           FROM integration_pending_links
+           WHERE status IN ('twitch_verified', 'awaiting_state_resolution'))),
          ((SELECT MIN(requested_at_ms) FROM integration_group_revocations))
        )
        SELECT MIN(next_at_ms) AS next_at_ms FROM next_maintenance`,
-      INTEGRATION_INVITATION_RETENTION_MS,
-      INTEGRATION_INVITATION_RETENTION_MS,
       INTEGRATION_INVITATION_RETENTION_MS
     ).one().next_at_ms;
     if (nextMaintenance === null) await this.state.storage.deleteAlarm();
@@ -108,7 +112,7 @@ export class IntegrationRegistry {
           (invitation_id, token_hash, discord_group_key, discord_group_id,
            discord_group_label, discord_actor_id, status, created_at_ms,
            expires_at_ms)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'invited', ?, ?)`,
         invitationId,
         tokenHash,
         group.key,
@@ -167,7 +171,11 @@ export class IntegrationRegistry {
          FROM integration_invitations WHERE token_hash = ?`,
         tokenHash
       ).toArray()[0];
-      if (!row || row.status !== "pending" || row.expires_at_ms <= nowMs) {
+      if (
+        !row ||
+        !new Set(["invited", "pending"]).has(row.status) ||
+        row.expires_at_ms <= nowMs
+      ) {
         throw new IntegrationRegistryError(
           "The integration invitation is invalid, expired, or has already been used.",
           { code: "integration_invitation_invalid" }
@@ -685,7 +693,75 @@ export class IntegrationRegistry {
     return { total, entries };
   }
 
-  async completeInvitation(input) {
+  pendingInvitationByReservation(reservationId) {
+    return this.state.storage.sql.exec(
+      `SELECT invitation.invitation_id, invitation.discord_group_key,
+              invitation.discord_group_id, invitation.discord_group_label,
+              invitation.discord_actor_id, invitation.status AS invitation_status,
+              invitation.reservation_id, invitation.reservation_expires_at_ms,
+              invitation.completed_integration_id,
+              pending.integration_id AS pending_integration_id,
+              pending.status AS pending_status,
+              pending.twitch_group_key, pending.twitch_group_id,
+              pending.twitch_group_label, pending.twitch_actor_id,
+              pending.verified_at_ms, pending.awaiting_resolution_at_ms,
+              pending.expires_at_ms AS pending_expires_at_ms,
+              pending.cancelled_at_ms, pending.activated_at_ms
+       FROM integration_invitations invitation
+       LEFT JOIN integration_pending_links pending
+         ON pending.invitation_id = invitation.invitation_id
+       WHERE invitation.reservation_id = ?`,
+      reservationId
+    ).toArray()[0] ?? null;
+  }
+
+  publicPendingInvitation(row) {
+    const status = row.pending_status ?? (
+      row.invitation_status === "reserved"
+        ? "twitch_verification_pending"
+        : row.invitation_status
+    );
+    return {
+      invitationId: row.invitation_id,
+      integrationId: row.completed_integration_id ?? row.pending_integration_id ?? null,
+      status: status === "completed" ? "active" : status,
+      expiresAtMs: row.pending_expires_at_ms ?? row.reservation_expires_at_ms ?? null,
+      discordGroup: parseGroupKey(row.discord_group_key),
+      discordLabel: row.discord_group_label ?? null,
+      twitchGroup: row.twitch_group_key
+        ? parseGroupKey(row.twitch_group_key)
+        : null,
+      twitchLabel: row.twitch_group_label ?? null,
+      verifiedAtMs: row.verified_at_ms ?? null,
+      awaitingStateResolutionAtMs: row.awaiting_resolution_at_ms ?? null,
+      cancelledAtMs: row.cancelled_at_ms ?? null,
+      activatedAtMs: row.activated_at_ms ?? null
+    };
+  }
+
+  expirePendingRow(row, nowMs) {
+    this.state.storage.sql.exec(
+      `UPDATE integration_invitations
+       SET token_hash = NULL, status = 'expired', completed_at_ms = ?
+       WHERE invitation_id = ?`,
+      nowMs,
+      row.invitation_id
+    );
+    if (row.pending_status) {
+      this.state.storage.sql.exec(
+        `UPDATE integration_pending_links SET status = 'expired'
+         WHERE invitation_id = ?`,
+        row.invitation_id
+      );
+    }
+    audit(this.state.storage.sql, {
+      invitationId: row.invitation_id,
+      event: "integration.invitation.expired.v1",
+      occurredAtMs: nowMs
+    });
+  }
+
+  async verifyInvitation(input) {
     const invitationId = validatedOpaqueId(input?.invitationId, "Integration invitation ID");
     const reservationId = validatedOpaqueId(input?.reservationId, "OAuth reservation ID");
     const twitchGroup = validatedGroup(input?.group, {
@@ -700,13 +776,13 @@ export class IntegrationRegistry {
     );
     if (twitchActor.id !== twitchGroup.id) {
       throw new IntegrationRegistryError(
-        "Only the Twitch broadcaster can complete an integration invitation.",
+        "Only the Twitch broadcaster can verify an integration invitation.",
         { status: 403, code: "integration_twitch_broadcaster_required" }
       );
     }
     const nowMs = Date.now();
 
-    const completion = this.state.storage.transactionSync(() => {
+    const result = this.state.storage.transactionSync(() => {
       const invitation = this.state.storage.sql.exec(
         `SELECT invitation_id, discord_group_key, discord_group_id,
                 discord_group_label, discord_actor_id, status, reservation_id,
@@ -715,7 +791,7 @@ export class IntegrationRegistry {
         invitationId
       ).toArray()[0];
       if (
-        invitation?.status === "completed" &&
+        new Set(["active", "completed"]).has(invitation?.status) &&
         invitation.reservation_id === reservationId &&
         invitation.completed_integration_id
       ) {
@@ -727,26 +803,45 @@ export class IntegrationRegistry {
         ).toArray()[0];
         if (!matchingMember) {
           throw new IntegrationRegistryError(
-            "The integration invitation completion identity does not match.",
+            "The integration invitation verification identity does not match.",
             { status: 403, code: "integration_completion_identity_mismatch" }
           );
         }
-        const discordGroup = parseGroupKey(invitation.discord_group_key);
-        this.assignDefaultLinkIfAbsent({
-          sourceGroup: discordGroup,
-          targetGroup: twitchGroup,
-          integrationId: invitation.completed_integration_id,
-          nowMs
-        });
-        this.assignDefaultLinkIfAbsent({
-          sourceGroup: twitchGroup,
-          targetGroup: discordGroup,
-          integrationId: invitation.completed_integration_id,
-          nowMs
-        });
         return {
+          status: "active",
           integrationId: invitation.completed_integration_id,
-          alreadyLinked: false,
+          replayed: true
+        };
+      }
+      const existing = this.pendingInvitationByReservation(reservationId);
+      if (existing?.pending_status) {
+        if (
+          existing.invitation_id !== invitationId ||
+          existing.twitch_group_key !== twitchGroup.key ||
+          existing.twitch_actor_id !== twitchActor.id
+        ) {
+          throw new IntegrationRegistryError(
+            "The integration invitation verification identity does not match.",
+            { status: 403, code: "integration_completion_identity_mismatch" }
+          );
+        }
+        if (
+          new Set(["twitch_verified", "awaiting_state_resolution"])
+            .has(existing.pending_status) &&
+          existing.pending_expires_at_ms <= nowMs
+        ) {
+          this.expirePendingRow(existing, nowMs);
+          return { expired: true };
+        }
+        if (existing.pending_status === "cancelled") {
+          throw new IntegrationRegistryError(
+            "The pending integration was cancelled.",
+            { status: 409, code: "integration_pending_cancelled" }
+          );
+        }
+        if (existing.pending_status === "expired") return { expired: true };
+        return {
+          pendingIntegration: this.publicPendingInvitation(existing),
           replayed: true
         };
       }
@@ -761,14 +856,243 @@ export class IntegrationRegistry {
           { code: "integration_invitation_reservation_invalid" }
         );
       }
+      const pendingIntegrationId = crypto.randomUUID();
+      const pendingExpiresAtMs = nowMs + INTEGRATION_PENDING_TTL_MS;
+      this.state.storage.sql.exec(
+        `UPDATE integration_invitations
+         SET status = 'twitch_verified'
+         WHERE invitation_id = ?`,
+        invitationId
+      );
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_pending_links
+          (invitation_id, integration_id, reservation_id, status,
+           twitch_group_key, twitch_group_id, twitch_group_label,
+           twitch_actor_id, verified_at_ms, expires_at_ms)
+         VALUES (?, ?, ?, 'twitch_verified', ?, ?, ?, ?, ?, ?)`,
+        invitationId,
+        pendingIntegrationId,
+        reservationId,
+        twitchGroup.key,
+        twitchGroup.id,
+        boundedLabel(input?.groupLabel),
+        twitchActor.id,
+        nowMs,
+        pendingExpiresAtMs
+      );
+      audit(this.state.storage.sql, {
+        integrationId: pendingIntegrationId,
+        invitationId,
+        event: "integration.invitation.twitch_verified.v1",
+        actor: twitchActor,
+        groupKey: twitchGroup.key,
+        occurredAtMs: nowMs
+      });
+      this.state.storage.sql.exec(
+        `UPDATE integration_invitations
+         SET status = 'awaiting_state_resolution'
+         WHERE invitation_id = ?`,
+        invitationId
+      );
+      this.state.storage.sql.exec(
+        `UPDATE integration_pending_links
+         SET status = 'awaiting_state_resolution', awaiting_resolution_at_ms = ?
+         WHERE invitation_id = ?`,
+        nowMs,
+        invitationId
+      );
+      audit(this.state.storage.sql, {
+        integrationId: pendingIntegrationId,
+        invitationId,
+        event: "integration.invitation.awaiting_state_resolution.v1",
+        actor: twitchActor,
+        groupKey: twitchGroup.key,
+        occurredAtMs: nowMs
+      });
+      return {
+        pendingIntegration: this.publicPendingInvitation(
+          this.pendingInvitationByReservation(reservationId)
+        ),
+        replayed: false
+      };
+    });
+
+    await this.armNextExpiration();
+    if (result.expired) {
+      throw new IntegrationRegistryError("The pending integration expired.", {
+        status: 410,
+        code: "integration_pending_expired"
+      });
+    }
+    if (result.status === "active") {
+      return {
+        integration: this.getIntegration(result.integrationId),
+        pendingIntegration: null,
+        replayed: result.replayed
+      };
+    }
+    return result;
+  }
+
+  async resumeInvitation(input) {
+    const reservationId = validatedOpaqueId(
+      input?.reservationId,
+      "Integration continuation ID"
+    );
+    const nowMs = Date.now();
+    const result = this.state.storage.transactionSync(() => {
+      let row = this.pendingInvitationByReservation(reservationId);
+      if (!row) {
+        throw new IntegrationRegistryError(
+          "The integration continuation is invalid or unavailable.",
+          { status: 404, code: "integration_pending_not_found" }
+        );
+      }
+      const expiresAtMs = row.pending_expires_at_ms ?? row.reservation_expires_at_ms;
+      if (
+        new Set([
+          "reserved",
+          "twitch_verified",
+          "awaiting_state_resolution"
+        ]).has(row.pending_status ?? row.invitation_status) &&
+        expiresAtMs <= nowMs
+      ) {
+        this.expirePendingRow(row, nowMs);
+        row = this.pendingInvitationByReservation(reservationId);
+      }
+      return this.publicPendingInvitation(row);
+    });
+    await this.armNextExpiration();
+    return {
+      pendingIntegration: result,
+      integration: result.status === "active"
+        ? this.getIntegration(result.integrationId)
+        : null
+    };
+  }
+
+  async cancelInvitation(input) {
+    const reservationId = validatedOpaqueId(
+      input?.reservationId,
+      "Integration continuation ID"
+    );
+    const nowMs = Date.now();
+    const pendingIntegration = this.state.storage.transactionSync(() => {
+      let row = this.pendingInvitationByReservation(reservationId);
+      if (!row) {
+        throw new IntegrationRegistryError(
+          "The integration continuation is invalid or unavailable.",
+          { status: 404, code: "integration_pending_not_found" }
+        );
+      }
+      if (new Set(["active", "completed"]).has(row.invitation_status)) {
+        throw new IntegrationRegistryError(
+          "An active integration cannot be cancelled.",
+          { status: 409, code: "integration_pending_already_active" }
+        );
+      }
+      if (new Set(["cancelled", "expired"]).has(row.invitation_status)) {
+        return this.publicPendingInvitation(row);
+      }
+      const expiresAtMs = row.pending_expires_at_ms ?? row.reservation_expires_at_ms;
+      if (expiresAtMs <= nowMs) {
+        this.expirePendingRow(row, nowMs);
+        return this.publicPendingInvitation(
+          this.pendingInvitationByReservation(reservationId)
+        );
+      }
+      if (!new Set([
+        "reserved",
+        "twitch_verified",
+        "awaiting_state_resolution"
+      ]).has(row.invitation_status)) {
+        throw new IntegrationRegistryError(
+          "This integration invitation cannot be cancelled.",
+          { status: 409, code: "integration_pending_not_cancellable" }
+        );
+      }
+      this.state.storage.sql.exec(
+        `UPDATE integration_invitations
+         SET status = 'cancelled', completed_at_ms = ?
+         WHERE invitation_id = ?`,
+        nowMs,
+        row.invitation_id
+      );
+      if (row.pending_status) {
+        this.state.storage.sql.exec(
+          `UPDATE integration_pending_links
+           SET status = 'cancelled', cancelled_at_ms = ?
+           WHERE invitation_id = ?`,
+          nowMs,
+          row.invitation_id
+        );
+      }
+      audit(this.state.storage.sql, {
+        integrationId: row.pending_integration_id,
+        invitationId: row.invitation_id,
+        event: "integration.invitation.cancelled.v1",
+        occurredAtMs: nowMs
+      });
+      return this.publicPendingInvitation(
+        this.pendingInvitationByReservation(reservationId)
+      );
+    });
+    await this.armNextExpiration();
+    return { pendingIntegration };
+  }
+
+  async activateInvitation(input) {
+    const invitationId = validatedOpaqueId(
+      input?.invitationId,
+      "Integration invitation ID"
+    );
+    const reservationId = validatedOpaqueId(
+      input?.reservationId,
+      "Integration continuation ID"
+    );
+    const nowMs = Date.now();
+    const result = this.state.storage.transactionSync(() => {
+      const row = this.pendingInvitationByReservation(reservationId);
+      if (!row || row.invitation_id !== invitationId) {
+        throw new IntegrationRegistryError(
+          "The pending integration is invalid or unavailable.",
+          { status: 404, code: "integration_pending_not_found" }
+        );
+      }
+      if (
+        new Set(["active", "completed"]).has(row.invitation_status) &&
+        row.completed_integration_id
+      ) {
+        return {
+          integrationId: row.completed_integration_id,
+          alreadyLinked: false,
+          replayed: true
+        };
+      }
+      if (
+        row.pending_status === "expired" ||
+        row.pending_expires_at_ms <= nowMs
+      ) {
+        if (row.pending_status !== "expired") this.expirePendingRow(row, nowMs);
+        return { expired: true };
+      }
+      if (
+        row.invitation_status !== "awaiting_state_resolution" ||
+        row.pending_status !== "awaiting_state_resolution"
+      ) {
+        throw new IntegrationRegistryError(
+          "The pending integration is not ready for activation.",
+          { status: 409, code: "integration_pending_not_ready" }
+        );
+      }
 
       let integrationId = this.findExistingIntegration(
-        invitation.discord_group_key,
-        twitchGroup.key
+        row.discord_group_key,
+        row.twitch_group_key
       );
       const alreadyLinked = integrationId !== null;
       if (!integrationId) {
-        integrationId = crypto.randomUUID();
+        integrationId = row.pending_integration_id;
         this.state.storage.sql.exec(
           `INSERT INTO integrations
             (integration_id, status, created_at_ms, updated_at_ms,
@@ -779,8 +1103,8 @@ export class IntegrationRegistry {
           nowMs,
           nowMs,
           nowMs,
-          invitation.discord_actor_id,
-          twitchActor.id
+          row.discord_actor_id,
+          row.twitch_actor_id
         );
         this.state.storage.sql.exec(
           `INSERT INTO integration_members
@@ -788,9 +1112,9 @@ export class IntegrationRegistry {
              joined_at_ms)
            VALUES (?, ?, 'discord', 'guild', ?, ?, ?)`,
           integrationId,
-          invitation.discord_group_key,
-          invitation.discord_group_id,
-          invitation.discord_group_label,
+          row.discord_group_key,
+          row.discord_group_id,
+          row.discord_group_label,
           nowMs
         );
         this.state.storage.sql.exec(
@@ -799,17 +1123,17 @@ export class IntegrationRegistry {
              joined_at_ms)
            VALUES (?, ?, 'twitch', 'channel', ?, ?, ?)`,
           integrationId,
-          twitchGroup.key,
-          twitchGroup.id,
-          boundedLabel(input?.groupLabel),
+          row.twitch_group_key,
+          row.twitch_group_id,
+          row.twitch_group_label,
           nowMs
         );
         audit(this.state.storage.sql, {
           integrationId,
           invitationId,
           event: "integration.activated.v1",
-          actor: twitchActor,
-          groupKey: twitchGroup.key,
+          actor: { platform: "twitch", id: row.twitch_actor_id },
+          groupKey: row.twitch_group_key,
           occurredAtMs: nowMs
         });
       }
@@ -830,11 +1154,11 @@ export class IntegrationRegistry {
           throw new IntegrationRegistryError("The invitation route is invalid.");
         }
         const sourceGroupKey = route.source_platform === "twitch"
-          ? twitchGroup.key
-          : invitation.discord_group_key;
+          ? row.twitch_group_key
+          : row.discord_group_key;
         const targetGroupKey = route.target_platform === "twitch"
-          ? twitchGroup.key
-          : invitation.discord_group_key;
+          ? row.twitch_group_key
+          : row.discord_group_key;
         this.state.storage.sql.exec(
           `INSERT INTO integration_routes
             (integration_id, route_kind, source_group_key, target_group_key,
@@ -858,24 +1182,31 @@ export class IntegrationRegistry {
 
       this.state.storage.sql.exec(
         `UPDATE integration_invitations
-         SET status = 'completed', completed_at_ms = ?,
-             completed_integration_id = ?
+         SET status = 'active', completed_at_ms = ?, completed_integration_id = ?
          WHERE invitation_id = ?`,
         nowMs,
         integrationId,
+        invitationId
+      );
+      this.state.storage.sql.exec(
+        `UPDATE integration_pending_links
+         SET status = 'active', activated_at_ms = ?
+         WHERE invitation_id = ?`,
+        nowMs,
         invitationId
       );
       audit(this.state.storage.sql, {
         integrationId,
         invitationId,
         event: alreadyLinked
-          ? "integration.invitation.completed_existing.v1"
-          : "integration.invitation.completed.v1",
-        actor: twitchActor,
-        groupKey: twitchGroup.key,
+          ? "integration.invitation.activated_existing.v1"
+          : "integration.invitation.activated.v1",
+        actor: { platform: "twitch", id: row.twitch_actor_id },
+        groupKey: row.twitch_group_key,
         occurredAtMs: nowMs
       });
-      const discordGroup = parseGroupKey(invitation.discord_group_key);
+      const discordGroup = parseGroupKey(row.discord_group_key);
+      const twitchGroup = parseGroupKey(row.twitch_group_key);
       this.assignDefaultLinkIfAbsent({
         sourceGroup: discordGroup,
         targetGroup: twitchGroup,
@@ -892,10 +1223,16 @@ export class IntegrationRegistry {
     });
 
     await this.armNextExpiration();
+    if (result.expired) {
+      throw new IntegrationRegistryError("The pending integration expired.", {
+        status: 410,
+        code: "integration_pending_expired"
+      });
+    }
     return {
-      integration: this.getIntegration(completion.integrationId),
-      alreadyLinked: completion.alreadyLinked,
-      replayed: completion.replayed
+      integration: this.getIntegration(result.integrationId),
+      alreadyLinked: result.alreadyLinked,
+      replayed: result.replayed
     };
   }
 
@@ -1124,15 +1461,28 @@ export class IntegrationRegistry {
     const nowMs = Date.now();
     return this.state.storage.transactionSync(() => {
       const rows = this.state.storage.sql.exec(
-        `SELECT invitation_id, status
-         FROM integration_invitations
-         WHERE (status = 'pending' AND expires_at_ms <= ?)
-            OR (status = 'reserved' AND reservation_expires_at_ms <= ?)
-         ORDER BY CASE status
-           WHEN 'reserved' THEN reservation_expires_at_ms
-           ELSE expires_at_ms
-         END ASC
+        `SELECT invitation_id, status, terminal_at_ms
+         FROM (
+           SELECT invitation_id, status,
+                  CASE status
+                    WHEN 'reserved' THEN reservation_expires_at_ms
+                    ELSE expires_at_ms
+                  END AS terminal_at_ms
+           FROM integration_invitations
+           WHERE (status IN ('invited', 'pending') AND expires_at_ms <= ?)
+              OR (status = 'reserved' AND reservation_expires_at_ms <= ?)
+           UNION ALL
+           SELECT invitation.invitation_id, pending.status,
+                  pending.expires_at_ms AS terminal_at_ms
+           FROM integration_pending_links pending
+           JOIN integration_invitations invitation
+             ON invitation.invitation_id = pending.invitation_id
+           WHERE pending.status IN ('twitch_verified', 'awaiting_state_resolution')
+             AND pending.expires_at_ms <= ?
+         ) expired
+         ORDER BY terminal_at_ms ASC, invitation_id ASC
          LIMIT ?`,
+        nowMs,
         nowMs,
         nowMs,
         REGISTRY_MAINTENANCE_BATCH_SIZE
@@ -1140,15 +1490,19 @@ export class IntegrationRegistry {
       for (const row of rows) {
         this.state.storage.sql.exec(
           `UPDATE integration_invitations
-           SET token_hash = NULL, status = 'expired'
+           SET token_hash = NULL, status = 'expired', completed_at_ms = ?
+           WHERE invitation_id = ?`,
+          nowMs,
+          row.invitation_id
+        );
+        this.state.storage.sql.exec(
+          `UPDATE integration_pending_links SET status = 'expired'
            WHERE invitation_id = ?`,
           row.invitation_id
         );
         audit(this.state.storage.sql, {
           invitationId: row.invitation_id,
-          event: row.status === "reserved"
-            ? "integration.invitation.reservation_expired.v1"
-            : "integration.invitation.expired.v1",
+          event: "integration.invitation.expired.v1",
           occurredAtMs: nowMs
         });
       }
@@ -1161,33 +1515,26 @@ export class IntegrationRegistry {
     return this.state.storage.transactionSync(() => {
       const rows = this.state.storage.sql.exec(
         `SELECT invitation_id
-         FROM (
-           SELECT invitation_id, completed_at_ms AS terminal_at_ms
-           FROM integration_invitations
-           WHERE status = 'completed' AND completed_at_ms <= ?
-           UNION ALL
-           SELECT invitation_id, expires_at_ms AS terminal_at_ms
-           FROM integration_invitations
-           WHERE status = 'expired'
-             AND reservation_expires_at_ms IS NULL
-             AND expires_at_ms <= ?
-           UNION ALL
-           SELECT invitation_id, reservation_expires_at_ms AS terminal_at_ms
-           FROM integration_invitations
-           WHERE status = 'expired'
-             AND reservation_expires_at_ms IS NOT NULL
-             AND reservation_expires_at_ms <= ?
-         )
-         ORDER BY terminal_at_ms ASC
+         FROM integration_invitations
+         WHERE status IN ('active', 'completed', 'cancelled', 'expired')
+           AND COALESCE(completed_at_ms, reservation_expires_at_ms, expires_at_ms) <= ?
+         ORDER BY COALESCE(
+           completed_at_ms,
+           reservation_expires_at_ms,
+           expires_at_ms
+         ) ASC
          LIMIT ?`,
-        cutoffMs,
-        cutoffMs,
         cutoffMs,
         REGISTRY_MAINTENANCE_BATCH_SIZE
       ).toArray();
       if (rows.length === 0) return 0;
       const invitationIds = rows.map((row) => row.invitation_id);
       const placeholders = invitationIds.map(() => "?").join(", ");
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_pending_links
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
       this.state.storage.sql.exec(
         `DELETE FROM integration_invitation_routes
          WHERE invitation_id IN (${placeholders})`,
@@ -1232,8 +1579,17 @@ export class IntegrationRegistry {
       if (request.method === "POST" && url.pathname === "/invitations/reserve") {
         return noStoreJson(await this.reserveInvitation(await request.json()));
       }
-      if (request.method === "POST" && url.pathname === "/invitations/complete") {
-        return noStoreJson(await this.completeInvitation(await request.json()), 201);
+      if (request.method === "POST" && url.pathname === "/invitations/verify-twitch") {
+        return noStoreJson(await this.verifyInvitation(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/invitations/resume") {
+        return noStoreJson(await this.resumeInvitation(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/invitations/cancel") {
+        return noStoreJson(await this.cancelInvitation(await request.json()));
+      }
+      if (request.method === "POST" && url.pathname === "/invitations/activate") {
+        return noStoreJson(await this.activateInvitation(await request.json()), 201);
       }
       if (request.method === "GET" && url.pathname === "/integrations") {
         return noStoreJson(this.listIntegrations(url));

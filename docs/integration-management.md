@@ -95,12 +95,12 @@ cannot choose a Twitch channel's outgoing Discord default.
 
 The singleton registry Durable Object serializes requests, the SQLite primary
 key enforces one row per direction, and explicit updates and revocation repair
-run in synchronous transactions. If two first links complete concurrently,
+run in synchronous transactions. If two first links activate concurrently,
 either valid link may win; callers must read the selected default rather than
-assuming their request won. The losing completion cannot overwrite the winner
+assuming their request won. The losing activation cannot overwrite the winner
 or create a duplicate assignment audit for that direction.
 
-If revocation races completion of a replacement, the operations may serialize
+If revocation races activation of a replacement, the operations may serialize
 in either order. The stable postcondition is one active replacement default and
 no stored edge referencing the revoked integration. These are invariant
 guarantees, not a promise about JavaScript promise completion order.

@@ -29,6 +29,29 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_invitations_completed
       ON integration_invitations(status, completed_at_ms);
 
+    CREATE UNIQUE INDEX IF NOT EXISTS integration_invitations_reservation
+      ON integration_invitations(reservation_id)
+      WHERE reservation_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS integration_pending_links (
+      invitation_id TEXT PRIMARY KEY,
+      integration_id TEXT UNIQUE NOT NULL,
+      reservation_id TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL,
+      twitch_group_key TEXT NOT NULL,
+      twitch_group_id TEXT NOT NULL,
+      twitch_group_label TEXT,
+      twitch_actor_id TEXT NOT NULL,
+      verified_at_ms INTEGER NOT NULL,
+      awaiting_resolution_at_ms INTEGER,
+      expires_at_ms INTEGER NOT NULL,
+      cancelled_at_ms INTEGER,
+      activated_at_ms INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_links_expiry
+      ON integration_pending_links(status, expires_at_ms);
+
     CREATE TABLE IF NOT EXISTS integration_invitation_routes (
       invitation_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,
@@ -122,6 +145,12 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
       ON integration_group_revocations(requested_at_ms, group_key);
   `);
+
+  // `pending` was the pre-lifecycle name for an invitation that had not yet
+  // entered OAuth. Preserve those rows while adopting the explicit state name.
+  state.storage.sql.exec(
+    "UPDATE integration_invitations SET status = 'invited' WHERE status = 'pending'"
+  );
 
   // Stepwise deployments may already contain active integrations created
   // before directional defaults existed. Remove only invalid/stale selections,

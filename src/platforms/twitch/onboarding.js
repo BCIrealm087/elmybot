@@ -177,6 +177,42 @@ export function renderTwitchIntegrationSuccess(channel, integration, pending = f
 	});
 }
 
+export function renderTwitchIntegrationPending(pendingIntegration) {
+	const channel = pendingIntegration?.twitchLabel ??
+		pendingIntegration?.twitchGroup?.id ??
+		"your Twitch channel";
+	const verificationPending =
+		pendingIntegration?.status === "twitch_verification_pending";
+	return pageResponse({
+		title: "Elmybot link pending",
+		body: `
+    <p class="eyebrow success">${verificationPending
+			? "Authorization recorded"
+			: "Twitch verified"}</p>
+    <h1>${verificationPending
+			? "Verification is continuing"
+			: "State review is next"}</h1>
+    <p>Twitch channel <strong>${escapeHtml(channel)}</strong> is authorized, but the Discord integration is not active yet.</p>
+    <p>${verificationPending
+			? "Elmybot is retrying the verified-channel handoff. Refresh this page to check again."
+			: "Elmybot is waiting for shareable-state discovery and resolution. You can safely refresh or return to this page."}</p>
+    <form method="post" action="/twitch/integrations/cancel">
+      <button type="submit">Cancel linking</button>
+    </form>
+    <p class="fine-print">Cancelling leaves Twitch authorized for the bot and does not change existing integrations.</p>`
+	});
+}
+
+export function renderTwitchIntegrationCancelled() {
+	return pageResponse({
+		title: "Elmybot link cancelled",
+		body: `
+    <p class="eyebrow">Link cancelled</p>
+    <h1>No integration was created</h1>
+    <p>The pending Twitch–Discord link was cancelled. Existing links and Twitch authorization were not changed.</p>`
+	});
+}
+
 export function renderTwitchOnboardingError(message, status = 400) {
 	return pageResponse({
 		title: "Elmybot connection failed",

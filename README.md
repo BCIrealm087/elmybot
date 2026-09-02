@@ -162,8 +162,11 @@ one-use invitation that expires after 15 minutes. The Twitch broadcaster opens
 the link, signs in to Twitch, and grants `channel:bot`; they do not need to make
 the bot a moderator.
 
-Successful authorization creates an integration containing the authenticated
-Discord guild and Twitch channel, with three enabled routes:
+Successful authorization verifies Twitch and creates a durable pending link.
+The browser is redirected to a safely refreshable pending page while the link
+awaits shareable-state resolution. Only final activation creates an integration
+containing the authenticated Discord guild and Twitch channel, with three
+enabled routes:
 
 | Route | Outcome |
 |---|---|

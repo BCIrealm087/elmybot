@@ -70,20 +70,40 @@ evaluating the capability or contacting the registry.
 5. Twitch OAuth requests `channel:bot`. Elmybot validates the returned token and
    derives the Twitch broadcaster ID from Twitch; neither the browser nor the
    Discord initiator supplies that identity.
-6. The broadcaster's channel authorization Durable Object completes the
-   reservation and activates an integration containing the Discord guild and
-   Twitch channel. The invitation's route templates are bound to those
-   authenticated group identities. If either direction has no default yet, the
-   new relationship becomes that direction's default.
-7. The registry returns the integration ID, which Discord managers can inspect
-   or revoke with the management commands.
+6. The broadcaster's channel authorization Durable Object records Twitch
+   verification. The registry creates one durable pending integration and moves
+   it to `awaiting_state_resolution`; it does not create members, bind routes,
+   assign defaults, or expose an active integration yet.
+7. The callback stores the opaque continuation in a Secure, HttpOnly,
+   SameSite=Lax cookie and redirects to `/twitch/integrations/pending`.
+   Refreshing that page performs a read-only resume of the same record rather
+   than replaying the one-use OAuth callback.
+8. State discovery and resolution will select the initial integration realm in
+   the next implementation stages. The protected finalization operation then
+   activates that same pending integration, binds invitation routes, and
+   applies the existing first-link default rules exactly once.
 
 Invitations expire after 15 minutes. An invitation reserved by OAuth remains
-valid only for that OAuth state's lifetime. Registry alarms expire abandoned
-invitations and reservations in bounded batches. Completed and expired
-invitation records and their route templates are retained for 30 days so an
-immediate completion replay remains idempotent, then removed in bounded alarm
-work. The separate audit log is retained.
+valid only for that OAuth state's lifetime. Successful Twitch verification
+opens a separate 24-hour state-resolution window. Registry alarms expire
+abandoned invitations, reservations, and pending integrations in bounded
+batches. Active, cancelled, and expired invitation records and their route
+templates are retained for 30 days so retries remain idempotent, then removed
+in bounded alarm work. The separate audit log is retained.
+
+The persisted lifecycle is:
+
+```text
+invited -> reserved -> twitch_verified -> awaiting_state_resolution -> active
+                                      \-> cancelled
+                                      \-> expired
+```
+
+`reserved` is an internal single-use OAuth security substate. The product-level
+sequence is invited, Twitch verified, awaiting state resolution, and active.
+Cancellation and expiry are terminal before activation. Verification,
+resumption, cancellation, and activation are idempotent for the same
+reservation; an identity mismatch always fails closed.
 
 ## Relationship model
 
@@ -112,13 +132,11 @@ For the complete manager command surface, lifecycle table, many-link example,
 authorization boundaries, and concurrency guarantees, see
 [`integration-management.md`](integration-management.md#default-link-model-and-invariants).
 
-The current flow activates a relationship when Twitch verification and registry
-completion succeed. The staged
+Twitch verification now stops at a durable pending relationship. The staged
 [`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
-defines the future pending-resolution phase that must complete before activation
-once features can reconcile standalone state. It preserves the default-link
-invariants described here and is not implemented merely because it is
-documented.
+defines the discovery and resolution work that must complete before the
+protected activation operation runs. Pending relationships never participate
+in default selection.
 
 The registry schema reserves one default-link edge for each source group and
 target platform:
@@ -133,7 +151,7 @@ members from the same platform. A Discord guild's default Twitch edge and a
 Twitch channel's default Discord edge are separate records and may change
 independently.
 
-Link completion assigns both directions only when their directional keys are
+Link activation assigns both directions only when their directional keys are
 absent. A later link therefore cannot silently steal an established choice.
 Deployments that already contain active relationships are backfilled
 deterministically: the oldest active integration wins, with stable integration
@@ -200,9 +218,13 @@ the management, audit, and recovery model.
 ## Failure and revocation behavior
 
 - A permanent invalid or expired reservation fails safely and is not retried.
-- If registry completion is temporarily unavailable after Twitch OAuth succeeds,
-  the channel authorization stores a pending completion and retries it from its
-  alarm.
+- If registry verification is temporarily unavailable after Twitch OAuth
+  succeeds, the channel authorization stores the verified handoff and retries
+  it from its alarm. The browser continuation resumes the reserved record while
+  that handoff is retrying.
+- A same-origin POST can cancel a pending link. Cancellation does not remove the
+  Twitch authorization and does not alter existing integrations. Repeating the
+  cancellation returns the same terminal result.
 - `/integration_unlink` revokes only the selected relationship. It does not
   remove Twitch authorization because the channel may have other integrations
   or use Twitch-native Elmybot behavior.
@@ -218,6 +240,15 @@ the management, audit, and recovery model.
 Each test and production Worker environment has its own
 `INTEGRATION_REGISTRY` and `INTEGRATION_COORDINATOR` bindings and Durable Object
 namespaces, preserving the existing test/production isolation rule.
+
+## Step 6 deployment state
+
+This branch deliberately stops newly verified links at
+`awaiting_state_resolution`. Existing active links continue to work, but a new
+link cannot become active through the public page until collision discovery,
+the resolution page, and finalization are implemented in Steps 7–9. The
+registry's activation operation is currently infrastructure-only so feature or
+route code cannot bypass state resolution.
 
 ## Deployment notes
 

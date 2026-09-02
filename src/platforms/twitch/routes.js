@@ -10,8 +10,10 @@ import {
 	twitchChannelOAuthCoordinatorStub
 } from "./channel-auth.js";
 import {
+	renderTwitchIntegrationCancelled,
 	renderTwitchConnectPage,
 	renderTwitchIntegrationConnectPage,
+	renderTwitchIntegrationPending,
 	renderTwitchIntegrationSuccess,
 	renderTwitchOAuthTransition,
 	renderTwitchOnboardingError,
@@ -19,6 +21,101 @@ import {
 } from "./onboarding.js";
 import { twitchPublicUrl } from "./environment.js";
 import { handleTwitchChannelHealth } from "./channel-registry.js";
+import {
+	cancelPendingIntegration,
+	resumePendingIntegration
+} from "../../integrations/index.js";
+
+const INTEGRATION_RESUME_COOKIE = "elmybot_integration_resume";
+const INTEGRATION_RESUME_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
+
+function cookieValue(request, name) {
+	const header = request.headers.get("cookie") ?? "";
+	for (const part of header.split(";")) {
+		const [candidate, ...value] = part.trim().split("=");
+		if (candidate === name) return value.join("=");
+	}
+	return null;
+}
+
+function integrationResumeCookie(value) {
+	return `${INTEGRATION_RESUME_COOKIE}=${value}; ` +
+		`Path=/twitch/integrations; HttpOnly; Secure; SameSite=Lax; ` +
+		`Max-Age=${INTEGRATION_RESUME_COOKIE_MAX_AGE_SECONDS}`;
+}
+
+function integrationPendingRedirect(reservationId) {
+	return new Response(null, {
+		status: 303,
+		headers: {
+			"cache-control": "no-store",
+			location: "/twitch/integrations/pending",
+			"set-cookie": integrationResumeCookie(reservationId)
+		}
+	});
+}
+
+function sameOriginRequest(request, env) {
+	const expected = new URL(twitchPublicUrl(env, "/")).origin;
+	return request.headers.get("origin") === expected;
+}
+
+async function pendingIntegrationPage(request, env) {
+	const reservationId = cookieValue(request, INTEGRATION_RESUME_COOKIE);
+	if (!reservationId) {
+		return renderTwitchOnboardingError(
+			"This pending integration continuation is unavailable or expired.",
+			404
+		);
+	}
+	let result;
+	try {
+		result = await resumePendingIntegration(env, { reservationId });
+	} catch {
+		return renderTwitchOnboardingError(
+			"This pending integration continuation is unavailable or expired.",
+			404
+		);
+	}
+	const pending = result.pendingIntegration;
+	if (pending.status === "active") {
+		return renderTwitchIntegrationSuccess(
+			pending.twitchLabel ?? pending.twitchGroup?.id,
+			result.integration
+		);
+	}
+	if (pending.status === "cancelled") return renderTwitchIntegrationCancelled();
+	if (pending.status === "expired") {
+		return renderTwitchOnboardingError("This pending integration expired.", 410);
+	}
+	return renderTwitchIntegrationPending(pending);
+}
+
+async function cancelPendingIntegrationRoute(request, env) {
+	if (!sameOriginRequest(request, env)) {
+		return new Response("Forbidden", { status: 403 });
+	}
+	const reservationId = cookieValue(request, INTEGRATION_RESUME_COOKIE);
+	if (!reservationId) {
+		return renderTwitchOnboardingError(
+			"This pending integration continuation is unavailable or expired.",
+			404
+		);
+	}
+	let result;
+	try {
+		result = await cancelPendingIntegration(env, { reservationId });
+	} catch {
+		return renderTwitchOnboardingError(
+			"This pending integration could not be cancelled.",
+			409
+		);
+	}
+	if (result.pendingIntegration.status === "expired") {
+		return renderTwitchOnboardingError("This pending integration expired.", 410);
+	}
+	return renderTwitchIntegrationCancelled();
+}
 
 function twitchAuthStub(env) {
 	const id = env.TWITCH_AUTH.idFromName(TWITCH_AUTH_OBJECT_NAME);
@@ -229,6 +326,9 @@ async function finishTwitchChannelOAuth(request, env) {
 			"The Twitch channel was authorized, but the Discord integration invitation could not be completed. Ask a server manager to create a new invitation."
 		);
 	}
+	if (result.integrationResumeToken) {
+		return integrationPendingRedirect(result.integrationResumeToken);
+	}
 	if (result.integration || result.integrationPending) {
 		return renderTwitchIntegrationSuccess(
 			channel,
@@ -313,6 +413,18 @@ export async function handleTwitchManagementRoute(
 			return beginInvitedTwitchIntegrationOAuth(request, env);
 		}
 		return new Response("Method Not Allowed", { status: 405 });
+	}
+	if (url.pathname === "/twitch/integrations/pending") {
+		if (request.method !== "GET") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		return pendingIntegrationPage(request, env);
+	}
+	if (url.pathname === "/twitch/integrations/cancel") {
+		if (request.method !== "POST") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		return cancelPendingIntegrationRoute(request, env);
 	}
 	if (url.pathname === "/twitch/channels/oauth/start") {
 		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });

@@ -110,10 +110,10 @@ performs only declared identity-compatible upgrades before comparison.
 The remaining stages still do not:
 
 - seal realms against concurrent mutation;
-- change invitation activation or perform collision discovery;
+- perform collision discovery or choose state-resolution outcomes;
 - retain lifecycle snapshots or resolution audit records; or
 - migrate `fun.deaths` from its current integration-owned ledger.
 
 Resolution continues to pin generation 1 of the origin group's standalone realm
 or the active default integration's realm. The pending-integration lifecycle is
-the next stage that will orchestrate these protected primitives.
+implemented; pending relationships are not eligible effective realms.

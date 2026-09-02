@@ -3,7 +3,7 @@ import { env } from "cloudflare:test";
 import { commands } from "../src/platforms/discord/commands.js";
 import { CAPABILITIES } from "../src/platforms/discord/discord-permissions.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
   createIntegrationInvitation,
   defaultDiscordTwitchRoutes,
   getIntegrationDefaultLink,
@@ -12,7 +12,8 @@ import {
   listIntegrationAudit,
   resolveIntegrationRoutes,
   reserveIntegrationInvitation,
-  updateIntegrationRoute
+  updateIntegrationRoute,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
 
 const integrationEnv = {
@@ -57,12 +58,16 @@ async function activateIntegration({
     reservationId,
     reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
   });
-  const completion = await completeIntegrationInvitation(integrationEnv, {
+  await verifyIntegrationInvitation(integrationEnv, {
     invitationId: reservation.invitationId,
     reservationId,
     group: channel,
     actor: { platform: "twitch", id: channel.id, claims: ["twitch.broadcaster"] },
     groupLabel: uniqueId("channel")
+  });
+  const completion = await activatePendingIntegration(integrationEnv, {
+    invitationId: reservation.invitationId,
+    reservationId
   });
   return {
     group,

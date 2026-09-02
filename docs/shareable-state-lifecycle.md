@@ -10,7 +10,10 @@ Implementation progress: namespace declarations, standalone and integration
 realm persistence, and default-aware effective-realm resolution are
 implemented. Protected namespace snapshots, fingerprints, meaningful-state
 checks, comparisons, and fresh-realm cloning are also implemented. Linking
-collision handling, revocation successors, and feature migration remain staged.
+now persists Twitch verification, awaiting-resolution, cancellation, expiry,
+and idempotent activation as distinct states. Collision discovery, the
+resolution UI and finalizer orchestration, revocation successors, and feature
+migration remain staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -110,33 +113,42 @@ There is no feature-level fallback from a failed integration operation to a
 standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
 
-This resolution API is implemented, but the current active-link lifecycle
-predates collision discovery. Until the finalization stages land, maintainers
+This resolution API and the pending-link activation barrier are implemented,
+but collision discovery is not. Until the finalization stages land, maintainers
 must not migrate an existing production feature whose standalone or legacy
 integration data would need reconciliation. No installed feature uses the new
 service yet.
 
 ## Link lifecycle
 
-The link flow becomes a staged lifecycle:
+The implemented registry lifecycle is:
 
 ```text
 invited
   -> twitch_verified
-  -> discovering_state
-  -> awaiting_resolution (only when collisions exist)
-  -> finalizing
+  -> awaiting_state_resolution
   -> active
 ```
 
 `cancelled` and `expired` are terminal outcomes before activation. `revoking`
 and `revoked` apply after activation.
 
+The registry also uses `reserved` between `invited` and `twitch_verified` as an
+internal, single-use OAuth security substate. Future discovery and finalization
+may add finer-grained progress fields without weakening the externally visible
+activation barrier.
+
 Twitch verification proves control of the invited channel but does not by
 itself activate the integration. The reservation remains bound to the original
 Discord group, destination, authenticated Twitch group, environment, and
 single-use secret. Refreshing the browser or retrying a callback returns the
 same pending lifecycle record.
+
+The OAuth callback redirects to a stable pending page and places the opaque
+continuation in a Secure, HttpOnly, SameSite=Lax cookie. Page refresh is a
+read-only resume, so the consumed OAuth state is never submitted again. A
+verified pending record expires after 24 hours, and cancellation is a
+same-origin, idempotent operation.
 
 Only `active` relationships participate in default assignment, active lists,
 route resolution, integration-owned feature access, or group-wide revocation

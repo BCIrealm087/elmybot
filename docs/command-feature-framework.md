@@ -506,7 +506,10 @@ when groups link. Each step is intended to land and pass CI independently:
    feature-approved summary, compare compatible snapshots, and clone verified
    content into a fresh realm. These capabilities are deliberately absent from
    feature action contexts.
-6. **Introduce the pending-integration lifecycle.**
+6. **Introduce the pending-integration lifecycle — completed.** Twitch
+   verification creates a resumable `awaiting_state_resolution` record;
+   pending links can expire or be cancelled and become active only through the
+   idempotent protected activation operation.
 7. **Implement generic collision discovery.**
 8. **Add the collision-resolution page.**
 9. **Make finalization concurrency-safe and idempotent.**

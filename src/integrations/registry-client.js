@@ -56,8 +56,20 @@ export async function reserveIntegrationInvitation(env, input) {
   return postRegistry(env, "/invitations/reserve", input);
 }
 
-export async function completeIntegrationInvitation(env, input) {
-  return postRegistry(env, "/invitations/complete", input);
+export async function verifyIntegrationInvitation(env, input) {
+  return postRegistry(env, "/invitations/verify-twitch", input);
+}
+
+export async function resumePendingIntegration(env, input) {
+  return postRegistry(env, "/invitations/resume", input);
+}
+
+export async function cancelPendingIntegration(env, input) {
+  return postRegistry(env, "/invitations/cancel", input);
+}
+
+export async function activatePendingIntegration(env, input) {
+  return postRegistry(env, "/invitations/activate", input);
 }
 
 export async function listIntegrationsForGroup(env, group, { limit } = {}) {

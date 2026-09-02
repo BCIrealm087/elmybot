@@ -11,18 +11,22 @@ import {
   checkPermissions
 } from "../src/platforms/discord/discord-permissions.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
+  cancelPendingIntegration,
   createCommandInvocation,
   createIntegrationInvitation,
   getIntegrationDefaultLink,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
+  INTEGRATION_PENDING_TTL_MS,
   integrationRegistryStub,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
+  resumePendingIntegration,
   revokeIntegration,
   revokeIntegrationsForGroup,
-  setIntegrationDefaultLink
+  setIntegrationDefaultLink,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { initializeRegistryTables } from "../src/integrations/registry-schema.js";
@@ -86,14 +90,18 @@ async function prepareIntegration({
 }
 
 async function completePreparedIntegration(prepared) {
-  const completion = await completeIntegrationInvitation(integrationEnv, {
+  const verification = await verifyIntegrationInvitation(integrationEnv, {
     invitationId: prepared.reservation.invitationId,
     reservationId: prepared.reservation.reservationId,
     group: prepared.channel,
     actor: twitchActor(prepared.channel.id),
     groupLabel: prepared.login
   });
-  return { ...prepared, completion };
+  const completion = await activatePendingIntegration(integrationEnv, {
+    invitationId: prepared.reservation.invitationId,
+    reservationId: prepared.reservation.reservationId
+  });
+  return { ...prepared, verification, completion };
 }
 
 async function activateIntegration(options = {}) {
@@ -207,7 +215,7 @@ describe("Cross-platform integration linking", () => {
           "SELECT token_hash, status, expires_at_ms FROM integration_invitations"
         ).toArray();
         expect(rows).toHaveLength(1);
-        expect(rows[0].status).toBe("pending");
+        expect(rows[0].status).toBe("invited");
         expect(rows[0].token_hash).not.toBe(token);
         expect(JSON.stringify(rows)).not.toContain(token);
         expect(rows[0].expires_at_ms).toBeGreaterThan(
@@ -262,7 +270,7 @@ describe("Cross-platform integration linking", () => {
     expect(await replay.response.text()).toContain("already been used");
   });
 
-  it("derives the broadcaster through OAuth and activates a discoverable link", async () => {
+  it("derives the broadcaster, persists a resumable pending link, then activates it", async () => {
     const group = discordGroup();
     const actor = discordActor();
     const invitation = await createIntegrationInvitation(integrationEnv, {
@@ -302,11 +310,47 @@ describe("Cross-platform integration linking", () => {
       integrationEnv,
       createExecutionContext()
     );
-    const html = await response.text();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/twitch/integrations/pending");
+    const resumeCookie = response.headers.get("set-cookie")?.split(";")[0];
+    expect(resumeCookie).toMatch(/^elmybot_integration_resume=.+/);
 
-    expect(response.status).toBe(200);
-    expect(html).toContain("Twitch and Discord are linked");
-    expect(html).toContain("linked_channel");
+    const pendingRequest = () => worker.fetch(
+      new Request("https://example.com/twitch/integrations/pending", {
+        headers: { cookie: resumeCookie }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    const pendingPage = await pendingRequest();
+    const pendingHtml = await pendingPage.text();
+    expect(pendingPage.status).toBe(200);
+    expect(pendingHtml).toContain("State review is next");
+    expect(pendingHtml).toContain("linked_channel");
+    expect(pendingHtml).toContain("not active yet");
+
+    const refreshedPage = await pendingRequest();
+    expect(refreshedPage.status).toBe(200);
+    expect(await refreshedPage.text()).toContain("State review is next");
+    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
+
+    const resumed = await resumePendingIntegration(integrationEnv, {
+      reservationId: state
+    });
+    expect(resumed.pendingIntegration).toMatchObject({
+      invitationId: invitation.invitationId,
+      status: "awaiting_state_resolution",
+      twitchLabel: "linked_channel"
+    });
+    const activated = await activatePendingIntegration(integrationEnv, {
+      invitationId: invitation.invitationId,
+      reservationId: state
+    });
+    expect(activated).toMatchObject({ replayed: false });
+
+    const completedPage = await pendingRequest();
+    expect(completedPage.status).toBe(200);
+    expect(await completedPage.text()).toContain("Twitch and Discord are linked");
 
     const listed = await listIntegrationsForGroup(integrationEnv, group);
     expect(listed.total).toBe(1);
@@ -360,7 +404,7 @@ describe("Cross-platform integration linking", () => {
     });
     const channel = twitchGroup();
 
-    await expect(completeIntegrationInvitation(integrationEnv, {
+    await expect(verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
@@ -370,22 +414,117 @@ describe("Cross-platform integration linking", () => {
       code: "integration_twitch_broadcaster_required"
     });
 
-    const completion = await completeIntegrationInvitation(integrationEnv, {
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
       actor: twitchActor(channel.id)
     });
-    expect(completion.integration.status).toBe("active");
+    expect(verification.pendingIntegration.status)
+      .toBe("awaiting_state_resolution");
+    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
 
-    const replayed = await completeIntegrationInvitation(integrationEnv, {
+    const replayed = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
       actor: twitchActor(channel.id)
     });
     expect(replayed.replayed).toBe(true);
-    expect(replayed.integration.id).toBe(completion.integration.id);
+    expect(replayed.pendingIntegration.integrationId)
+      .toBe(verification.pendingIntegration.integrationId);
+
+    const completion = await activatePendingIntegration(integrationEnv, {
+      invitationId: reservation.invitationId,
+      reservationId
+    });
+    expect(completion.integration.status).toBe("active");
+    const activationReplay = await activatePendingIntegration(integrationEnv, {
+      invitationId: reservation.invitationId,
+      reservationId
+    });
+    expect(activationReplay.replayed).toBe(true);
+    expect(activationReplay.integration.id).toBe(completion.integration.id);
+  });
+
+  it("cancels a verified pending link idempotently without creating an integration", async () => {
+    const prepared = await prepareIntegration();
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId,
+      group: prepared.channel,
+      actor: twitchActor(prepared.channel.id),
+      groupLabel: prepared.login
+    });
+    const cookie = `elmybot_integration_resume=${prepared.reservation.reservationId}`;
+
+    const crossOrigin = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/cancel", {
+        method: "POST",
+        headers: { cookie, origin: "https://attacker.example" }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(crossOrigin.status).toBe(403);
+
+    const cancelledPage = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/cancel", {
+        method: "POST",
+        headers: { cookie, origin: "https://example.com" }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(cancelledPage.status).toBe(200);
+    expect(await cancelledPage.text()).toContain("No integration was created");
+
+    const cancelled = await cancelPendingIntegration(integrationEnv, {
+      reservationId: prepared.reservation.reservationId
+    });
+    expect(cancelled.pendingIntegration.status).toBe("cancelled");
+    expect(cancelled.pendingIntegration.integrationId)
+      .toBe(verification.pendingIntegration.integrationId);
+    expect((await listIntegrationsForGroup(integrationEnv, prepared.group)).total)
+      .toBe(0);
+
+    const refreshed = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/pending", {
+        headers: { cookie }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.text()).toContain("No integration was created");
+  });
+
+  it("expires verified pending links after the resolution window", async () => {
+    const prepared = await prepareIntegration();
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId,
+      group: prepared.channel,
+      actor: twitchActor(prepared.channel.id)
+    });
+    expect(verification.pendingIntegration.expiresAtMs).toBeGreaterThanOrEqual(
+      Date.now() + INTEGRATION_PENDING_TTL_MS - 1_000
+    );
+    vi.spyOn(Date, "now").mockReturnValue(
+      verification.pendingIntegration.expiresAtMs + 1
+    );
+
+    const resumed = await resumePendingIntegration(integrationEnv, {
+      reservationId: prepared.reservation.reservationId
+    });
+    expect(resumed.pendingIntegration.status).toBe("expired");
+    await expect(activatePendingIntegration(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId
+    })).rejects.toMatchObject({
+      status: 410,
+      code: "integration_pending_expired"
+    });
   });
 
   it("rejects invitations after their short-lived expiry", async () => {

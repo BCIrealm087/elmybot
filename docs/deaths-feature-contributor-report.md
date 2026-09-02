@@ -1033,3 +1033,40 @@ small, teachable ambiguity rule rather than adding platform-specific parsing.
 Local verification passed all 21 test files and 250 tests. ESLint, the public
 feature-boundary check, workspace-package validation, generated-catalog
 freshness, and the whitespace/error-marker check also passed.
+
+## Shareable-state Step 6: pending integration lifecycle
+
+The link flow no longer turns a successful Twitch OAuth callback directly into
+an active relationship. The registry now records the invitation, its internal
+single-use OAuth reservation, Twitch verification, and
+`awaiting_state_resolution` as distinct durable stages. Cancellation and expiry
+are terminal, while a protected activation operation materializes members,
+routes, and directional defaults exactly once after resolution infrastructure
+authorizes it. Existing active integrations are unchanged.
+
+The browser callback now redirects to a stable pending page with an opaque
+continuation held in a Secure, HttpOnly, SameSite=Lax cookie. Refreshing the
+page reads the existing pending record and never resubmits the consumed OAuth
+state. A same-origin POST cancels the pending link idempotently, and verified
+links expire after a separate 24-hour resolution window. Temporary registry
+failures continue to use the channel authorization object's alarm retry.
+
+**Assessment:** this is appropriately framework-owned work and would be
+unreasonable to ask of a hobby contributor implementing a command. The
+complexity comes from identity binding, terminal-state retention, alarm-based
+expiry, replay safety, and keeping routes/defaults behind a strict activation
+barrier. The benefit to future contributors is substantial: a shareable command
+will eventually declare its state namespace and rely on one generic linking
+workflow rather than implement OAuth, migration, or lifecycle recovery itself.
+
+The main staged-development cost is visible: Step 6 intentionally leaves new
+links at `awaiting_state_resolution` until Steps 7–9 provide discovery, user
+choices, and safe finalization. That boundary is documented prominently so an
+operator does not mistake this intermediate branch for a complete public
+linking release.
+
+Focused lifecycle and integration suites passed 4 files and 43 tests. The
+complete local suite passed 23 files and 271 tests. ESLint, public API boundary
+checks, workspace-package validation, generated-document freshness, tracked
+JavaScript syntax checks, and the whitespace check also passed. The Worker dry
+run remains delegated to GitHub Actions.
