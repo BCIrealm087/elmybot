@@ -53,6 +53,13 @@ surface consists of:
 - Twitch authoring helpers: `twitchActionCommand`, `twitchNativeCommand`,
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
+`defineFeature()` accepts optional, declarative `shareableState` namespace
+metadata. Omission normalizes to a frozen empty array, preserving every existing
+v1 definition. Declarations contain stable IDs, labels, schema compatibility,
+safe collision-summary policy, and bounded limits; they are metadata only in
+the current stage and expose no state service or migration capability. This is
+the compatible addition of an optional manifest field with a stable default.
+
 Actions may explicitly request the controlled `authorization`, `config`,
 `integrationState`, `links`, `state`, and `random` context services.
 `authorization` delegates conditional

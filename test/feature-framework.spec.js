@@ -43,6 +43,7 @@ function feature({
   routes = [],
   events = [],
   schedules = [],
+  shareableState = [],
   discord = [],
   twitch = []
 } = {}) {
@@ -54,6 +55,7 @@ function feature({
     routes,
     events,
     schedules,
+    shareableState,
     commands: { discord, twitch }
   });
 }
@@ -87,6 +89,7 @@ describe("Command and feature framework", () => {
       routes: [],
       events: [],
       schedules: [],
+      shareableState: [],
       effectAdapters: { discord: [], twitch: [] }
     });
     expect(Object.isFrozen(definition)).toBe(true);
@@ -95,6 +98,118 @@ describe("Command and feature framework", () => {
     expect(() => {
       definition.commands.discord[0].name = "changed";
     }).toThrow(TypeError);
+  });
+
+  it("normalizes and deeply freezes declarative shareable-state metadata", () => {
+    const definition = defineFeature({
+      apiVersion: frameworkApiVersion,
+      id: "fun.score",
+      description: "Tracks one shareable score.",
+      shareableState: [
+        {
+          id: "score",
+          label: "  Shared score  ",
+          schemaVersion: 2,
+          compatibleVersions: [2, 1],
+          collisionSummary: { kind: "entry_count" },
+          limits: { maxEntries: 4, maxValueBytes: 256 }
+        }
+      ]
+    });
+
+    expect(definition.shareableState).toEqual([
+      {
+        id: "score",
+        label: "Shared score",
+        schemaVersion: 2,
+        compatibleVersions: [1, 2],
+        collisionSummary: { kind: "entry_count" },
+        limits: { maxEntries: 4, maxValueBytes: 256 }
+      }
+    ]);
+    expect(Object.isFrozen(definition.shareableState)).toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0])).toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].compatibleVersions))
+      .toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].collisionSummary))
+      .toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].limits)).toBe(true);
+
+    const defaults = defineFeature({
+      apiVersion: frameworkApiVersion,
+      id: "fun.default-score",
+      description: "Uses safe shareable-state defaults.",
+      shareableState: [{
+        id: "score",
+        label: "Shared score",
+        schemaVersion: 1
+      }]
+    });
+    expect(defaults.shareableState[0]).toEqual({
+      id: "score",
+      label: "Shared score",
+      schemaVersion: 1,
+      compatibleVersions: [1],
+      collisionSummary: { kind: "presence" },
+      limits: { maxEntries: 100, maxValueBytes: 16_384 }
+    });
+  });
+
+  it("rejects invalid or ambiguous shareable-state metadata", () => {
+    const base = {
+      apiVersion: frameworkApiVersion,
+      id: "fun.score",
+      description: "Tracks one shareable score."
+    };
+    const invalidDeclarations = [
+      { shareableState: {} },
+      { shareableState: [{ id: "Score", label: "Score", schemaVersion: 1 }] },
+      { shareableState: [{ id: "score", label: "", schemaVersion: 1 }] },
+      { shareableState: [{ id: "score", label: "Score", schemaVersion: 0 }] },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 2,
+          compatibleVersions: [1]
+        }]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          collisionSummary: { kind: "raw_values" }
+        }]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          limits: { maxEntries: 101 }
+        }]
+      },
+      {
+        shareableState: [
+          { id: "score", label: "Score", schemaVersion: 1 },
+          { id: "score", label: "Other score", schemaVersion: 1 }
+        ]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          migration: "copy"
+        }]
+      }
+    ];
+
+    for (const declaration of invalidDeclarations) {
+      expect(() => defineFeature({ ...base, ...declaration }))
+        .toThrow(FeatureDefinitionError);
+    }
   });
 
   it("rejects unsupported versions, invalid IDs, unknown fields, and bad collections", () => {

@@ -8,6 +8,14 @@ const FEATURE_ID_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
 const MAX_FEATURE_ID_LENGTH = 100;
 const MAX_FEATURE_DESCRIPTION_LENGTH = 200;
+const SHAREABLE_NAMESPACE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const MAX_SHAREABLE_NAMESPACES = 20;
+const MAX_SHAREABLE_LABEL_LENGTH = 80;
+const MAX_SHAREABLE_SCHEMA_VERSION = 1_000_000;
+const MAX_SHAREABLE_COMPATIBLE_VERSIONS = 20;
+const MAX_SHAREABLE_ENTRIES = 100;
+const MAX_SHAREABLE_VALUE_BYTES = 16 * 1024;
+const SHAREABLE_SUMMARY_KINDS = new Set(["presence", "entry_count"]);
 const TOP_LEVEL_FIELDS = new Set([
   "apiVersion",
   "id",
@@ -17,6 +25,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "routes",
   "events",
   "schedules",
+  "shareableState",
   "effectAdapters"
 ]);
 const SUPPORTED_PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -108,6 +117,137 @@ function platformCollections(value, path) {
   ])));
 }
 
+function onlyFields(value, allowed, path) {
+  const unknown = Object.keys(value).find((field) => !allowed.has(field));
+  if (unknown) fail(`${path}.${unknown}`, "is not a supported field.");
+}
+
+function positiveInteger(value, path, maximum) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    fail(path, `must be an integer between 1 and ${maximum}.`);
+  }
+  return value;
+}
+
+function hasControlCharacters(value) {
+  return Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0);
+    return codePoint <= 31 || codePoint === 127;
+  });
+}
+
+function compatibleVersions(value, schemaVersion, path) {
+  if (value === undefined) return Object.freeze([schemaVersion]);
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_SHAREABLE_COMPATIBLE_VERSIONS
+  ) {
+    fail(
+      path,
+      `must contain between 1 and ${MAX_SHAREABLE_COMPATIBLE_VERSIONS} versions.`
+    );
+  }
+  const normalized = value.map((version, index) =>
+    positiveInteger(version, `${path}[${index}]`, schemaVersion)
+  );
+  if (new Set(normalized).size !== normalized.length) {
+    fail(path, "must not contain duplicate versions.");
+  }
+  if (!normalized.includes(schemaVersion)) {
+    fail(path, "must include the current schemaVersion.");
+  }
+  return Object.freeze(normalized.sort((left, right) => left - right));
+}
+
+function collisionSummary(value, path) {
+  if (value === undefined) value = {};
+  requirePlainObject(value, path);
+  onlyFields(value, new Set(["kind"]), path);
+  const kind = value.kind ?? "presence";
+  if (!SHAREABLE_SUMMARY_KINDS.has(kind)) {
+    fail(`${path}.kind`, "is invalid.");
+  }
+  return Object.freeze({ kind });
+}
+
+function shareableLimits(value, path) {
+  if (value === undefined) value = {};
+  requirePlainObject(value, path);
+  onlyFields(value, new Set(["maxEntries", "maxValueBytes"]), path);
+  return Object.freeze({
+    maxEntries: positiveInteger(
+      value.maxEntries ?? MAX_SHAREABLE_ENTRIES,
+      `${path}.maxEntries`,
+      MAX_SHAREABLE_ENTRIES
+    ),
+    maxValueBytes: positiveInteger(
+      value.maxValueBytes ?? MAX_SHAREABLE_VALUE_BYTES,
+      `${path}.maxValueBytes`,
+      MAX_SHAREABLE_VALUE_BYTES
+    )
+  });
+}
+
+function shareableState(value) {
+  const path = "Feature definition.shareableState";
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_SHAREABLE_NAMESPACES) {
+    fail(path, `must be an array of at most ${MAX_SHAREABLE_NAMESPACES} entries.`);
+  }
+  const ids = new Set();
+  const namespaces = value.map((entry, index) => {
+    const entryPath = `${path}[${index}]`;
+    requirePlainObject(entry, entryPath);
+    onlyFields(entry, new Set([
+      "id",
+      "label",
+      "schemaVersion",
+      "compatibleVersions",
+      "collisionSummary",
+      "limits"
+    ]), entryPath);
+    if (
+      typeof entry.id !== "string" ||
+      !SHAREABLE_NAMESPACE_ID_PATTERN.test(entry.id)
+    ) {
+      fail(`${entryPath}.id`, "is invalid.");
+    }
+    if (ids.has(entry.id)) fail(`${entryPath}.id`, "must be unique.");
+    ids.add(entry.id);
+    const label = typeof entry.label === "string" ? entry.label.trim() : "";
+    if (
+      typeof entry.label !== "string" ||
+      label.length === 0 ||
+      label.length > MAX_SHAREABLE_LABEL_LENGTH ||
+      hasControlCharacters(entry.label)
+    ) {
+      fail(`${entryPath}.label`, "is invalid.");
+    }
+    const schemaVersion = positiveInteger(
+      entry.schemaVersion,
+      `${entryPath}.schemaVersion`,
+      MAX_SHAREABLE_SCHEMA_VERSION
+    );
+    return Object.freeze({
+      id: entry.id,
+      label,
+      schemaVersion,
+      compatibleVersions: compatibleVersions(
+        entry.compatibleVersions,
+        schemaVersion,
+        `${entryPath}.compatibleVersions`
+      ),
+      collisionSummary: collisionSummary(
+        entry.collisionSummary,
+        `${entryPath}.collisionSummary`
+      ),
+      limits: shareableLimits(entry.limits, `${entryPath}.limits`)
+    });
+  });
+  return Object.freeze(namespaces);
+}
+
 export function defineFeature(input) {
   requirePlainObject(input, "Feature definition");
   for (const field of Object.keys(input)) {
@@ -152,6 +292,7 @@ export function defineFeature(input) {
     routes: definitionArray(input.routes, "Feature definition.routes"),
     events: definitionArray(input.events, "Feature definition.events"),
     schedules: definitionArray(input.schedules, "Feature definition.schedules"),
+    shareableState: shareableState(input.shareableState),
     effectAdapters: platformCollections(
       input.effectAdapters,
       "Feature definition.effectAdapters"

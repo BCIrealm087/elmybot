@@ -485,7 +485,10 @@ when groups link. Each step is intended to land and pass CI independently:
    discovery, collision outcomes, concurrency seals, directional defaults,
    cancellation, revocation successors, relinking, recovery, privacy, and
    compatibility before adding storage APIs.
-2. **Add declarative shareable-state metadata.**
+2. **Add declarative shareable-state metadata — completed.** Features may now
+   declare frozen namespace IDs, labels, schema compatibility, safe collision
+   summaries, and bounded limits. The metadata appears in the generated catalog
+   but remains inert until the realm and resolution stages.
 3. **Implement standalone shareable-state realms.**
 4. **Add effective-state resolution.**
 5. **Add snapshot, fingerprint, and cloning primitives.**

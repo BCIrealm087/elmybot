@@ -108,6 +108,18 @@ export function generateFeatureCatalogMarkdown(
     feature.commands.discord.length,
     feature.commands.twitch.length
   ]);
+  const shareableStateRows = registry.features.flatMap((feature) =>
+    feature.shareableState.map((namespace) => [
+      feature.id,
+      `\`${namespace.id}\``,
+      namespace.label,
+      namespace.schemaVersion,
+      namespace.compatibleVersions.join(", "),
+      namespace.collisionSummary.kind,
+      `${namespace.limits.maxEntries} entries; ` +
+        `${namespace.limits.maxValueBytes} bytes/value`
+    ])
+  );
   const workspaceRows = workspacePackages.map((workspacePackage) => [
     `\`${workspacePackage.packageName}\``,
     `\`${workspacePackage.featureId}\``,
@@ -173,6 +185,20 @@ export function generateFeatureCatalogMarkdown(
         "Twitch commands"
       ],
       featureRows
+    ),
+    "## Shareable state declarations",
+    "",
+    table(
+      [
+        "Feature",
+        "Namespace",
+        "Label",
+        "Schema",
+        "Compatible schemas",
+        "Collision summary",
+        "Limits"
+      ],
+      shareableStateRows
     ),
     "## Workspace packages",
     "",

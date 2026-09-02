@@ -484,6 +484,38 @@ integration-owned or shared. It can be passed to the separately declared
 [state-ownership decision](feature-state.md#choose-the-state-boundary-first)
 before storing data that both sides must mutate.
 
+## Declare a future shareable-state namespace
+
+The staged shareable-state initiative adds inert manifest metadata before it
+adds storage behavior. Maintainer-led infrastructure work may declare a future
+namespace as follows:
+
+```js
+defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "fun.score",
+  description: "Tracks a score.",
+  shareableState: [{
+    id: "score",
+    label: "Shared score",
+    schemaVersion: 1,
+    collisionSummary: { kind: "presence" }
+  }]
+});
+```
+
+Omitted compatibility, summary, and limits normalize to `[schemaVersion]`,
+`presence`, 100 entries, and 16 KiB per value. `entry_count` is the only other
+summary policy. Neither policy can render stored keys or values.
+
+This declaration currently changes only validation and generated documentation.
+It does not add a context service, reclassify `ctx.state`, inspect an integration
+ledger, or make an unlinked command work. Feature contributors should continue
+using the implemented ownership guidance below until the later realm service is
+available. See the
+[`shareable-state lifecycle contract`](shareable-state-lifecycle.md) for the
+staged behavior and constraints.
+
 ## Cookbook 6: stateful command
 
 First use the [state-ownership decision](feature-state.md#choose-the-state-boundary-first).

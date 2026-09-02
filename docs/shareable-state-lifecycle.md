@@ -292,16 +292,34 @@ silently becomes writable or active again.
 
 ## Namespace declarations and versioning requirements
 
-The next design step must add validated feature metadata sufficient to identify
-shareable namespaces without loading feature code into migration infrastructure.
-At minimum, each declaration must provide:
+`defineFeature()` now accepts validated, inert `shareableState` metadata:
 
-- stable feature and namespace IDs;
-- a positive schema version;
-- a bounded user-facing label;
-- compatibility and migration information for supported prior versions;
-- a bounded, nonsecret collision-summary policy; and
-- storage limits no weaker than current feature-state limits.
+```js
+shareableState: [{
+  id: "game_deaths",
+  label: "Per-game death counts",
+  schemaVersion: 1,
+  compatibleVersions: [1],
+  collisionSummary: { kind: "entry_count" },
+  limits: { maxEntries: 100, maxValueBytes: 16_384 }
+}]
+```
+
+The declaration is scoped by feature ID. Namespace IDs are stable storage and
+resolution identities; labels are bounded presentation text. Schema versions
+are positive integers. `compatibleVersions` identifies representations that
+can be consumed and identity-upgraded without running feature code, and always
+includes the current version. A nonidentity migration mechanism remains
+deferred until the snapshot stage.
+
+Collision summaries are limited to `presence` and `entry_count`. Neither policy
+may render stored keys or values. Limits can only narrow the current framework
+caps of 100 entries and 16 KiB per value. Definitions omit the field entirely
+or declare at most 20 unique namespaces, and every normalized object is frozen.
+
+This metadata does not yet create a realm, expose a state service, inspect
+existing storage, or change link activation. It gives later infrastructure a
+safe catalog to enumerate without loading feature code into migration logic.
 
 The framework may copy an opaque canonical snapshot, but it must enumerate only
 declared shareable namespaces. It must never infer shareability from ordinary

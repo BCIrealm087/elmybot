@@ -18,6 +18,10 @@ Framework API: v1.
 | `twitch.stream-online` | repository-local | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 |
 | `integrations.scheduled-twitch-announcements` | repository-local | Schedules recurring announcements to linked Twitch chats. | 0 | 1 | 0 |
 
+## Shareable state declarations
+
+_None._
+
 ## Workspace packages
 
 | Package | Feature | Installed by Worker |

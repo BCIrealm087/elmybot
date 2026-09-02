@@ -115,6 +115,7 @@ defineFeature({
   routes: [],
   events: [],
   schedules: [],
+  shareableState: [],
   effectAdapters: {
     discord: [],
     twitch: []
@@ -132,6 +133,51 @@ functions are retained by reference and are never serialized.
 
 `effectAdapters` is an advanced, platform-owned extension point. Ordinary
 command features SHOULD use already registered effect factories.
+
+### Shareable-state declarations
+
+`shareableState` is optional, defaults to a frozen empty array, and is inert in
+the current framework stage. It declares state that later realm and linking
+infrastructure may enumerate; it does not create storage, change action context,
+or make an existing `ctx.state` or `integrationState` value shareable.
+
+```js
+shareableState: [{
+  id: "game_deaths",
+  label: "Per-game death counts",
+  schemaVersion: 2,
+  compatibleVersions: [1, 2],
+  collisionSummary: { kind: "entry_count" },
+  limits: {
+    maxEntries: 100,
+    maxValueBytes: 16_384
+  }
+}]
+```
+
+Requirements:
+
+- A feature declares at most 20 namespaces. IDs are unique within the feature
+  and match `^[a-z][a-z0-9_-]{0,63}$`.
+- `label` is trimmed, contains no control characters, and has 1–80 characters.
+- `schemaVersion` is a positive integer no greater than 1,000,000.
+- `compatibleVersions` contains 1–20 unique positive versions no newer than
+  `schemaVersion`, must include the current version, and normalizes into
+  ascending order. Omission means only the current version is compatible.
+- Compatibility means an older canonical representation can be consumed and
+  identity-upgraded without a feature-specific transformation. Nonidentity
+  migration declarations are deferred until snapshot infrastructure exists.
+- `collisionSummary.kind` is `presence` or `entry_count`; omission defaults to
+  `presence`. Arbitrary summary callbacks and raw-value rendering are rejected.
+- `limits.maxEntries` is 1–100 and defaults to 100.
+  `limits.maxValueBytes` is 1–16,384 and defaults to 16,384.
+- Unknown fields are rejected, and all normalized declarations and nested
+  objects are frozen.
+
+The generated feature catalog exposes only this bounded metadata. It never
+contains stored values. See the staged
+[`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
+for the ownership and collision semantics these declarations will support.
 
 ## Installation and composition
 
