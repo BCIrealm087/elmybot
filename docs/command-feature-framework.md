@@ -514,7 +514,12 @@ when groups link. Each step is intended to land and pass CI independently:
    the declared namespaces in each member's current effective realm and persist
    safe summaries, fingerprints, versions, automatic selections, and genuine
    collisions. Feature keys and values never enter registry or browser data.
-8. **Add the collision-resolution page.**
+8. **Add the collision-resolution page — completed.** The OAuth-verified
+   broadcaster sees only genuinely colliding namespaces and declaration-safe
+   summaries, can choose Discord, Twitch, or reset per namespace, can apply one
+   choice to all, and can cancel without modifying either candidate realm.
+   Submitted choices are bound immutably to the discovery revision for the
+   Step 9 finalizer.
 9. **Make finalization concurrency-safe and idempotent.**
 10. **Implement revocation and standalone continuation.**
 11. **Add lifecycle, security, concurrency, and many-link tests.**

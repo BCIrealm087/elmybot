@@ -1110,3 +1110,45 @@ suite passed 24 files and 275 tests. ESLint, public API boundary checks,
 workspace-package validation, generated-document freshness, tracked JavaScript
 syntax checks, and the whitespace check also passed. The Worker dry run remains
 delegated to GitHub Actions.
+
+## Shareable-state Step 8: collision-resolution page
+
+The resumable Twitch handoff now turns Step 7's safe collision metadata into a
+concrete decision page. It groups colliding namespaces by feature, shows only
+the declared presence or entry-count summaries, and offers Discord, Twitch, or
+reset for each namespace. Three apply-to-all buttons fill the same ordinary
+radio controls, so they are a convenience rather than a second resolution
+mechanism. Cancelling remains available alongside the decision form.
+
+The browser submits only indexed choices and the discovery version. The server
+maps those indexes back to its current namespace inventory, ignores injected
+feature identifiers, and requires the HTTP-only continuation cookie plus an
+exact same-origin POST. Labels are escaped, unrecognized summary structures
+fall back to generic wording, and neither candidate keys nor values enter the
+HTML or resolution request.
+
+The registry stores one immutable resolution per discovery revision. Its rows
+include every namespace selection and identify whether policy or the Twitch
+broadcaster chose it. An identical replay returns the original result; a
+different replay is rejected and one audit event records the verified Twitch
+actor. A later discovery revision can receive a new resolution, leaving Step 9
+free to detect state changes and ask again instead of applying stale intent.
+
+**Assessment:** this page is an appropriate amount of product complexity for
+the person linking platforms, but none of it belongs in a hobby contributor's
+command. A feature author supplies a stable namespace, a short label, and one
+of two bounded summary policies. The framework handles OAuth continuity,
+HTML/CSP concerns, CSRF resistance, exact-choice validation, replay behavior,
+and lifecycle persistence. The visible tradeoff is deliberately cautious:
+there are no feature-authored merge callbacks, so a contributor cannot offer a
+clever automatic merge without a separate framework design review.
+
+The first focused run exposed two test-harness assumptions rather than product
+defects: the HTML assertion also counted a selector embedded in the page script,
+and the isolated route environment needed the complete Twitch environment
+identity used by origin validation. Tightening those fixtures produced a clean
+focused result of 3 files and 31 tests. The complete local suite passed 25 files
+and 277 tests. ESLint, public API boundary checks, workspace-package
+validation, generated-document freshness, tracked JavaScript syntax checks,
+and the whitespace check also passed. The non-deploying Worker dry run remains
+delegated to GitHub Actions.

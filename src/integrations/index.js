@@ -30,6 +30,7 @@ export {
   listIntegrationsForGroup,
   listIntegrationAudit,
   reserveIntegrationInvitation,
+  resolvePendingIntegrationState,
   resumePendingIntegration,
   revokeIntegration,
   revokeIntegrationsForGroup,

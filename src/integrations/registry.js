@@ -41,6 +41,7 @@ export {
   listIntegrationAudit,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
+  resolvePendingIntegrationState,
   resumePendingIntegration,
   resolveIntegrationRoutes,
   revokeIntegration,
@@ -60,11 +61,53 @@ const REGISTRY_MAINTENANCE_BATCH_SIZE = 50;
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 25;
 const MAX_ROUTE_FANOUT = 25;
+const MAX_PENDING_STATE_SELECTIONS = 500;
+const PENDING_STATE_SELECTIONS = new Set(["discord", "twitch", "reset"]);
 
 function noStoreJson(value, status = 200) {
   const response = jsonResponse(value, status);
   response.headers.set("cache-control", "no-store");
   return response;
+}
+
+function validatedDiscoveryVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new IntegrationRegistryError(
+      "The shareable-state discovery version is invalid.",
+      { code: "integration_state_resolution_invalid" }
+    );
+  }
+  return value;
+}
+
+function validatedStateSelections(value) {
+  if (!Array.isArray(value) || value.length > MAX_PENDING_STATE_SELECTIONS) {
+    throw new IntegrationRegistryError(
+      "The shareable-state resolution choices are invalid.",
+      { code: "integration_state_resolution_invalid" }
+    );
+  }
+  return value.map((selection) => {
+    if (
+      typeof selection?.featureId !== "string" ||
+      selection.featureId.length < 1 ||
+      selection.featureId.length > 200 ||
+      typeof selection?.namespaceId !== "string" ||
+      selection.namespaceId.length < 1 ||
+      selection.namespaceId.length > 200 ||
+      !PENDING_STATE_SELECTIONS.has(selection?.selection)
+    ) {
+      throw new IntegrationRegistryError(
+        "The shareable-state resolution choices are invalid.",
+        { code: "integration_state_resolution_invalid" }
+      );
+    }
+    return {
+      featureId: selection.featureId,
+      namespaceId: selection.namespaceId,
+      selection: selection.selection
+    };
+  });
 }
 
 export class IntegrationRegistry {
@@ -745,7 +788,8 @@ export class IntegrationRegistry {
       awaitingStateResolutionAtMs: row.awaiting_resolution_at_ms ?? null,
       cancelledAtMs: row.cancelled_at_ms ?? null,
       activatedAtMs: row.activated_at_ms ?? null,
-      stateDiscovery: this.publicPendingDiscovery(row.invitation_id)
+      stateDiscovery: this.publicPendingDiscovery(row.invitation_id),
+      stateResolution: this.publicPendingResolution(row.invitation_id)
     };
   }
 
@@ -790,6 +834,48 @@ export class IntegrationRegistry {
       requiresResolution: Boolean(discovery.requires_resolution),
       namespaces
     };
+  }
+
+  publicPendingResolution(invitationId) {
+    const discovery = this.latestPendingDiscovery(invitationId);
+    if (!discovery) return null;
+    const resolution = this.state.storage.sql.exec(
+      `SELECT invitation_id, discovery_version, resolved_at_ms
+       FROM integration_pending_resolutions
+       WHERE invitation_id = ? AND discovery_version = ?`,
+      invitationId,
+      discovery.discovery_version
+    ).toArray()[0];
+    if (!resolution) return null;
+    const selections = this.state.storage.sql.exec(
+      `SELECT feature_id, namespace_id, selection, selection_source
+       FROM integration_pending_namespace_resolutions
+       WHERE invitation_id = ? AND discovery_version = ?
+       ORDER BY feature_id, namespace_id`,
+      invitationId,
+      resolution.discovery_version
+    ).toArray().map((row) => ({
+      featureId: row.feature_id,
+      namespaceId: row.namespace_id,
+      selection: row.selection,
+      source: row.selection_source
+    }));
+    return {
+      discoveryVersion: resolution.discovery_version,
+      resolvedAtMs: resolution.resolved_at_ms,
+      selections
+    };
+  }
+
+  pendingNamespaceDiscoveries(invitationId, discoveryVersion) {
+    return this.state.storage.sql.exec(
+      `SELECT feature_id, namespace_id, outcome, automatic_selection
+       FROM integration_pending_namespace_discoveries
+       WHERE invitation_id = ? AND discovery_version = ?
+       ORDER BY feature_id, namespace_id`,
+      invitationId,
+      discoveryVersion
+    ).toArray();
   }
 
   effectiveCandidateRealm(group, targetPlatform) {
@@ -1236,6 +1322,171 @@ export class IntegrationRegistry {
     });
     await this.armNextExpiration();
     return { pendingIntegration };
+  }
+
+  async resolveInvitationState(input) {
+    const reservationId = validatedOpaqueId(
+      input?.reservationId,
+      "Integration continuation ID"
+    );
+    const discoveryVersion = validatedDiscoveryVersion(input?.discoveryVersion);
+    const requestedSelections = validatedStateSelections(input?.selections);
+    const requestedByKey = new Map();
+    for (const selection of requestedSelections) {
+      const key = `${selection.featureId}\u0000${selection.namespaceId}`;
+      if (requestedByKey.has(key)) {
+        throw new IntegrationRegistryError(
+          "Each colliding namespace must have exactly one resolution choice.",
+          { status: 422, code: "integration_state_resolution_incomplete" }
+        );
+      }
+      requestedByKey.set(key, selection.selection);
+    }
+
+    const nowMs = Date.now();
+    const result = this.state.storage.transactionSync(() => {
+      const row = this.pendingInvitationByReservation(reservationId);
+      if (!row) {
+        throw new IntegrationRegistryError(
+          "The integration continuation is invalid or unavailable.",
+          { status: 404, code: "integration_pending_not_found" }
+        );
+      }
+      if (
+        row.pending_status === "awaiting_state_resolution" &&
+        row.pending_expires_at_ms <= nowMs
+      ) {
+        this.expirePendingRow(row, nowMs);
+        return { expired: true };
+      }
+      const discovery = this.latestPendingDiscovery(row.invitation_id);
+      if (!discovery || discovery.discovery_version !== discoveryVersion) {
+        throw new IntegrationRegistryError(
+          "Shareable state changed while the resolution page was open.",
+          { status: 409, code: "integration_state_resolution_stale" }
+        );
+      }
+      const namespaces = this.pendingNamespaceDiscoveries(
+        row.invitation_id,
+        discoveryVersion
+      );
+      const collisions = namespaces.filter((namespace) =>
+        namespace.outcome === "collision"
+      );
+      if (collisions.length === 0) {
+        throw new IntegrationRegistryError(
+          "This pending integration has no state collisions to resolve.",
+          { status: 409, code: "integration_state_resolution_not_required" }
+        );
+      }
+      const expectedKeys = new Set(collisions.map((namespace) =>
+        `${namespace.feature_id}\u0000${namespace.namespace_id}`
+      ));
+      if (
+        requestedByKey.size !== expectedKeys.size ||
+        [...requestedByKey.keys()].some((key) => !expectedKeys.has(key))
+      ) {
+        throw new IntegrationRegistryError(
+          "Every colliding namespace requires one resolution choice.",
+          { status: 422, code: "integration_state_resolution_incomplete" }
+        );
+      }
+
+      const existing = this.state.storage.sql.exec(
+        `SELECT resolved_at_ms
+         FROM integration_pending_resolutions
+         WHERE invitation_id = ? AND discovery_version = ?`,
+        row.invitation_id,
+        discoveryVersion
+      ).toArray()[0];
+      if (existing) {
+        const stored = this.publicPendingResolution(row.invitation_id);
+        const storedUserSelections = stored?.selections.filter(
+          (selection) => selection.source === "user"
+        ) ?? [];
+        const same = stored?.discoveryVersion === discoveryVersion &&
+          storedUserSelections.length === requestedByKey.size &&
+          storedUserSelections.every((selection) => requestedByKey.get(
+              `${selection.featureId}\u0000${selection.namespaceId}`
+            ) === selection.selection);
+        if (same) {
+          return {
+            stateResolution: stored,
+            replayed: true,
+            pendingIntegration: this.publicPendingInvitation(row)
+          };
+        }
+        throw new IntegrationRegistryError(
+          "State-resolution choices have already been recorded.",
+          { status: 409, code: "integration_state_resolution_already_recorded" }
+        );
+      }
+      if (
+        row.invitation_status !== "awaiting_state_resolution" ||
+        row.pending_status !== "awaiting_state_resolution"
+      ) {
+        throw new IntegrationRegistryError(
+          "This integration is not awaiting state resolution.",
+          { status: 409, code: "integration_state_resolution_unavailable" }
+        );
+      }
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_pending_resolutions
+          (invitation_id, discovery_version, resolved_by_platform,
+           resolved_by_actor_id, resolved_at_ms)
+         VALUES (?, ?, 'twitch', ?, ?)`,
+        row.invitation_id,
+        discoveryVersion,
+        row.twitch_actor_id,
+        nowMs
+      );
+      for (const namespace of namespaces) {
+        const key = `${namespace.feature_id}\u0000${namespace.namespace_id}`;
+        const userSelected = namespace.outcome === "collision";
+        const selection = userSelected
+          ? requestedByKey.get(key)
+          : namespace.automatic_selection;
+        if (!PENDING_STATE_SELECTIONS.has(selection)) {
+          throw new IntegrationRegistryError(
+            "The discovered shareable-state decision is invalid.",
+            { status: 409, code: "integration_state_resolution_invalid" }
+          );
+        }
+        this.state.storage.sql.exec(
+          `INSERT INTO integration_pending_namespace_resolutions
+            (invitation_id, discovery_version, feature_id, namespace_id,
+             selection, selection_source)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          row.invitation_id,
+          discoveryVersion,
+          namespace.feature_id,
+          namespace.namespace_id,
+          selection,
+          userSelected ? "user" : "automatic"
+        );
+      }
+      audit(this.state.storage.sql, {
+        integrationId: row.pending_integration_id,
+        invitationId: row.invitation_id,
+        event: "integration.state_resolution.recorded.v1",
+        actor: { platform: "twitch", id: row.twitch_actor_id },
+        groupKey: row.twitch_group_key,
+        occurredAtMs: nowMs
+      });
+      return {
+        stateResolution: this.publicPendingResolution(row.invitation_id),
+        replayed: false,
+        pendingIntegration: this.publicPendingInvitation(row)
+      };
+    });
+    await this.armNextExpiration();
+    if (result.expired) {
+      throw new IntegrationRegistryError("The pending integration expired.", {
+        status: 410,
+        code: "integration_pending_expired"
+      });
+    }
+    return result;
   }
 
   async activateInvitation(input) {
@@ -1738,6 +1989,16 @@ export class IntegrationRegistry {
       const invitationIds = rows.map((row) => row.invitation_id);
       const placeholders = invitationIds.map(() => "?").join(", ");
       this.state.storage.sql.exec(
+        `DELETE FROM integration_pending_namespace_resolutions
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_pending_resolutions
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
+      this.state.storage.sql.exec(
         `DELETE FROM integration_pending_namespace_discoveries
          WHERE invitation_id IN (${placeholders})`,
         ...invitationIds
@@ -1804,6 +2065,12 @@ export class IntegrationRegistry {
       }
       if (request.method === "POST" && url.pathname === "/invitations/cancel") {
         return noStoreJson(await this.cancelInvitation(await request.json()));
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/invitations/resolve-state"
+      ) {
+        return noStoreJson(await this.resolveInvitationState(await request.json()));
       }
       if (request.method === "POST" && url.pathname === "/invitations/activate") {
         return noStoreJson(await this.activateInvitation(await request.json()), 201);

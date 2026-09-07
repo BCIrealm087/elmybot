@@ -206,6 +206,11 @@ A collision is resolved at shareable-namespace granularity. The UI may group
 namespaces by feature and offer an “apply to all” convenience, but persistence
 records one explicit outcome for every colliding namespace.
 
+The implemented Step 8 page follows this rule and is described in
+[`shareable-state-resolution.md`](shareable-state-resolution.md). It binds an
+immutable set of user and automatic selections to the discovery revision;
+Step 9 remains responsible for rechecking and materializing those decisions.
+
 The first version supports exactly these outcomes:
 
 - **Use Discord:** copy the discovered Discord snapshot.

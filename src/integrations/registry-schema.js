@@ -91,6 +91,33 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_pending_discoveries_latest
       ON integration_pending_discoveries(invitation_id, discovery_version DESC);
 
+    CREATE TABLE IF NOT EXISTS integration_pending_resolutions (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      resolved_by_platform TEXT NOT NULL,
+      resolved_by_actor_id TEXT NOT NULL,
+      resolved_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (invitation_id, discovery_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS integration_pending_namespace_resolutions (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      selection TEXT NOT NULL,
+      selection_source TEXT NOT NULL,
+      PRIMARY KEY (
+        invitation_id,
+        discovery_version,
+        feature_id,
+        namespace_id
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_resolutions_latest
+      ON integration_pending_resolutions(invitation_id, discovery_version DESC);
+
     CREATE TABLE IF NOT EXISTS integration_invitation_routes (
       invitation_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,

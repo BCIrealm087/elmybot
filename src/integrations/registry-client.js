@@ -68,6 +68,10 @@ export async function cancelPendingIntegration(env, input) {
   return postRegistry(env, "/invitations/cancel", input);
 }
 
+export async function resolvePendingIntegrationState(env, input) {
+  return postRegistry(env, "/invitations/resolve-state", input);
+}
+
 export async function activatePendingIntegration(env, input) {
   return postRegistry(env, "/invitations/activate", input);
 }

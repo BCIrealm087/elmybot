@@ -54,7 +54,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch` | Twitch health check, EventSub challenges, notifications, and revocations |
 | `/twitch/oauth/*` | Twitch bot-account OAuth |
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
-| `/twitch/integrations/connect` | Public page for redeeming a Discord integration invitation |
+| `/twitch/integrations/*` | Redeem, resume, resolve shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
@@ -423,6 +423,8 @@ npm run feature:workspaces
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
+- [Shareable-state collision discovery](docs/shareable-state-discovery.md)
+- [Pending integration state resolution](docs/shareable-state-resolution.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

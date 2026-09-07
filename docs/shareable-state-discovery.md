@@ -53,6 +53,9 @@ fingerprints, clone the selected snapshots into a fresh integration realm, and
 then activate the link. Until that finalizer exists, any pending link containing
 declared namespaces remains behind the activation barrier.
 
+Step 8's browser and persistence behavior is documented in
+[`shareable-state-resolution.md`](shareable-state-resolution.md).
+
 ## Persistence and recovery
 
 One immutable discovery revision is recorded for the current pending link.

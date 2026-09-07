@@ -246,13 +246,14 @@ namespaces, preserving the existing test/production isolation rule.
 ## Current staged deployment state
 
 This branch deliberately stops newly verified links at
-`awaiting_state_resolution`. Discovery now completes and persists automatic
-decisions or collision summaries. Existing active links continue to work, but a
-new link with declared shareable namespaces cannot become active through the
-public page until the resolution page and finalization are implemented in Steps
-8–9. The registry's activation operation is infrastructure-only and rejects
-declared namespaces that have not been materialized, so feature or route code
-cannot bypass state resolution.
+`awaiting_state_resolution`. Discovery persists automatic decisions or safe
+collision summaries, and the OAuth-verified broadcaster can now record
+Discord, Twitch, or reset choices through the resumable public page. Existing
+active links continue to work, but a new link with declared shareable
+namespaces cannot become active until Step 9 rechecks and materializes the
+selected snapshots. The registry's activation operation is infrastructure-only
+and rejects declared namespaces that have not been materialized, so feature or
+route code cannot bypass state resolution.
 
 ## Deployment notes
 

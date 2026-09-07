@@ -168,6 +168,119 @@ describe("Pending integration shareable-state discovery", () => {
           invitation.invitationId
         ).one().total).toBe(1);
 
+        await expect(registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 2,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "discord"
+          }]
+        })).rejects.toMatchObject({
+          status: 409,
+          code: "integration_state_resolution_stale"
+        });
+        await expect(registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: []
+        })).rejects.toMatchObject({
+          status: 422,
+          code: "integration_state_resolution_incomplete"
+        });
+
+        const resolved = await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "twitch"
+          }]
+        });
+        expect(resolved).toMatchObject({
+          replayed: false,
+          stateResolution: {
+            discoveryVersion: 1,
+            selections: [
+              {
+                featureId: "test.discovery",
+                namespaceId: "both_empty",
+                selection: "reset",
+                source: "automatic"
+              },
+              {
+                featureId: "test.discovery",
+                namespaceId: "collision",
+                selection: "twitch",
+                source: "user"
+              },
+              {
+                featureId: "test.discovery",
+                namespaceId: "discord_only",
+                selection: "discord",
+                source: "automatic"
+              },
+              {
+                featureId: "test.discovery",
+                namespaceId: "identical",
+                selection: "discord",
+                source: "automatic"
+              },
+              {
+                featureId: "test.discovery",
+                namespaceId: "twitch_only",
+                selection: "twitch",
+                source: "automatic"
+              }
+            ]
+          },
+          pendingIntegration: {
+            stateResolution: {
+              discoveryVersion: 1
+            }
+          }
+        });
+        const replayedResolution = await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "twitch"
+          }]
+        });
+        expect(replayedResolution.replayed).toBe(true);
+        await expect(registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "reset"
+          }]
+        })).rejects.toMatchObject({
+          status: 409,
+          code: "integration_state_resolution_already_recorded"
+        });
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_pending_resolutions
+           WHERE invitation_id = ?`,
+          invitation.invitationId
+        ).one().total).toBe(1);
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total
+           FROM integration_pending_namespace_resolutions
+           WHERE invitation_id = ?`,
+          invitation.invitationId
+        ).one().total).toBe(5);
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_audit
+           WHERE invitation_id = ?
+             AND event = 'integration.state_resolution.recorded.v1'`,
+          invitation.invitationId
+        ).one().total).toBe(1);
+
         await expect(registry.activateInvitation({
           invitationId: invitation.invitationId,
           reservationId
@@ -248,6 +361,14 @@ describe("Pending integration shareable-state discovery", () => {
             requiresResolution: false,
             namespaces: []
           }
+        });
+        await expect(registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: []
+        })).rejects.toMatchObject({
+          status: 409,
+          code: "integration_state_resolution_not_required"
         });
       }
     );
