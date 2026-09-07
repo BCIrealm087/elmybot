@@ -52,6 +52,45 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_pending_links_expiry
       ON integration_pending_links(status, expires_at_ms);
 
+    CREATE TABLE IF NOT EXISTS integration_pending_discoveries (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      requires_resolution INTEGER NOT NULL,
+      discord_realm_json TEXT NOT NULL,
+      twitch_realm_json TEXT NOT NULL,
+      discovered_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (invitation_id, discovery_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS integration_pending_namespace_discoveries (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      feature_id TEXT NOT NULL,
+      feature_label TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      namespace_label TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      discord_mutation_version INTEGER NOT NULL,
+      discord_fingerprint TEXT NOT NULL,
+      discord_meaningful INTEGER NOT NULL,
+      discord_summary_json TEXT NOT NULL,
+      twitch_mutation_version INTEGER NOT NULL,
+      twitch_fingerprint TEXT NOT NULL,
+      twitch_meaningful INTEGER NOT NULL,
+      twitch_summary_json TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      automatic_selection TEXT,
+      PRIMARY KEY (
+        invitation_id,
+        discovery_version,
+        feature_id,
+        namespace_id
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_discoveries_latest
+      ON integration_pending_discoveries(invitation_id, discovery_version DESC);
+
     CREATE TABLE IF NOT EXISTS integration_invitation_routes (
       invitation_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,

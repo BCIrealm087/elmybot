@@ -11,9 +11,10 @@ realm persistence, and default-aware effective-realm resolution are
 implemented. Protected namespace snapshots, fingerprints, meaningful-state
 checks, comparisons, and fresh-realm cloning are also implemented. Linking
 now persists Twitch verification, awaiting-resolution, cancellation, expiry,
-and idempotent activation as distinct states. Collision discovery, the
-resolution UI and finalizer orchestration, revocation successors, and feature
-migration remain staged.
+and idempotent activation as distinct states. Generic collision discovery and
+automatic selection planning are also implemented. The resolution UI and
+finalizer orchestration, revocation successors, and feature migration remain
+staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -113,8 +114,8 @@ There is no feature-level fallback from a failed integration operation to a
 standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
 
-This resolution API and the pending-link activation barrier are implemented,
-but collision discovery is not. Until the finalization stages land, maintainers
+This resolution API, pending-link activation barrier, and collision discovery
+are implemented. Until the finalization stages land, maintainers
 must not migrate an existing production feature whose standalone or legacy
 integration data would need reconciliation. No installed feature uses the new
 service yet.
@@ -153,6 +154,10 @@ same-origin, idempotent operation.
 Only `active` relationships participate in default assignment, active lists,
 route resolution, integration-owned feature access, or group-wide revocation
 counts. Existing first-link default assignment happens after activation.
+
+Discovery implementation details, safe persistence boundaries, and the exact
+automatic classification table are documented in
+[`shareable-state-discovery.md`](shareable-state-discovery.md).
 
 ## Candidate selection for a new integration
 
@@ -342,12 +347,13 @@ may render stored keys or values. Limits can only narrow the current framework
 caps of 100 entries and 16 KiB per value. Definitions omit the field entirely
 or declare at most 20 unique namespaces, and every normalized object is frozen.
 
-The metadata itself does not create storage. The internal realm layer consumes
-the installed catalog to gate lazy realm materialization, state operations,
-snapshots, safe summaries, and cloning. Feature actions access declared state
-only through the effective `shareableState` scope; snapshot payloads and realm
-identities remain infrastructure-only. This stage still inspects no pending
-link lifecycle and changes no link activation behavior. See
+The metadata itself does not create feature values. The internal realm layer
+consumes the installed catalog to gate lazy realm materialization, state
+operations, snapshots, safe summaries, and cloning. Feature actions access
+declared state only through the effective `shareableState` scope; snapshot
+payloads and realm identities remain infrastructure-only. Pending-link
+discovery now inventories that protected metadata without exposing raw entries.
+See
 [`Standalone shareable-state realms`](shareable-state-realms.md).
 
 The framework may copy an opaque canonical snapshot, but it must enumerate only

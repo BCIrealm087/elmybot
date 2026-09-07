@@ -1070,3 +1070,43 @@ complete local suite passed 23 files and 271 tests. ESLint, public API boundary
 checks, workspace-package validation, generated-document freshness, tracked
 JavaScript syntax checks, and the whitespace check also passed. The Worker dry
 run remains delegated to GitHub Actions.
+
+## Shareable-state Step 7: generic collision discovery
+
+The protected realm layer gained one catalog-wide inventory operation for
+integration infrastructure. It snapshots the identity, schema version,
+mutation version, fingerprint, meaningful-state marker, and feature-approved
+summary of every declared namespace while deliberately omitting stored keys and
+values. The integration registry independently selects each proposed member's
+current effective realm: its directional default integration when one exists,
+or its standalone realm otherwise.
+
+The registry classifies each matching namespace as both empty, Discord-only,
+Twitch-only, identical, or colliding. The first four receive durable automatic
+selection plans; only different nonempty snapshots require user input. A
+pending discovery revision and its namespace decisions are written once, and
+verification replay or browser refresh returns that revision without duplicate
+audit events. Temporary realm failures leave Twitch verification intact and can
+be retried by the existing alarm or pending page.
+
+Automatic selection deliberately does not copy data yet. The protected
+activation operation rejects pending links containing declared namespaces until
+Step 9 rechecks and materializes their selected snapshots. This makes the
+intermediate implementation less immediately demonstrable, but it prevents a
+partial rollout from activating a relationship with an empty or incorrect
+shared realm.
+
+**Assessment:** a hobby feature author benefits from this work without needing
+to understand it. Their responsibility remains the declarative namespace label,
+version, limits, and safe summary policy. Realm selection, privacy boundaries,
+fingerprinting, retry behavior, and generic classification are central
+framework concerns and would be far too cumbersome to reproduce inside a
+command. The metadata-only inventory is especially valuable: it gives the next
+UI step everything safe to display without trusting feature code or exposing
+the command's actual stored content.
+
+Focused discovery verification passed 3 files and 40 tests. The complete local
+suite passed 24 files and 275 tests. ESLint, public API boundary checks,
+workspace-package validation, generated-document freshness, tracked JavaScript
+syntax checks, and the whitespace check also passed. The Worker dry run remains
+delegated to GitHub Actions.

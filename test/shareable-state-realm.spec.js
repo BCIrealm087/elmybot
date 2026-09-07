@@ -6,6 +6,7 @@ import {
   cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  inventoryShareableStateNamespaces,
   requestStandaloneRealmState,
   shareableStateSnapshotHasMeaningfulState,
   shareableStateSnapshotsEqual,
@@ -159,6 +160,42 @@ describe("Standalone shareable-state realms", () => {
         status: 409,
         data: { code: "shareable_state_realm_identity_mismatch" }
       });
+    });
+  });
+
+  it("inventories every declared namespace without exposing stored entries", async () => {
+    const identity = createStandaloneRealmIdentity(discordGroup());
+    const stub = shareableStateRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      await requestStandaloneRealmState(clientEnv, {
+        group: identity.ownerGroup,
+        featureId: "test.score",
+        namespaceId: "score",
+        operation: "set",
+        storage: { key: "private_key", value: "private value" }
+      });
+
+      const inventory = await inventoryShareableStateNamespaces(clientEnv, {
+        realm: identity
+      });
+      expect(Object.isFrozen(inventory)).toBe(true);
+      expect(Object.isFrozen(inventory.namespaces)).toBe(true);
+      expect(inventory.namespaces.map((namespace) => namespace.namespaceId))
+        .toEqual(["counter", "score", "tiny"]);
+      expect(inventory.namespaces.find((namespace) => namespace.namespaceId === "score"))
+        .toMatchObject({
+          featureId: "test.score",
+          featureLabel: "Exercises standalone shareable-state realms.",
+          namespaceLabel: "Shared score",
+          schemaVersion: 1,
+          mutationVersion: 1,
+          meaningful: true,
+          summary: { kind: "presence", used: true }
+        });
+      expect(JSON.stringify(inventory)).not.toContain("private_key");
+      expect(JSON.stringify(inventory)).not.toContain("private value");
     });
   });
 

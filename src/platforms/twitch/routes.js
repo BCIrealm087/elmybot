@@ -23,6 +23,7 @@ import { twitchPublicUrl } from "./environment.js";
 import { handleTwitchChannelHealth } from "./channel-registry.js";
 import {
 	cancelPendingIntegration,
+	IntegrationRegistryError,
 	resumePendingIntegration
 } from "../../integrations/index.js";
 
@@ -71,7 +72,16 @@ async function pendingIntegrationPage(request, env) {
 	let result;
 	try {
 		result = await resumePendingIntegration(env, { reservationId });
-	} catch {
+	} catch (error) {
+		if (
+			error instanceof IntegrationRegistryError &&
+			error.code.startsWith("integration_state_discovery_")
+		) {
+			return renderTwitchOnboardingError(
+				"Shareable state could not be inspected yet. Refresh this page to retry.",
+				503
+			);
+		}
 		return renderTwitchOnboardingError(
 			"This pending integration continuation is unavailable or expired.",
 			404

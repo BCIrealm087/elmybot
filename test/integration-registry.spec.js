@@ -340,7 +340,12 @@ describe("Cross-platform integration linking", () => {
     expect(resumed.pendingIntegration).toMatchObject({
       invitationId: invitation.invitationId,
       status: "awaiting_state_resolution",
-      twitchLabel: "linked_channel"
+      twitchLabel: "linked_channel",
+      stateDiscovery: {
+        version: 1,
+        requiresResolution: false,
+        namespaces: []
+      }
     });
     const activated = await activatePendingIntegration(integrationEnv, {
       invitationId: invitation.invitationId,
@@ -604,6 +609,77 @@ describe("Cross-platform integration linking", () => {
             target_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`
           }
         ]);
+      }
+    );
+  });
+
+  it("discovers from each group's current effective realm", async () => {
+    const linked = await activateIntegration();
+    const integrationId = linked.completion.integration.id;
+    const nextChannel = twitchGroup();
+    const fromDiscordDefault = await prepareIntegration({
+      group: linked.group,
+      channel: nextChannel
+    });
+    await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: fromDiscordDefault.reservation.invitationId,
+      reservationId: fromDiscordDefault.reservation.reservationId,
+      group: nextChannel,
+      actor: twitchActor(nextChannel.id)
+    });
+
+    const nextGuild = discordGroup();
+    const fromTwitchDefault = await prepareIntegration({
+      group: nextGuild,
+      channel: linked.channel
+    });
+    await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: fromTwitchDefault.reservation.invitationId,
+      reservationId: fromTwitchDefault.reservation.reservationId,
+      group: linked.channel,
+      actor: twitchActor(linked.channel.id)
+    });
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        const discoveries = state.storage.sql.exec(
+          `SELECT invitation_id, discord_realm_json, twitch_realm_json
+           FROM integration_pending_discoveries
+           WHERE invitation_id IN (?, ?)
+           ORDER BY invitation_id`,
+          fromDiscordDefault.invitation.invitationId,
+          fromTwitchDefault.invitation.invitationId
+        ).toArray();
+        const byInvitation = Object.fromEntries(discoveries.map((row) => [
+          row.invitation_id,
+          {
+            discord: JSON.parse(row.discord_realm_json),
+            twitch: JSON.parse(row.twitch_realm_json)
+          }
+        ]));
+        expect(byInvitation[fromDiscordDefault.invitation.invitationId])
+          .toMatchObject({
+            discord: {
+              kind: "integration",
+              ownerIntegration: { id: integrationId }
+            },
+            twitch: {
+              kind: "standalone",
+              ownerGroup: { id: nextChannel.id }
+            }
+          });
+        expect(byInvitation[fromTwitchDefault.invitation.invitationId])
+          .toMatchObject({
+            discord: {
+              kind: "standalone",
+              ownerGroup: { id: nextGuild.id }
+            },
+            twitch: {
+              kind: "integration",
+              ownerIntegration: { id: integrationId }
+            }
+          });
       }
     );
   });

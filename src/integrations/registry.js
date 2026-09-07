@@ -1,6 +1,14 @@
 import { jsonResponse, logError } from "../common.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
+  createIntegrationRealmIdentity,
+  createStandaloneRealmIdentity
+} from "../shareable-state/index.js";
+import {
+  discoverIntegrationShareableState,
+  IntegrationStateDiscoveryError
+} from "./state-discovery.js";
+import {
   audit,
   boundedLabel,
   IntegrationRegistryError,
@@ -60,8 +68,9 @@ function noStoreJson(value, status = 200) {
 }
 
 export class IntegrationRegistry {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     initializeRegistryTables(state);
   }
 
@@ -735,8 +744,181 @@ export class IntegrationRegistry {
       verifiedAtMs: row.verified_at_ms ?? null,
       awaitingStateResolutionAtMs: row.awaiting_resolution_at_ms ?? null,
       cancelledAtMs: row.cancelled_at_ms ?? null,
-      activatedAtMs: row.activated_at_ms ?? null
+      activatedAtMs: row.activated_at_ms ?? null,
+      stateDiscovery: this.publicPendingDiscovery(row.invitation_id)
     };
+  }
+
+  latestPendingDiscovery(invitationId) {
+    return this.state.storage.sql.exec(
+      `SELECT invitation_id, discovery_version, requires_resolution,
+              discord_realm_json, twitch_realm_json, discovered_at_ms
+       FROM integration_pending_discoveries
+       WHERE invitation_id = ?
+       ORDER BY discovery_version DESC
+       LIMIT 1`,
+      invitationId
+    ).toArray()[0] ?? null;
+  }
+
+  publicPendingDiscovery(invitationId) {
+    const discovery = this.latestPendingDiscovery(invitationId);
+    if (!discovery) return null;
+    const namespaces = this.state.storage.sql.exec(
+      `SELECT feature_id, feature_label, namespace_id, namespace_label,
+              schema_version, discord_summary_json, twitch_summary_json,
+              outcome, automatic_selection
+       FROM integration_pending_namespace_discoveries
+       WHERE invitation_id = ? AND discovery_version = ?
+       ORDER BY feature_id, namespace_id`,
+      invitationId,
+      discovery.discovery_version
+    ).toArray().map((row) => ({
+      featureId: row.feature_id,
+      featureLabel: row.feature_label,
+      namespaceId: row.namespace_id,
+      namespaceLabel: row.namespace_label,
+      schemaVersion: row.schema_version,
+      discordSummary: JSON.parse(row.discord_summary_json),
+      twitchSummary: JSON.parse(row.twitch_summary_json),
+      outcome: row.outcome,
+      automaticSelection: row.automatic_selection ?? null
+    }));
+    return {
+      version: discovery.discovery_version,
+      discoveredAtMs: discovery.discovered_at_ms,
+      requiresResolution: Boolean(discovery.requires_resolution),
+      namespaces
+    };
+  }
+
+  effectiveCandidateRealm(group, targetPlatform) {
+    const selected = this.state.storage.sql.exec(
+      `SELECT default_link.integration_id
+       FROM integration_default_links default_link
+       JOIN integrations integration
+         ON integration.integration_id = default_link.integration_id
+       WHERE default_link.source_group_key = ?
+         AND default_link.target_platform = ?
+         AND integration.status = 'active'
+       LIMIT 1`,
+      group.key,
+      targetPlatform
+    ).toArray()[0];
+    return selected
+      ? createIntegrationRealmIdentity({ id: selected.integration_id })
+      : createStandaloneRealmIdentity(group);
+  }
+
+  persistPendingDiscovery(row, discovery) {
+    const nowMs = Date.now();
+    const result = this.state.storage.transactionSync(() => {
+      const current = this.pendingInvitationByReservation(row.reservation_id);
+      if (
+        !current ||
+        current.invitation_id !== row.invitation_id ||
+        current.pending_status !== "awaiting_state_resolution"
+      ) {
+        throw new IntegrationRegistryError(
+          "The pending integration is no longer available for state discovery.",
+          { status: 409, code: "integration_state_discovery_stale" }
+        );
+      }
+      if (current.pending_expires_at_ms <= nowMs) {
+        this.expirePendingRow(current, nowMs);
+        return { expired: true };
+      }
+      const existing = this.latestPendingDiscovery(row.invitation_id);
+      if (existing) return this.publicPendingDiscovery(row.invitation_id);
+      const discoveryVersion = 1;
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_pending_discoveries
+          (invitation_id, discovery_version, requires_resolution,
+           discord_realm_json, twitch_realm_json, discovered_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        row.invitation_id,
+        discoveryVersion,
+        discovery.requiresResolution ? 1 : 0,
+        JSON.stringify(discovery.discordRealm),
+        JSON.stringify(discovery.twitchRealm),
+        nowMs
+      );
+      for (const namespace of discovery.namespaces) {
+        this.state.storage.sql.exec(
+          `INSERT INTO integration_pending_namespace_discoveries
+            (invitation_id, discovery_version, feature_id, feature_label,
+             namespace_id, namespace_label, schema_version,
+             discord_mutation_version, discord_fingerprint,
+             discord_meaningful, discord_summary_json,
+             twitch_mutation_version, twitch_fingerprint,
+             twitch_meaningful, twitch_summary_json, outcome,
+             automatic_selection)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          row.invitation_id,
+          discoveryVersion,
+          namespace.featureId,
+          namespace.featureLabel,
+          namespace.namespaceId,
+          namespace.namespaceLabel,
+          namespace.schemaVersion,
+          namespace.discord.mutationVersion,
+          namespace.discord.fingerprint,
+          namespace.discord.meaningful ? 1 : 0,
+          JSON.stringify(namespace.discord.summary),
+          namespace.twitch.mutationVersion,
+          namespace.twitch.fingerprint,
+          namespace.twitch.meaningful ? 1 : 0,
+          JSON.stringify(namespace.twitch.summary),
+          namespace.outcome,
+          namespace.automaticSelection
+        );
+      }
+      audit(this.state.storage.sql, {
+        integrationId: row.pending_integration_id,
+        invitationId: row.invitation_id,
+        event: discovery.requiresResolution
+          ? "integration.state_discovery.collisions_found.v1"
+          : "integration.state_discovery.automatically_resolved.v1",
+        occurredAtMs: nowMs
+      });
+      return this.publicPendingDiscovery(row.invitation_id);
+    });
+    if (result.expired) {
+      throw new IntegrationRegistryError("The pending integration expired.", {
+        status: 410,
+        code: "integration_pending_expired"
+      });
+    }
+    return result;
+  }
+
+  async ensurePendingDiscovery(reservationId) {
+    const row = this.pendingInvitationByReservation(reservationId);
+    if (!row || row.pending_status !== "awaiting_state_resolution") return null;
+    const existing = this.publicPendingDiscovery(row.invitation_id);
+    if (existing) return existing;
+    const discordGroup = parseGroupKey(row.discord_group_key);
+    const twitchGroup = parseGroupKey(row.twitch_group_key);
+    const discordRealm = this.effectiveCandidateRealm(discordGroup, "twitch");
+    const twitchRealm = this.effectiveCandidateRealm(twitchGroup, "discord");
+    let discovery;
+    try {
+      discovery = await discoverIntegrationShareableState(this.env, {
+        discordRealm,
+        twitchRealm,
+        correlationId: `integration-state-discovery:${row.pending_integration_id}`
+      });
+    } catch (error) {
+      if (error instanceof IntegrationStateDiscoveryError) {
+        throw new IntegrationRegistryError(error.message, {
+          status: error.status,
+          code: error.code,
+          cause: error
+        });
+      }
+      throw error;
+    }
+    return this.persistPendingDiscovery(row, discovery);
   }
 
   expirePendingRow(row, nowMs) {
@@ -931,7 +1113,13 @@ export class IntegrationRegistry {
         replayed: result.replayed
       };
     }
-    return result;
+    await this.ensurePendingDiscovery(reservationId);
+    return {
+      ...result,
+      pendingIntegration: this.publicPendingInvitation(
+        this.pendingInvitationByReservation(reservationId)
+      )
+    };
   }
 
   async resumeInvitation(input) {
@@ -963,6 +1151,15 @@ export class IntegrationRegistry {
       return this.publicPendingInvitation(row);
     });
     await this.armNextExpiration();
+    if (result.status === "awaiting_state_resolution") {
+      await this.ensurePendingDiscovery(reservationId);
+      return {
+        pendingIntegration: this.publicPendingInvitation(
+          this.pendingInvitationByReservation(reservationId)
+        ),
+        integration: null
+      };
+    }
     return {
       pendingIntegration: result,
       integration: result.status === "active"
@@ -1050,6 +1247,16 @@ export class IntegrationRegistry {
       input?.reservationId,
       "Integration continuation ID"
     );
+    const discovery = await this.ensurePendingDiscovery(reservationId);
+    if (discovery?.namespaces.length > 0) {
+      throw new IntegrationRegistryError(
+        "Shareable state must be materialized before this integration can activate.",
+        {
+          status: 409,
+          code: "integration_state_finalization_required"
+        }
+      );
+    }
     const nowMs = Date.now();
     const result = this.state.storage.transactionSync(() => {
       const row = this.pendingInvitationByReservation(reservationId);
@@ -1530,6 +1737,16 @@ export class IntegrationRegistry {
       if (rows.length === 0) return 0;
       const invitationIds = rows.map((row) => row.invitation_id);
       const placeholders = invitationIds.map(() => "?").join(", ");
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_pending_namespace_discoveries
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
+      this.state.storage.sql.exec(
+        `DELETE FROM integration_pending_discoveries
+         WHERE invitation_id IN (${placeholders})`,
+        ...invitationIds
+      );
       this.state.storage.sql.exec(
         `DELETE FROM integration_pending_links
          WHERE invitation_id IN (${placeholders})`,

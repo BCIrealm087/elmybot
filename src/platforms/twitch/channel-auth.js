@@ -117,7 +117,11 @@ export class TwitchChannelAuth {
 				correlationId: `twitch-integration-completion:${crypto.randomUUID()}`,
 				groupId: authorization.userId
 			}, error);
-			if (error instanceof IntegrationRegistryError && error.status < 500) {
+			if (
+				error instanceof IntegrationRegistryError &&
+				error.status < 500 &&
+				!error.code.startsWith("integration_state_discovery_")
+			) {
 				authorization.integrationCompletionPending = null;
 				return { result: null, error: error.code };
 			}

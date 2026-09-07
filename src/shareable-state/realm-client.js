@@ -205,6 +205,65 @@ function normalizeSnapshot(snapshot) {
   });
 }
 
+function normalizeInventoryEntry(entry) {
+  if (
+    typeof entry !== "object" ||
+    entry === null ||
+    Array.isArray(entry) ||
+    typeof entry.featureId !== "string" ||
+    typeof entry.featureLabel !== "string" ||
+    typeof entry.namespaceId !== "string" ||
+    typeof entry.namespaceLabel !== "string" ||
+    !Number.isSafeInteger(entry.schemaVersion) ||
+    entry.schemaVersion < 1 ||
+    !Number.isSafeInteger(entry.mutationVersion) ||
+    entry.mutationVersion < 0 ||
+    !SNAPSHOT_FINGERPRINT_PATTERN.test(entry.fingerprint ?? "") ||
+    typeof entry.meaningful !== "boolean" ||
+    typeof entry.summary !== "object" ||
+    entry.summary === null
+  ) {
+    throw new ShareableStateRealmError(
+      "The shareable-state namespace inventory is invalid.",
+      { status: 502, code: "shareable_state_inventory_invalid" }
+    );
+  }
+  const summary = entry.summary.kind === "presence"
+    ? { kind: "presence", used: entry.summary.used }
+    : entry.summary.kind === "entry_count"
+      ? {
+          kind: "entry_count",
+          used: entry.summary.used,
+          entryCount: entry.summary.entryCount
+        }
+      : null;
+  if (
+    summary === null ||
+    typeof summary.used !== "boolean" ||
+    summary.used !== entry.meaningful ||
+    (
+      summary.kind === "entry_count" &&
+      (!Number.isSafeInteger(summary.entryCount) || summary.entryCount < 0)
+    )
+  ) {
+    throw new ShareableStateRealmError(
+      "The shareable-state namespace inventory summary is invalid.",
+      { status: 502, code: "shareable_state_inventory_invalid" }
+    );
+  }
+  return Object.freeze({
+    featureId: entry.featureId,
+    featureLabel: entry.featureLabel,
+    namespaceId: entry.namespaceId,
+    namespaceLabel: entry.namespaceLabel,
+    schemaVersion: entry.schemaVersion,
+    mutationVersion: entry.mutationVersion,
+    fingerprint: entry.fingerprint,
+    meaningful: entry.meaningful,
+    summary: Object.freeze(summary)
+  });
+}
+
 export async function requestShareableStateRealm(env, {
   realm,
   featureId,
@@ -244,6 +303,35 @@ export async function snapshotShareableStateNamespace(env, {
     operation: "snapshot",
     correlationId
   }));
+}
+
+export async function inventoryShareableStateNamespaces(env, {
+  realm,
+  correlationId
+}) {
+  const normalized = normalizeIdentity(realm);
+  const result = await checkedRealmResponse(
+    await shareableStateRealmStub(env, normalized).fetch(
+      `https://shareable-state${SHAREABLE_STATE_REALM_PATH_PREFIX}inventory`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(correlationId ? { "x-correlation-id": correlationId } : {})
+        },
+        body: JSON.stringify({ realm: normalized })
+      }
+    )
+  );
+  if (!Array.isArray(result?.namespaces)) {
+    throw new ShareableStateRealmError(
+      "The shareable-state namespace inventory is invalid.",
+      { status: 502, code: "shareable_state_inventory_invalid" }
+    );
+  }
+  return Object.freeze({
+    namespaces: Object.freeze(result.namespaces.map(normalizeInventoryEntry))
+  });
 }
 
 export function shareableStateSnapshotHasMeaningfulState(snapshot) {

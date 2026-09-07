@@ -164,7 +164,9 @@ the bot a moderator.
 
 Successful authorization verifies Twitch and creates a durable pending link.
 The browser is redirected to a safely refreshable pending page while the link
-awaits shareable-state resolution. Only final activation creates an integration
+discovers shareable state. Empty, one-sided, and identical namespaces receive
+automatic decisions; different nonempty namespaces wait for explicit
+resolution. Only final activation creates an integration
 containing the authenticated Discord guild and Twitch channel, with three
 enabled routes:
 

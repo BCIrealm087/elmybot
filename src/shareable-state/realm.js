@@ -19,7 +19,8 @@ const REALM_OPERATIONS = new Set([
   "increment",
   "bounded-counter",
   "snapshot",
-  "clone-snapshot"
+  "clone-snapshot",
+  "inventory"
 ]);
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
@@ -437,6 +438,46 @@ async function snapshotNamespace(state, namespace) {
   };
 }
 
+async function namespaceInventory(state, registry) {
+  const declarations = registry.features.flatMap((feature) =>
+    feature.shareableState.map((declaration) => ({
+      featureId: feature.id,
+      featureLabel: feature.description,
+      namespaceId: declaration.id,
+      declaration
+    }))
+  ).sort((left, right) =>
+    left.featureId.localeCompare(right.featureId) ||
+    left.namespaceId.localeCompare(right.namespaceId)
+  );
+  const namespaces = [];
+  for (const item of declarations) {
+    const namespace = Object.freeze({
+      featureId: item.featureId,
+      namespaceId: item.namespaceId,
+      declaration: item.declaration
+    });
+    ensureNamespace(state, namespace);
+    const captured = namespaceSnapshotRows(state, namespace);
+    namespaces.push({
+      featureId: item.featureId,
+      featureLabel: item.featureLabel,
+      namespaceId: item.namespaceId,
+      namespaceLabel: item.declaration.label,
+      schemaVersion: captured.schemaVersion,
+      mutationVersion: captured.mutationVersion,
+      fingerprint: await fingerprintSnapshotRows(
+        namespace,
+        captured.schemaVersion,
+        captured.entries
+      ),
+      meaningful: captured.entries.length > 0,
+      summary: collisionSummary(item.declaration, captured.entries.length)
+    });
+  }
+  return { namespaces };
+}
+
 function requireSnapshotCloneInput(namespace, input) {
   const snapshot = input?.snapshot;
   if (
@@ -827,8 +868,14 @@ export class ShareableStateRealmBackend {
         fail("Request body must be valid JSON.", { cause });
       }
       const identity = normalizeRealmIdentity(input?.realm);
-      const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
       bindRealmIdentity(this.state, identity);
+      if (operation === "inventory") {
+        return noStoreJson(await namespaceInventory(
+          this.state,
+          this.featureRegistry
+        ));
+      }
+      const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
       ensureNamespace(this.state, namespace);
       const result = await runOperation(
         this.state,

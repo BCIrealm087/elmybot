@@ -110,10 +110,15 @@ performs only declared identity-compatible upgrades before comparison.
 The remaining stages still do not:
 
 - seal realms against concurrent mutation;
-- perform collision discovery or choose state-resolution outcomes;
+- choose user-directed collision outcomes or finalize selected snapshots;
 - retain lifecycle snapshots or resolution audit records; or
 - migrate `fun.deaths` from its current integration-owned ledger.
 
 Resolution continues to pin generation 1 of the origin group's standalone realm
 or the active default integration's realm. The pending-integration lifecycle is
 implemented; pending relationships are not eligible effective realms.
+
+The protected inventory operation now supplies generic pending-link discovery
+with declared namespace identity, versions, fingerprints, and safe summaries.
+It never supplies stored keys or values. See
+[`shareable-state-discovery.md`](shareable-state-discovery.md).

@@ -78,9 +78,11 @@ evaluating the capability or contacting the registry.
    SameSite=Lax cookie and redirects to `/twitch/integrations/pending`.
    Refreshing that page performs a read-only resume of the same record rather
    than replaying the one-use OAuth callback.
-8. State discovery and resolution will select the initial integration realm in
-   the next implementation stages. The protected finalization operation then
-   activates that same pending integration, binds invitation routes, and
+8. Generic discovery inspects the two current effective realms, automatically
+   selects empty, one-sided, or identical state, and records genuinely
+   different nonempty namespaces for user resolution. The protected
+   finalization operation will then activate that same pending integration,
+   bind invitation routes, and
    applies the existing first-link default rules exactly once.
 
 Invitations expire after 15 minutes. An invitation reserved by OAuth remains
@@ -241,14 +243,16 @@ Each test and production Worker environment has its own
 `INTEGRATION_REGISTRY` and `INTEGRATION_COORDINATOR` bindings and Durable Object
 namespaces, preserving the existing test/production isolation rule.
 
-## Step 6 deployment state
+## Current staged deployment state
 
 This branch deliberately stops newly verified links at
-`awaiting_state_resolution`. Existing active links continue to work, but a new
-link cannot become active through the public page until collision discovery,
-the resolution page, and finalization are implemented in Steps 7–9. The
-registry's activation operation is currently infrastructure-only so feature or
-route code cannot bypass state resolution.
+`awaiting_state_resolution`. Discovery now completes and persists automatic
+decisions or collision summaries. Existing active links continue to work, but a
+new link with declared shareable namespaces cannot become active through the
+public page until the resolution page and finalization are implemented in Steps
+8–9. The registry's activation operation is infrastructure-only and rejects
+declared namespaces that have not been materialized, so feature or route code
+cannot bypass state resolution.
 
 ## Deployment notes
 

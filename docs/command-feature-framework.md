@@ -510,7 +510,10 @@ when groups link. Each step is intended to land and pass CI independently:
    verification creates a resumable `awaiting_state_resolution` record;
    pending links can expire or be cancelled and become active only through the
    idempotent protected activation operation.
-7. **Implement generic collision discovery.**
+7. **Implement generic collision discovery — completed.** Pending links inspect
+   the declared namespaces in each member's current effective realm and persist
+   safe summaries, fingerprints, versions, automatic selections, and genuine
+   collisions. Feature keys and values never enter registry or browser data.
 8. **Add the collision-resolution page.**
 9. **Make finalization concurrency-safe and idempotent.**
 10. **Implement revocation and standalone continuation.**

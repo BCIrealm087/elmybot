@@ -10,6 +10,7 @@ export {
   cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  inventoryShareableStateNamespaces,
   requestShareableStateRealm,
   requestStandaloneRealmState,
   shareableStateSnapshotHasMeaningfulState,
