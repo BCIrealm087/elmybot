@@ -12,9 +12,9 @@ implemented. Protected namespace snapshots, fingerprints, meaningful-state
 checks, comparisons, and fresh-realm cloning are also implemented. Linking
 now persists Twitch verification, awaiting-resolution, cancellation, expiry,
 and idempotent activation as distinct states. Generic collision discovery and
-automatic selection planning are also implemented. The resolution UI and
-finalizer orchestration, revocation successors, and feature migration remain
-staged.
+automatic selection planning, the resolution UI, and concurrency-safe
+finalizer orchestration are also implemented. Revocation successors and
+feature migration remain staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -114,11 +114,11 @@ There is no feature-level fallback from a failed integration operation to a
 standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
 
-This resolution API, pending-link activation barrier, and collision discovery
-are implemented. Until the finalization stages land, maintainers
-must not migrate an existing production feature whose standalone or legacy
-integration data would need reconciliation. No installed feature uses the new
-service yet.
+This resolution API, pending-link activation barrier, collision discovery, and
+finalization are implemented. Until revocation successors and feature migration
+land, maintainers must not migrate an existing production feature whose
+standalone or legacy integration data would need reconciliation. No installed
+feature uses the new service yet.
 
 ## Link lifecycle
 
@@ -209,7 +209,7 @@ records one explicit outcome for every colliding namespace.
 The implemented Step 8 page follows this rule and is described in
 [`shareable-state-resolution.md`](shareable-state-resolution.md). It binds an
 immutable set of user and automatic selections to the discovery revision;
-Step 9 remains responsible for rechecking and materializing those decisions.
+the implemented Step 9 finalizer rechecks and materializes those decisions.
 
 The first version supports exactly these outcomes:
 
@@ -253,6 +253,10 @@ barrier, not a distributed SQL transaction. A crash may leave a pending realm
 or temporary seal, but recovery either resumes the same finalization or releases
 it after the bounded lease expires. It never exposes a partially copied realm
 as active.
+
+The concrete operations, generation rules, recovery behavior, and audit
+boundary are documented in
+[`shareable-state-finalization.md`](shareable-state-finalization.md).
 
 ## Directional defaults and many-link behavior
 

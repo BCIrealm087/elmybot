@@ -325,21 +325,20 @@ describe("Cross-platform integration linking", () => {
     const pendingPage = await pendingRequest();
     const pendingHtml = await pendingPage.text();
     expect(pendingPage.status).toBe(200);
-    expect(pendingHtml).toContain("State review is next");
+    expect(pendingHtml).toContain("Twitch and Discord are linked");
     expect(pendingHtml).toContain("linked_channel");
-    expect(pendingHtml).toContain("not active yet");
 
     const refreshedPage = await pendingRequest();
     expect(refreshedPage.status).toBe(200);
-    expect(await refreshedPage.text()).toContain("State review is next");
-    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
+    expect(await refreshedPage.text()).toContain("Twitch and Discord are linked");
+    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(1);
 
     const resumed = await resumePendingIntegration(integrationEnv, {
       reservationId: state
     });
     expect(resumed.pendingIntegration).toMatchObject({
       invitationId: invitation.invitationId,
-      status: "awaiting_state_resolution",
+      status: "active",
       twitchLabel: "linked_channel",
       stateDiscovery: {
         version: 1,
@@ -351,7 +350,7 @@ describe("Cross-platform integration linking", () => {
       invitationId: invitation.invitationId,
       reservationId: state
     });
-    expect(activated).toMatchObject({ replayed: false });
+    expect(activated).toMatchObject({ replayed: true });
 
     const completedPage = await pendingRequest();
     expect(completedPage.status).toBe(200);

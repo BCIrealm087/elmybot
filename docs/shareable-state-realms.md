@@ -76,9 +76,10 @@ Infrastructure may compare compatible snapshots by namespace identity, schema
 version, and fingerprint. It may clone a verified snapshot into a fresh target
 namespace. The target revalidates the installed declaration, entry and value
 limits, canonical content, and fingerprint before writing all entries in one
-transaction. It rejects stale or previously initialized targets. Successful
-initialization advances the target mutation version once, including when the
-selected snapshot is empty, while leaving the source realm untouched.
+transaction. Successful initialization advances the target mutation version
+once, including when the selected snapshot is empty, while leaving the source
+realm untouched. A scoped materialization key makes an exact replay a no-op and
+rejects reuse for different content.
 
 Identity-compatible schema upgrades now also advance the mutation version
 because schema identity participates in fingerprints. Every later content
@@ -97,21 +98,31 @@ The internal client surface is intentionally namespace-specific:
 - `shareableStateSnapshotHasMeaningfulState(...)` evaluates its canonical
   persisted-entry marker;
 - `shareableStateSnapshotsEqual(...)` compares compatible identity and content
-  while ignoring history-only mutation-version differences; and
-- `cloneShareableStateSnapshot(...)` verifies and initializes one fresh target
-  namespace with an explicit expected target mutation version.
+  while ignoring history-only mutation-version differences;
+- `sealShareableStateNamespace(...)` captures a snapshot and temporarily blocks
+  writes to that namespace while allowing reads;
+- `releaseShareableStateNamespaceSeal(...)` releases only the matching seal;
+- `cloneShareableStateSnapshot(...)` verifies and idempotently initializes one
+  fresh target namespace; and
+- `initializeEmptyShareableStateNamespace(...)` performs the corresponding
+  idempotent reset materialization.
 
 Cloning accepts only the currently installed schema version. Discovery must
 therefore snapshot each candidate through the current realm code first, which
 performs only declared identity-compatible upgrades before comparison.
 
-## Deliberately deferred behavior
+## Transition behavior and remaining deferrals
+
+Step 9 uses bounded namespace seals so a mutation is either included before the
+sealed snapshot or receives a retryable transition error. Expired seals are
+removed lazily, which lets a failed finalizer recover without a global cleanup
+transaction. Fresh integration realms use the discovery revision as their
+generation, so partial output from a rejected revision can never become the
+active realm for a later revision.
 
 The remaining stages still do not:
 
-- seal realms against concurrent mutation;
-- choose user-directed collision outcomes or finalize selected snapshots;
-- retain lifecycle snapshots or resolution audit records; or
+- create standalone successor realms from revoked integration state; or
 - migrate `fun.deaths` from its current integration-owned ledger.
 
 Resolution continues to pin generation 1 of the origin group's standalone realm

@@ -12,6 +12,8 @@ const MAX_JSON_DEPTH = 20;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
 const MAX_COUNTER_SUBJECT_LENGTH = 300;
 const SNAPSHOT_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
+const TRANSITION_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,300}$/;
+const MAX_TRANSITION_SEAL_LEASE_MS = 2 * 60 * 1000;
 const REALM_OPERATIONS = new Set([
   "get",
   "set",
@@ -19,13 +21,16 @@ const REALM_OPERATIONS = new Set([
   "increment",
   "bounded-counter",
   "snapshot",
+  "seal-snapshot",
+  "release-seal",
   "clone-snapshot",
+  "initialize-empty",
   "inventory"
 ]);
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
   "/internal/shareable-state/realm/";
-export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 1;
+export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 2;
 export const SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION = 1;
 
 export class ShareableStateRealmError extends Error {
@@ -72,6 +77,15 @@ function requireNamespaceId(value) {
 
 function requireKey(value) {
   return requireString(value, KEY_PATTERN, "The shareable-state key is invalid.", 64);
+}
+
+function requireTransitionToken(value, subject) {
+  return requireString(
+    value,
+    TRANSITION_TOKEN_PATTERN,
+    `${subject} is invalid.`,
+    300
+  );
 }
 
 function canonicalJsonValue(value, path = "value", depth = 0) {
@@ -228,6 +242,24 @@ export function initializeShareableStateRealmTables(state) {
 
     CREATE INDEX IF NOT EXISTS shareable_state_realm_values_namespace
       ON shareable_state_realm_values(feature_id, namespace_id, value_key);
+
+    CREATE TABLE IF NOT EXISTS shareable_state_realm_namespace_seals (
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      seal_id TEXT NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, namespace_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shareable_state_realm_materializations (
+      idempotency_key TEXT PRIMARY KEY,
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      mutation_version INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL
+    );
   `);
 }
 
@@ -271,7 +303,10 @@ function bindRealmIdentity(state, identity) {
      FROM shareable_state_realm_meta WHERE singleton = 1`
   ).toArray()[0];
   if (existing) {
-    if (existing.storage_schema_version !== SHAREABLE_STATE_REALM_SCHEMA_VERSION) {
+    if (
+      existing.storage_schema_version < 1 ||
+      existing.storage_schema_version > SHAREABLE_STATE_REALM_SCHEMA_VERSION
+    ) {
       fail("The stored shareable-state realm layout is not supported.", {
         status: 409,
         code: "shareable_state_realm_schema_unsupported"
@@ -286,6 +321,13 @@ function bindRealmIdentity(state, identity) {
         status: 409,
         code: "shareable_state_realm_identity_mismatch"
       });
+    }
+    if (existing.storage_schema_version < SHAREABLE_STATE_REALM_SCHEMA_VERSION) {
+      state.storage.sql.exec(
+        `UPDATE shareable_state_realm_meta
+         SET storage_schema_version = ? WHERE singleton = 1`,
+        SHAREABLE_STATE_REALM_SCHEMA_VERSION
+      );
     }
     return;
   }
@@ -438,6 +480,97 @@ async function snapshotNamespace(state, namespace) {
   };
 }
 
+function activeNamespaceSeal(sql, namespace, nowMs = Date.now()) {
+  const row = sql.exec(
+    `SELECT seal_id, expires_at_ms
+     FROM shareable_state_realm_namespace_seals
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0];
+  if (!row) return null;
+  if (row.expires_at_ms <= nowMs) {
+    sql.exec(
+      `DELETE FROM shareable_state_realm_namespace_seals
+       WHERE feature_id = ? AND namespace_id = ? AND expires_at_ms <= ?`,
+      namespace.featureId,
+      namespace.namespaceId,
+      nowMs
+    );
+    return null;
+  }
+  return row;
+}
+
+function requireNamespaceWritable(sql, namespace) {
+  if (activeNamespaceSeal(sql, namespace)) {
+    fail("Shareable state is temporarily sealed for an integration transition.", {
+      status: 409,
+      code: "shareable_state_transition_sealed"
+    });
+  }
+}
+
+async function sealNamespaceSnapshot(state, namespace, input) {
+  const sealId = requireTransitionToken(input?.sealId, "The transition seal ID");
+  const expiresAtMs = input?.expiresAtMs;
+  const nowMs = Date.now();
+  if (
+    !Number.isSafeInteger(expiresAtMs) ||
+    expiresAtMs <= nowMs ||
+    expiresAtMs > nowMs + MAX_TRANSITION_SEAL_LEASE_MS
+  ) {
+    fail("The transition seal expiry is invalid.", {
+      code: "shareable_state_transition_seal_invalid"
+    });
+  }
+  state.storage.transactionSync(() => {
+    const existing = activeNamespaceSeal(state.storage.sql, namespace, nowMs);
+    if (existing && existing.seal_id !== sealId) {
+      fail("Shareable state is already sealed for another transition.", {
+        status: 409,
+        code: "shareable_state_transition_sealed"
+      });
+    }
+    state.storage.sql.exec(
+      `INSERT INTO shareable_state_realm_namespace_seals
+        (feature_id, namespace_id, seal_id, expires_at_ms, created_at_ms)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(feature_id, namespace_id) DO UPDATE SET
+         expires_at_ms = excluded.expires_at_ms`,
+      namespace.featureId,
+      namespace.namespaceId,
+      sealId,
+      expiresAtMs,
+      nowMs
+    );
+  });
+  return { sealId, expiresAtMs, snapshot: await snapshotNamespace(state, namespace) };
+}
+
+function releaseNamespaceSeal(state, namespace, input) {
+  const sealId = requireTransitionToken(input?.sealId, "The transition seal ID");
+  const released = state.storage.transactionSync(() => {
+    const existing = activeNamespaceSeal(state.storage.sql, namespace);
+    if (!existing) return false;
+    if (existing.seal_id !== sealId) {
+      fail("The transition seal belongs to another operation.", {
+        status: 409,
+        code: "shareable_state_transition_seal_mismatch"
+      });
+    }
+    state.storage.sql.exec(
+      `DELETE FROM shareable_state_realm_namespace_seals
+       WHERE feature_id = ? AND namespace_id = ? AND seal_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId,
+      sealId
+    );
+    return true;
+  });
+  return { released };
+}
+
 async function namespaceInventory(state, registry) {
   const declarations = registry.features.flatMap((feature) =>
     feature.shareableState.map((declaration) => ({
@@ -530,7 +663,63 @@ function requireSnapshotCloneInput(namespace, input) {
       code: "shareable_state_snapshot_invalid"
     });
   }
-  return { snapshot, entries, expectedTargetMutationVersion };
+  const idempotencyKey = input?.idempotencyKey === undefined
+    ? null
+    : requireTransitionToken(
+        input.idempotencyKey,
+        "The materialization idempotency key"
+      );
+  return { snapshot, entries, expectedTargetMutationVersion, idempotencyKey };
+}
+
+function replayedMaterialization(sql, namespace, idempotencyKey, fingerprint) {
+  if (!idempotencyKey) return null;
+  const existing = sql.exec(
+    `SELECT feature_id, namespace_id, fingerprint, mutation_version
+     FROM shareable_state_realm_materializations
+     WHERE idempotency_key = ?`,
+    idempotencyKey
+  ).toArray()[0];
+  if (!existing) return null;
+  if (
+    existing.feature_id !== namespace.featureId ||
+    existing.namespace_id !== namespace.namespaceId ||
+    existing.fingerprint !== fingerprint
+  ) {
+    fail("The materialization idempotency key was already used differently.", {
+      status: 409,
+      code: "shareable_state_materialization_idempotency_conflict"
+    });
+  }
+  return {
+    cloned: false,
+    replayed: true,
+    mutationVersion: existing.mutation_version,
+    fingerprint: existing.fingerprint
+  };
+}
+
+function recordMaterialization(
+  sql,
+  namespace,
+  idempotencyKey,
+  fingerprint,
+  mutationVersion,
+  nowMs
+) {
+  if (!idempotencyKey) return;
+  sql.exec(
+    `INSERT INTO shareable_state_realm_materializations
+      (idempotency_key, feature_id, namespace_id, fingerprint,
+       mutation_version, created_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    idempotencyKey,
+    namespace.featureId,
+    namespace.namespaceId,
+    fingerprint,
+    mutationVersion,
+    nowMs
+  );
 }
 
 async function cloneSnapshot(state, namespace, input) {
@@ -547,6 +736,14 @@ async function cloneSnapshot(state, namespace, input) {
     });
   }
   return state.storage.transactionSync(() => {
+    const replayed = replayedMaterialization(
+      state.storage.sql,
+      namespace,
+      normalized.idempotencyKey,
+      fingerprint
+    );
+    if (replayed) return replayed;
+    requireNamespaceWritable(state.storage.sql, namespace);
     const target = state.storage.sql.exec(
       `SELECT mutation_version
        FROM shareable_state_realm_namespaces
@@ -587,8 +784,81 @@ async function cloneSnapshot(state, namespace, input) {
       );
     }
     touchNamespace(state.storage.sql, namespace, nowMs);
+    recordMaterialization(
+      state.storage.sql,
+      namespace,
+      normalized.idempotencyKey,
+      fingerprint,
+      1,
+      nowMs
+    );
     return {
       cloned: true,
+      ...(normalized.idempotencyKey ? { replayed: false } : {}),
+      mutationVersion: 1,
+      fingerprint
+    };
+  });
+}
+
+async function initializeEmptyNamespace(state, namespace, input) {
+  const expectedTargetMutationVersion = input?.expectedTargetMutationVersion ?? 0;
+  if (expectedTargetMutationVersion !== 0) {
+    fail("Empty namespaces may only be initialized in a fresh realm.", {
+      code: "shareable_state_snapshot_invalid"
+    });
+  }
+  const idempotencyKey = requireTransitionToken(
+    input?.idempotencyKey,
+    "The materialization idempotency key"
+  );
+  const fingerprint = await fingerprintSnapshotRows(
+    namespace,
+    namespace.declaration.schemaVersion,
+    []
+  );
+  return state.storage.transactionSync(() => {
+    const replayed = replayedMaterialization(
+      state.storage.sql,
+      namespace,
+      idempotencyKey,
+      fingerprint
+    );
+    if (replayed) return replayed;
+    requireNamespaceWritable(state.storage.sql, namespace);
+    const target = state.storage.sql.exec(
+      `SELECT mutation_version
+       FROM shareable_state_realm_namespaces
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one();
+    const targetEntryCount = Number(state.storage.sql.exec(
+      `SELECT COUNT(*) AS total
+       FROM shareable_state_realm_values
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one().total);
+    if (target.mutation_version !== 0 || targetEntryCount !== 0) {
+      fail("Empty state may only be initialized in a fresh namespace.", {
+        status: 409,
+        code: "shareable_state_clone_target_not_fresh"
+      });
+    }
+    const nowMs = Date.now();
+    touchNamespace(state.storage.sql, namespace, nowMs);
+    recordMaterialization(
+      state.storage.sql,
+      namespace,
+      idempotencyKey,
+      fingerprint,
+      1,
+      nowMs
+    );
+    return {
+      cloned: true,
+      replayed: false,
       mutationVersion: 1,
       fingerprint
     };
@@ -628,6 +898,7 @@ function touchNamespace(sql, namespace, nowMs) {
 
 function writeValue(state, namespace, key, valueJson) {
   return state.storage.transactionSync(() => {
+    requireNamespaceWritable(state.storage.sql, namespace);
     const existing = valueRow(state.storage.sql, namespace, key);
     if (existing?.value_json === valueJson) return false;
     if (!existing && namespaceAtCapacity(state.storage.sql, namespace)) {
@@ -658,6 +929,7 @@ function writeValue(state, namespace, key, valueJson) {
 
 function deleteValue(state, namespace, key) {
   return state.storage.transactionSync(() => {
+    requireNamespaceWritable(state.storage.sql, namespace);
     const existing = valueRow(state.storage.sql, namespace, key);
     if (!existing) return false;
     const nowMs = Date.now();
@@ -697,6 +969,7 @@ function incrementValue(state, namespace, input) {
   const key = requireKey(input?.key);
   const amount = requireAmount(input?.amount);
   return state.storage.transactionSync(() => {
+    requireNamespaceWritable(state.storage.sql, namespace);
     const existing = valueRow(state.storage.sql, namespace, key);
     const current = existing ? JSON.parse(existing.value_json) : 0;
     if (!Number.isSafeInteger(current) || !Number.isSafeInteger(current + amount)) {
@@ -741,6 +1014,9 @@ async function boundedCounterValue(state, namespace, input) {
   const descriptor = requireCounterInput(input);
   const key = await boundedCounterKey(descriptor.name, descriptor.subject);
   return state.storage.transactionSync(() => {
+    if (descriptor.operation !== "get") {
+      requireNamespaceWritable(state.storage.sql, namespace);
+    }
     const existing = valueRow(state.storage.sql, namespace, key);
     const current = existing ? JSON.parse(existing.value_json) : descriptor.initial;
     if (
@@ -827,8 +1103,14 @@ async function runOperation(state, namespace, operation, input) {
       return await boundedCounterValue(state, namespace, input);
     case "snapshot":
       return await snapshotNamespace(state, namespace);
+    case "seal-snapshot":
+      return await sealNamespaceSnapshot(state, namespace, input);
+    case "release-seal":
+      return releaseNamespaceSeal(state, namespace, input);
     case "clone-snapshot":
       return await cloneSnapshot(state, namespace, input);
+    case "initialize-empty":
+      return await initializeEmptyNamespace(state, namespace, input);
     default:
       return null;
   }

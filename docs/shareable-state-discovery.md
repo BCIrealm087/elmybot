@@ -48,13 +48,15 @@ The registry applies the same policy to every compatible declared namespace:
 | Used and different | Used and different | `collision` | User choice required |
 
 Only the final row requires input. Automatic selections are durable discovery
-decisions, not early writes: Step 9 will recheck the recorded versions and
-fingerprints, clone the selected snapshots into a fresh integration realm, and
-then activate the link. Until that finalizer exists, any pending link containing
-declared namespaces remains behind the activation barrier.
+decisions, not early writes: the Step 9 finalizer rechecks the recorded versions
+and fingerprints, clones the selected snapshots into a fresh integration realm,
+and then activates the link. Until that succeeds, every pending link remains
+behind the activation barrier.
 
 Step 8's browser and persistence behavior is documented in
-[`shareable-state-resolution.md`](shareable-state-resolution.md).
+[`shareable-state-resolution.md`](shareable-state-resolution.md), and Step 9's
+transition behavior in
+[`shareable-state-finalization.md`](shareable-state-finalization.md).
 
 ## Persistence and recovery
 

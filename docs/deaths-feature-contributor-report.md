@@ -1152,3 +1152,42 @@ and 277 tests. ESLint, public API boundary checks, workspace-package
 validation, generated-document freshness, tracked JavaScript syntax checks,
 and the whitespace check also passed. The non-deploying Worker dry run remains
 delegated to GitHub Actions.
+
+## Shareable-state Step 9: safe and replayable finalization
+
+The pending-link registry now owns the full transition from a recorded state
+decision to an active integration. It resolves the candidates again, acquires
+namespace write seals in deterministic order, and compares the sealed schema,
+mutation version, and fingerprint with discovery. A changed candidate produces
+a new discovery revision and returns the broadcaster to the decision page;
+stale intent is never applied silently.
+
+Current selections are copied—or reset—into a fresh integration realm whose
+generation is the discovery revision. Each namespace operation has a stable
+materialization key, so a retry after a partial failure reuses finished work
+and completes only what remains. The integration, members, routes, applied
+resolution audit record, and first-link defaults become visible together in the
+registry transaction. Concurrent or repeated final requests return the same
+integration rather than creating another result.
+
+The OAuth flow uses this finalizer automatically when discovery has no genuine
+collision and immediately after an accepted collision form. A temporary error
+leaves a resumable finish action; a candidate race returns the latest discovery
+instead. Candidate values stay inside protected realm operations throughout.
+
+**Assessment:** this was one of the most infrastructure-heavy stages and would
+be unreasonable work for a hobby command contributor. That is precisely why it
+belongs in the framework. A contributor still declares a bounded namespace and
+uses the ordinary shareable-state capability; they do not implement locking,
+distributed recovery, realm generations, OAuth retry behavior, or audit
+deduplication. The complexity is real, but centralized once and tested against
+concurrent submissions, stale candidates, exact seal ownership, and interrupted
+materialization. The remaining contributor-facing risk is migration guidance,
+not finalization machinery.
+
+Focused finalization verification passed 4 files and 46 tests. After the final
+race guards were added, the complete local suite passed 25 files and 281 tests.
+ESLint, public API boundary checks, workspace-package validation,
+generated-document freshness, tracked JavaScript syntax checks, and the
+whitespace check also passed. The non-deploying Worker dry run remains delegated
+to GitHub Actions.

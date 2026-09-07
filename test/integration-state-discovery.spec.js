@@ -66,6 +66,152 @@ function inventory(side) {
   };
 }
 
+function finalizingRealmBinding({ failOnceAt = null } = {}) {
+  const targets = new Map();
+  const materializations = new Map();
+  const overrides = new Map();
+  let failed = false;
+  const currentInventory = (side) => ({
+    namespaces: inventory(side).namespaces.map((namespace) =>
+      overrides.get(`${side}\u0000${namespace.namespaceId}`) ?? namespace
+    )
+  });
+  return {
+    targets,
+    materializations,
+    mutate(side, namespaceId) {
+      const namespace = currentInventory(side).namespaces.find(
+        (candidate) => candidate.namespaceId === namespaceId
+      );
+      overrides.set(`${side}\u0000${namespaceId}`, {
+        ...namespace,
+        mutationVersion: namespace.mutationVersion + 1,
+        fingerprint: fingerprint(side === "discord" ? "a" : "b")
+      });
+    },
+    binding: {
+      idFromName: (name) => name,
+      get: (name) => ({
+        fetch: async (input, init) => {
+          const operation = new URL(input).pathname.split("/").at(-1);
+          const body = JSON.parse(init.body);
+          const namespaceKey =
+            `${body.namespace?.featureId}\u0000${body.namespace?.namespaceId}`;
+          if (operation === "inventory") {
+            return Response.json(currentInventory(
+              name.includes("discord:guild") ? "discord" : "twitch"
+            ));
+          }
+          if (operation === "seal-snapshot") {
+            const side = name.includes("discord:guild") ? "discord" : "twitch";
+            const entry = currentInventory(side).namespaces.find((namespace) =>
+              namespace.featureId === body.namespace.featureId &&
+              namespace.namespaceId === body.namespace.namespaceId
+            );
+            return Response.json({
+              sealId: body.storage.sealId,
+              expiresAtMs: body.storage.expiresAtMs,
+              snapshot: {
+                formatVersion: 1,
+                namespace: {
+                  featureId: entry.featureId,
+                  namespaceId: entry.namespaceId,
+                  schemaVersion: entry.schemaVersion
+                },
+                mutationVersion: entry.mutationVersion,
+                fingerprint: entry.fingerprint,
+                meaningful: entry.meaningful,
+                summary: entry.summary,
+                entries: entry.meaningful
+                  ? [{ key: "value", value: `${side}:${entry.namespaceId}` }]
+                  : []
+              }
+            });
+          }
+          if (operation === "release-seal") {
+            return Response.json({ released: true });
+          }
+          if (operation === "clone-snapshot") {
+            const idempotencyKey = body.storage.idempotencyKey;
+            if (materializations.has(idempotencyKey)) {
+              return Response.json(materializations.get(idempotencyKey));
+            }
+            if (failOnceAt === body.namespace.namespaceId && !failed) {
+              failed = true;
+              return Response.json({
+                error: "Temporary target failure.",
+                code: "shareable_state_realm_unavailable"
+              }, { status: 503 });
+            }
+            const snapshot = {
+              ...body.storage.snapshot,
+              mutationVersion: 1
+            };
+            targets.set(namespaceKey, snapshot);
+            const result = {
+              cloned: true,
+              replayed: false,
+              mutationVersion: 1,
+              fingerprint: snapshot.fingerprint
+            };
+            materializations.set(idempotencyKey, {
+              ...result,
+              cloned: false,
+              replayed: true
+            });
+            return Response.json(result);
+          }
+          if (operation === "initialize-empty") {
+            const idempotencyKey = body.storage.idempotencyKey;
+            if (materializations.has(idempotencyKey)) {
+              return Response.json(materializations.get(idempotencyKey));
+            }
+            if (failOnceAt === body.namespace.namespaceId && !failed) {
+              failed = true;
+              return Response.json({
+                error: "Temporary target failure.",
+                code: "shareable_state_realm_unavailable"
+              }, { status: 503 });
+            }
+            const targetFingerprint = fingerprint("e");
+            targets.set(namespaceKey, {
+              formatVersion: 1,
+              namespace: {
+                featureId: body.namespace.featureId,
+                namespaceId: body.namespace.namespaceId,
+                schemaVersion: 1
+              },
+              mutationVersion: 1,
+              fingerprint: targetFingerprint,
+              meaningful: false,
+              summary: { kind: "entry_count", used: false, entryCount: 0 },
+              entries: []
+            });
+            const result = {
+              cloned: true,
+              replayed: false,
+              mutationVersion: 1,
+              fingerprint: targetFingerprint
+            };
+            materializations.set(idempotencyKey, {
+              ...result,
+              cloned: false,
+              replayed: true
+            });
+            return Response.json(result);
+          }
+          if (operation === "snapshot") {
+            return Response.json(targets.get(namespaceKey));
+          }
+          return Response.json({ error: "Unexpected realm operation." }, {
+            status: 500
+          });
+        }
+      })
+    }
+  };
+}
+
 describe("Pending integration shareable-state discovery", () => {
   it("classifies automatic outcomes and persists only safe collision metadata", async () => {
     const discord = discordGroup();
@@ -73,16 +219,10 @@ describe("Pending integration shareable-state discovery", () => {
     await runInDurableObject(
       integrationRegistryStub(env),
       async (_registryInstance, registryState) => {
+        const realms = finalizingRealmBinding();
         const discoveryEnv = {
           ...env,
-          SHAREABLE_STATE_REALM: {
-            idFromName: (name) => name,
-            get: (name) => ({
-              fetch: async () => Response.json(
-                inventory(name.includes("discord:guild") ? "discord" : "twitch")
-              )
-            })
-          }
+          SHAREABLE_STATE_REALM: realms.binding
         };
         const registry = new IntegrationRegistry(registryState, discoveryEnv);
         const invitation = await registry.createInvitation({
@@ -281,13 +421,41 @@ describe("Pending integration shareable-state discovery", () => {
           invitation.invitationId
         ).one().total).toBe(1);
 
-        await expect(registry.activateInvitation({
+        const activations = await Promise.all([
+          registry.activateInvitation({
+            invitationId: invitation.invitationId,
+            reservationId
+          }),
+          registry.activateInvitation({
+            invitationId: invitation.invitationId,
+            reservationId
+          })
+        ]);
+        expect(activations.map((result) => result.replayed).sort())
+          .toEqual([false, true]);
+        const activated = activations.find((result) => !result.replayed);
+        expect(activated).toMatchObject({
+          replayed: false,
+          integration: {
+            status: "active",
+            shareableStateGeneration: 1
+          }
+        });
+        expect(realms.targets.size).toBe(5);
+        expect(realms.targets.get("test.discovery\u0000collision").entries)
+          .toEqual([{ key: "value", value: "twitch:collision" }]);
+        expect(realms.targets.get("test.discovery\u0000both_empty").meaningful)
+          .toBe(false);
+        expect((await registry.activateInvitation({
           invitationId: invitation.invitationId,
           reservationId
-        })).rejects.toMatchObject({
-          status: 409,
-          code: "integration_state_finalization_required"
-        });
+        })).replayed).toBe(true);
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_audit
+           WHERE invitation_id = ?
+             AND event = 'integration.state_resolution.applied.v1'`,
+          invitation.invitationId
+        ).one().total).toBe(1);
       }
     );
   });
@@ -370,6 +538,167 @@ describe("Pending integration shareable-state discovery", () => {
           status: 409,
           code: "integration_state_resolution_not_required"
         });
+      }
+    );
+  });
+
+  it("rediscovers changed candidates and requires a fresh collision decision", async () => {
+    const discord = discordGroup();
+    const twitch = twitchGroup();
+    await runInDurableObject(
+      integrationRegistryStub(env),
+      async (_registryInstance, registryState) => {
+        const realms = finalizingRealmBinding();
+        const registry = new IntegrationRegistry(registryState, {
+          ...env,
+          SHAREABLE_STATE_REALM: realms.binding
+        });
+        const invitation = await registry.createInvitation({
+          group: discord,
+          actor: { platform: "discord", id: uniqueId("manager"), claims: [] },
+          connectUrl: "https://example.com/twitch/integrations/connect"
+        });
+        const reservationId = crypto.randomUUID();
+        const reservation = await registry.reserveInvitation({
+          token: invitationToken(invitation),
+          reservationId,
+          reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
+        });
+        await registry.verifyInvitation({
+          invitationId: reservation.invitationId,
+          reservationId,
+          group: twitch,
+          actor: {
+            platform: "twitch",
+            id: twitch.id,
+            claims: ["twitch.broadcaster"]
+          }
+        });
+        await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "twitch"
+          }]
+        });
+
+        realms.mutate("discord", "collision");
+        await expect(registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        })).rejects.toMatchObject({
+          status: 409,
+          code: "integration_state_rediscovery_required"
+        });
+        const rediscovered = await registry.resumeInvitation({ reservationId });
+        expect(rediscovered.pendingIntegration).toMatchObject({
+          status: "awaiting_state_resolution",
+          stateDiscovery: { version: 2, requiresResolution: true },
+          stateResolution: null
+        });
+        expect(realms.targets.size).toBe(0);
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_audit
+           WHERE invitation_id = ?
+             AND event = 'integration.state_discovery.refreshed.v1'`,
+          invitation.invitationId
+        ).one().total).toBe(1);
+
+        await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 2,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "twitch"
+          }]
+        });
+        const activated = await registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        });
+        expect(activated.integration).toMatchObject({
+          status: "active",
+          shareableStateGeneration: 2
+        });
+        expect(registry.getDefaultLink(discord, "twitch")).toMatchObject({
+          integration: { shareableStateGeneration: 2 }
+        });
+      }
+    );
+  });
+
+  it("resumes a partially materialized realm without duplicating namespace copies", async () => {
+    const discord = discordGroup();
+    const twitch = twitchGroup();
+    await runInDurableObject(
+      integrationRegistryStub(env),
+      async (_registryInstance, registryState) => {
+        const realms = finalizingRealmBinding({ failOnceAt: "collision" });
+        const registry = new IntegrationRegistry(registryState, {
+          ...env,
+          SHAREABLE_STATE_REALM: realms.binding
+        });
+        const invitation = await registry.createInvitation({
+          group: discord,
+          actor: { platform: "discord", id: uniqueId("manager"), claims: [] },
+          connectUrl: "https://example.com/twitch/integrations/connect"
+        });
+        const reservationId = crypto.randomUUID();
+        const reservation = await registry.reserveInvitation({
+          token: invitationToken(invitation),
+          reservationId,
+          reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
+        });
+        await registry.verifyInvitation({
+          invitationId: reservation.invitationId,
+          reservationId,
+          group: twitch,
+          actor: {
+            platform: "twitch",
+            id: twitch.id,
+            claims: ["twitch.broadcaster"]
+          }
+        });
+        await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "discord"
+          }]
+        });
+
+        await expect(registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        })).rejects.toMatchObject({
+          status: 503,
+          code: "integration_state_finalization_unavailable"
+        });
+        expect(realms.targets.size).toBe(1);
+        expect((await registry.resumeInvitation({ reservationId }))
+          .pendingIntegration.status).toBe("awaiting_state_resolution");
+
+        const activated = await registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        });
+        expect(activated).toMatchObject({
+          replayed: false,
+          integration: { status: "active" }
+        });
+        expect(realms.targets.size).toBe(5);
+        expect(realms.materializations.size).toBe(5);
+        expect(registryState.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_audit
+           WHERE invitation_id = ?
+             AND event = 'integration.state_resolution.applied.v1'`,
+          invitation.invitationId
+        ).one().total).toBe(1);
       }
     );
   });

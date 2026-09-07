@@ -286,7 +286,12 @@ export function publicDefaultLink(row) {
     ),
     integration: {
       id: validatedOpaqueId(row.integration_id, "Integration ID"),
-      key: `integration:${row.integration_id}`
+      key: `integration:${row.integration_id}`,
+      shareableStateGeneration: Number.isSafeInteger(
+        row.shareable_state_generation
+      ) && row.shareable_state_generation >= 1
+        ? row.shareable_state_generation
+        : 1
     },
     targetGroup: parseGroupKey(row.target_group_key),
     createdAtMs: row.created_at_ms,

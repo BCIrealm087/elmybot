@@ -54,7 +54,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch` | Twitch health check, EventSub challenges, notifications, and revocations |
 | `/twitch/oauth/*` | Twitch bot-account OAuth |
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
-| `/twitch/integrations/*` | Redeem, resume, resolve shareable state for, or cancel a Discord integration invitation |
+| `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
@@ -166,9 +166,14 @@ Successful authorization verifies Twitch and creates a durable pending link.
 The browser is redirected to a safely refreshable pending page while the link
 discovers shareable state. Empty, one-sided, and identical namespaces receive
 automatic decisions; different nonempty namespaces wait for explicit
-resolution. Only final activation creates an integration
-containing the authenticated Discord guild and Twitch channel, with three
-enabled routes:
+resolution. Only final activation creates an integration containing the
+authenticated Discord guild and Twitch channel. Finalization briefly seals and
+rechecks candidate namespaces, then either materializes a fresh shared realm or
+returns to discovery if state changed. Its copy/reset operations and activation
+transaction are replay-safe, so interrupted retries do not create duplicates.
+See
+[`docs/shareable-state-finalization.md`](docs/shareable-state-finalization.md).
+The integration has three enabled routes:
 
 | Route | Outcome |
 |---|---|

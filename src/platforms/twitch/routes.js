@@ -22,6 +22,7 @@ import {
 import { twitchPublicUrl } from "./environment.js";
 import { handleTwitchChannelHealth } from "./channel-registry.js";
 import {
+	activatePendingIntegration,
 	cancelPendingIntegration,
 	IntegrationRegistryError,
 	resolvePendingIntegrationState,
@@ -128,6 +129,82 @@ async function cancelPendingIntegrationRoute(request, env) {
 	return renderTwitchIntegrationCancelled();
 }
 
+async function finalizePendingIntegration(env, pending, reservationId) {
+	try {
+		const result = await activatePendingIntegration(env, {
+			invitationId: pending.invitationId,
+			reservationId
+		});
+		return renderTwitchIntegrationSuccess(
+			pending.twitchLabel ?? pending.twitchGroup?.id,
+			result.integration
+		);
+	} catch (error) {
+		if (
+			error instanceof IntegrationRegistryError &&
+			error.code === "integration_pending_expired"
+		) {
+			return renderTwitchOnboardingError("This pending integration expired.", 410);
+		}
+		let current = pending;
+		try {
+			current = (await resumePendingIntegration(env, { reservationId }))
+				.pendingIntegration;
+		} catch {
+			// Keep the last safe pending representation for the retry page.
+		}
+		if (
+			error instanceof IntegrationRegistryError &&
+			error.code === "integration_state_rediscovery_required"
+		) {
+			return renderTwitchIntegrationPending(current, {
+				error: "Shareable state changed during finalization. Review the latest state choices.",
+				status: 409
+			});
+		}
+		return renderTwitchIntegrationPending(current, {
+			error: "The link could not be finalized yet. Your choices are saved; try again.",
+			status: error instanceof IntegrationRegistryError && error.status === 409
+				? 409
+				: 503
+		});
+	}
+}
+
+async function finalizePendingIntegrationRoute(request, env) {
+	if (!sameOriginRequest(request, env)) {
+		return new Response("Forbidden", { status: 403 });
+	}
+	const reservationId = cookieValue(request, INTEGRATION_RESUME_COOKIE);
+	if (!reservationId) {
+		return renderTwitchOnboardingError(
+			"This pending integration continuation is unavailable or expired.",
+			404
+		);
+	}
+	let resumed;
+	try {
+		resumed = await resumePendingIntegration(env, { reservationId });
+	} catch {
+		return renderTwitchOnboardingError(
+			"This pending integration continuation is unavailable or expired.",
+			404
+		);
+	}
+	const pending = resumed.pendingIntegration;
+	if (pending.status === "active") {
+		return renderTwitchIntegrationSuccess(
+			pending.twitchLabel ?? pending.twitchGroup?.id,
+			resumed.integration
+		);
+	}
+	if (pending.status === "cancelled") return renderTwitchIntegrationCancelled();
+	if (pending.status === "expired") {
+		return renderTwitchOnboardingError("This pending integration expired.", 410);
+	}
+	return finalizePendingIntegration(env, pending, reservationId);
+}
+
 async function resolvePendingIntegrationStateRoute(request, env) {
 	if (!sameOriginRequest(request, env)) {
 		return new Response("Forbidden", { status: 403 });
@@ -211,7 +288,11 @@ async function resolvePendingIntegrationStateRoute(request, env) {
 			discoveryVersion,
 			selections
 		});
-		return renderTwitchIntegrationPending(result.pendingIntegration);
+		return finalizePendingIntegration(
+			env,
+			result.pendingIntegration,
+			reservationId
+		);
 	} catch (error) {
 		if (
 			error instanceof IntegrationRegistryError &&
@@ -547,6 +628,12 @@ export async function handleTwitchManagementRoute(
 			return new Response("Method Not Allowed", { status: 405 });
 		}
 		return resolvePendingIntegrationStateRoute(request, env);
+	}
+	if (url.pathname === "/twitch/integrations/finalize") {
+		if (request.method !== "POST") {
+			return new Response("Method Not Allowed", { status: 405 });
+		}
+		return finalizePendingIntegrationRoute(request, env);
 	}
 	if (url.pathname === "/twitch/channels/oauth/start") {
 		if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });

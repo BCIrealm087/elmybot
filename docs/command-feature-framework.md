@@ -520,7 +520,13 @@ when groups link. Each step is intended to land and pass CI independently:
    choice to all, and can cancel without modifying either candidate realm.
    Submitted choices are bound immutably to the discovery revision for the
    Step 9 finalizer.
-9. **Make finalization concurrency-safe and idempotent.**
+9. **Make finalization concurrency-safe and idempotent — completed.** Candidate
+   namespaces receive bounded write seals before their discovery versions and
+   fingerprints are rechecked. Stale candidates create a new discovery
+   revision; current selections are cloned or reset into a generation-bound
+   fresh integration realm with per-namespace idempotency keys. Only a complete
+   realm can cross the registry's activation barrier, and replay returns the
+   existing integration without duplicate defaults or audit events.
 10. **Implement revocation and standalone continuation.**
 11. **Add lifecycle, security, concurrency, and many-link tests.**
 12. **Migrate `fun.deaths` to shareable state.**

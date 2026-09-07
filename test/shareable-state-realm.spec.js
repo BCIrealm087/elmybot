@@ -6,13 +6,16 @@ import {
   cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  initializeEmptyShareableStateNamespace,
   inventoryShareableStateNamespaces,
+  releaseShareableStateNamespaceSeal,
   requestStandaloneRealmState,
   shareableStateSnapshotHasMeaningfulState,
   shareableStateSnapshotsEqual,
   ShareableStateRealmBackend,
   shareableStateRealmObjectName,
   shareableStateRealmStub,
+  sealShareableStateNamespace,
   snapshotShareableStateNamespace,
   standaloneRealmObjectName,
   standaloneRealmStub
@@ -396,9 +399,11 @@ describe("Standalone shareable-state realms", () => {
 
       expect(await cloneShareableStateSnapshot(clientEnv, {
         realm: targetIdentity,
-        snapshot: sourceSnapshot
+        snapshot: sourceSnapshot,
+        idempotencyKey: "materialize:test:score"
       })).toEqual({
         cloned: true,
+        replayed: false,
         mutationVersion: 1,
         fingerprint: sourceSnapshot.fingerprint
       });
@@ -411,6 +416,16 @@ describe("Standalone shareable-state realms", () => {
       expect(cloned.entries).toEqual(sourceSnapshot.entries);
       expect(shareableStateSnapshotsEqual(sourceSnapshot, cloned)).toBe(true);
 
+      expect(await cloneShareableStateSnapshot(clientEnv, {
+        realm: targetIdentity,
+        snapshot: sourceSnapshot,
+        idempotencyKey: "materialize:test:score"
+      })).toEqual({
+        cloned: false,
+        replayed: true,
+        mutationVersion: 1,
+        fingerprint: sourceSnapshot.fingerprint
+      });
       await expect(cloneShareableStateSnapshot(clientEnv, {
         realm: targetIdentity,
         snapshot: sourceSnapshot
@@ -443,6 +458,115 @@ describe("Standalone shareable-state realms", () => {
       );
       expect(unchanged.mutationVersion).toBe(2);
       expect(shareableStateSnapshotsEqual(sourceSnapshot, unchanged)).toBe(true);
+    });
+  });
+
+  it("seals candidate mutations while allowing reads and idempotent release", async () => {
+    const identity = createStandaloneRealmIdentity(discordGroup());
+    const stub = shareableStateRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      await identityRealmRequest(backend, identity, "score", "set", {
+        key: "value",
+        value: 1
+      });
+      const sealId = "integration-finalize:test:score";
+      const expiresAtMs = Date.now() + 60_000;
+      const sealed = await sealShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        sealId,
+        expiresAtMs
+      });
+      expect(sealed).toMatchObject({
+        sealId,
+        expiresAtMs,
+        snapshot: {
+          mutationVersion: 1,
+          entries: [{ key: "value", value: 1 }]
+        }
+      });
+      await expect(sealShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        sealId: "integration-finalize:other:score",
+        expiresAtMs
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_transition_sealed"
+      });
+      expect((await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "get",
+        { key: "value" }
+      ))).data).toEqual({ value: 1 });
+      expect(await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "set",
+        { key: "value", value: 2 }
+      ))).toMatchObject({
+        status: 409,
+        data: { code: "shareable_state_transition_sealed" }
+      });
+      await expect(releaseShareableStateNamespaceSeal(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        sealId: "integration-finalize:other:score"
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_transition_seal_mismatch"
+      });
+      await expect(releaseShareableStateNamespaceSeal(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        sealId
+      })).resolves.toEqual({ released: true });
+      await expect(releaseShareableStateNamespaceSeal(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        sealId
+      })).resolves.toEqual({ released: false });
+      expect((await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "set",
+        { key: "value", value: 2 }
+      ))).status).toBe(200);
+    });
+  });
+
+  it("initializes reset selections once in a fresh integration realm", async () => {
+    const identity = createIntegrationRealmIdentity({ id: uniqueId("reset") });
+    const stub = shareableStateRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      const input = {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        idempotencyKey: "materialize:reset:score"
+      };
+      await expect(initializeEmptyShareableStateNamespace(clientEnv, input))
+        .resolves.toMatchObject({ cloned: true, replayed: false });
+      await expect(initializeEmptyShareableStateNamespace(clientEnv, input))
+        .resolves.toMatchObject({ cloned: false, replayed: true });
+      await expect(snapshotShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score"
+      })).resolves.toMatchObject({ mutationVersion: 1, meaningful: false });
     });
   });
 

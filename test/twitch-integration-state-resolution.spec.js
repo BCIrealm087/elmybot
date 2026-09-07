@@ -84,6 +84,15 @@ function routeEnvironment(pending, recordedRequests) {
           replayed: false
         });
       }
+      if (pathname === "/invitations/activate") {
+        recordedRequests.activations ??= [];
+        recordedRequests.activations.push(body);
+        return Response.json({
+          integration: { id: "active-integration-id", status: "active" },
+          alreadyLinked: false,
+          replayed: false
+        }, { status: 201 });
+      }
       return Response.json({ error: "Not found" }, { status: 404 });
     }
   };
@@ -194,8 +203,7 @@ describe("Twitch integration state-resolution page", () => {
     );
     const acceptedHtml = await accepted.text();
     expect(accepted.status).toBe(200);
-    expect(acceptedHtml).toContain("State review is complete");
-    expect(acceptedHtml).toContain("Your state choices are recorded");
+    expect(acceptedHtml).toContain("Twitch and Discord are linked");
     expect(recorded.resolutions).toEqual([{
       reservationId: "resume-token",
       discoveryVersion: 3,
@@ -211,6 +219,10 @@ describe("Twitch integration state-resolution page", () => {
           selection: "reset"
         }
       ]
+    }]);
+    expect(recorded.activations).toEqual([{
+      invitationId: "invitation-id",
+      reservationId: "resume-token"
     }]);
   });
 });

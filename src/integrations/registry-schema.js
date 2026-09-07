@@ -138,7 +138,8 @@ export function initializeRegistryTables(state) {
       created_by_platform TEXT NOT NULL,
       created_by_actor_id TEXT NOT NULL,
       completed_by_platform TEXT NOT NULL,
-      completed_by_actor_id TEXT NOT NULL
+      completed_by_actor_id TEXT NOT NULL,
+      shareable_state_generation INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS integration_members (
@@ -265,4 +266,15 @@ export function initializeRegistryTables(state) {
     WHERE preference = 1
     ON CONFLICT(source_group_key, target_platform) DO NOTHING;
   `);
+  const integrationColumns = new Set(
+    state.storage.sql.exec("PRAGMA table_info(integrations)")
+      .toArray()
+      .map((column) => column.name)
+  );
+  if (!integrationColumns.has("shareable_state_generation")) {
+    state.storage.sql.exec(
+      `ALTER TABLE integrations
+       ADD COLUMN shareable_state_generation INTEGER NOT NULL DEFAULT 1`
+    );
+  }
 }

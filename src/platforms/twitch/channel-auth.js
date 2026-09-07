@@ -6,7 +6,9 @@ import {
 } from "./auth.js";
 import { logError } from "../../common.js";
 import {
+  activatePendingIntegration,
   IntegrationRegistryError,
+  resumePendingIntegration,
   revokeIntegrationsForGroup,
   verifyIntegrationInvitation
 } from "../../integrations/index.js";
@@ -94,7 +96,7 @@ export class TwitchChannelAuth {
 		const pending = authorization.integrationCompletionPending;
 		if (!pending) return { result: null, error: null };
 		try {
-			const result = await verifyIntegrationInvitation(this.env, {
+			let result = await verifyIntegrationInvitation(this.env, {
 				invitationId: pending.invitationId,
 				reservationId: pending.reservationId,
 				group: {
@@ -109,6 +111,15 @@ export class TwitchChannelAuth {
 				},
 				groupLabel: authorization.login
 			});
+			if (
+				result.pendingIntegration?.stateDiscovery &&
+				!result.pendingIntegration.stateDiscovery.requiresResolution
+			) {
+				result = await activatePendingIntegration(this.env, {
+					invitationId: pending.invitationId,
+					reservationId: pending.reservationId
+				});
+			}
 			authorization.integrationCompletionPending = null;
 			return { result, error: null };
 		} catch (error) {
@@ -119,8 +130,31 @@ export class TwitchChannelAuth {
 			}, error);
 			if (
 				error instanceof IntegrationRegistryError &&
+				error.code === "integration_state_rediscovery_required"
+			) {
+				authorization.integrationCompletionPending = null;
+				try {
+					return {
+						result: await resumePendingIntegration(this.env, {
+							reservationId: pending.reservationId
+						}),
+						error: null
+					};
+				} catch {
+					return { result: null, error: null };
+				}
+			}
+			const retryableStateTransition =
+				error instanceof IntegrationRegistryError &&
+				(
+					error.code.startsWith("integration_state_discovery_") ||
+					error.code === "integration_state_finalization_busy" ||
+					error.code === "integration_state_finalization_unavailable"
+				);
+			if (
+				error instanceof IntegrationRegistryError &&
 				error.status < 500 &&
-				!error.code.startsWith("integration_state_discovery_")
+				!retryableStateTransition
 			) {
 				authorization.integrationCompletionPending = null;
 				return { result: null, error: error.code };

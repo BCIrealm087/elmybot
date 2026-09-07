@@ -128,7 +128,16 @@ function normalizedDefaultLink(value, invocation, targetPlatform) {
   let sourceGroup;
   let targetGroup;
   try {
-    integration = createIntegrationRef(value?.integration);
+    const reference = createIntegrationRef(value?.integration);
+    const shareableStateGeneration =
+      value?.integration?.shareableStateGeneration ?? 1;
+    if (
+      !Number.isSafeInteger(shareableStateGeneration) ||
+      shareableStateGeneration < 1
+    ) {
+      throw new TypeError("Invalid shareable-state generation.");
+    }
+    integration = Object.freeze({ ...reference, shareableStateGeneration });
     sourceGroup = createPlatformGroupRef(value?.sourceGroup);
     targetGroup = createPlatformGroupRef(value?.targetGroup);
   } catch (cause) {
@@ -175,7 +184,9 @@ async function resolveShareableState(
   return Object.freeze({
     featureId,
     namespaceId,
-    realm: createIntegrationRealmIdentity(link.integration),
+    realm: createIntegrationRealmIdentity(link.integration, {
+      generation: link.integration.shareableStateGeneration ?? 1
+    }),
     link
   });
 }

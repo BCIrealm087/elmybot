@@ -278,7 +278,10 @@ function collisionResolutionBody(pendingIntegration, error) {
 	};
 }
 
-export function renderTwitchIntegrationPending(pendingIntegration, { error = "" } = {}) {
+export function renderTwitchIntegrationPending(
+	pendingIntegration,
+	{ error = "", status = error ? 422 : 200 } = {}
+) {
 	const channel = pendingIntegration?.twitchLabel ??
 		pendingIntegration?.twitchGroup?.id ??
 		"your Twitch channel";
@@ -292,7 +295,7 @@ export function renderTwitchIntegrationPending(pendingIntegration, { error = "" 
 			title: "Resolve Elmybot state",
 			body: resolutionPage.body,
 			script: resolutionPage.script,
-			status: error ? 422 : 200,
+			status,
 			wide: true
 		});
 	}
@@ -301,8 +304,12 @@ export function renderTwitchIntegrationPending(pendingIntegration, { error = "" 
 		: discovery
 			? "No conflicting shareable state needs your input. The link is ready for finalization."
 			: "Elmybot is waiting for shareable-state discovery. You can safely refresh or return to this page.";
+	const readyToFinalize = Boolean(
+		resolution || (discovery && !discovery.requiresResolution)
+	);
 	return pageResponse({
 		title: "Elmybot link pending",
+		status,
 		body: `
     <p class="eyebrow success">${resolution
 			? "Choices recorded"
@@ -318,6 +325,11 @@ export function renderTwitchIntegrationPending(pendingIntegration, { error = "" 
     <p>${verificationPending
 			? "Elmybot is retrying the verified-channel handoff. Refresh this page to check again."
 			: stateMessage}</p>
+    ${error ? `<p class="notice" role="alert">${escapeHtml(error)}</p>` : ""}
+    ${readyToFinalize ? `
+    <form method="post" action="/twitch/integrations/finalize">
+      <button type="submit">Finish linking</button>
+    </form>` : ""}
     <form method="post" action="/twitch/integrations/cancel">
       <button type="submit">Cancel linking</button>
     </form>

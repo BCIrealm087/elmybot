@@ -1,8 +1,16 @@
 import { jsonResponse, logError } from "../common.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
+  cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
-  createStandaloneRealmIdentity
+  createStandaloneRealmIdentity,
+  initializeEmptyShareableStateNamespace,
+  releaseShareableStateNamespaceSeal,
+  sealShareableStateNamespace,
+  shareableStateRealmObjectName,
+  shareableStateSnapshotsEqual,
+  snapshotShareableStateNamespace,
+  ShareableStateRealmError
 } from "../shareable-state/index.js";
 import {
   discoverIntegrationShareableState,
@@ -63,6 +71,7 @@ const MAX_PAGE_SIZE = 25;
 const MAX_ROUTE_FANOUT = 25;
 const MAX_PENDING_STATE_SELECTIONS = 500;
 const PENDING_STATE_SELECTIONS = new Set(["discord", "twitch", "reset"]);
+const FINALIZATION_SEAL_LEASE_MS = 60 * 1000;
 
 function noStoreJson(value, status = 200) {
   const response = jsonResponse(value, status);
@@ -303,6 +312,7 @@ export class IntegrationRegistry {
       activatedAtMs: row.activated_at_ms,
       revokedAtMs: row.revoked_at_ms,
       revokedReason: row.revoked_reason,
+      shareableStateGeneration: row.shareable_state_generation ?? 1,
       members: membersByIntegration.get(row.integration_id) ?? []
     }));
   }
@@ -310,7 +320,8 @@ export class IntegrationRegistry {
   getIntegration(integrationId) {
     const row = this.state.storage.sql.exec(
       `SELECT integration_id, status, created_at_ms, updated_at_ms,
-              activated_at_ms, revoked_at_ms, revoked_reason
+              activated_at_ms, revoked_at_ms, revoked_reason,
+              shareable_state_generation
        FROM integrations WHERE integration_id = ?`,
       validatedOpaqueId(integrationId, "Integration ID")
     ).toArray()[0];
@@ -331,6 +342,7 @@ export class IntegrationRegistry {
       activatedAtMs: row.activated_at_ms,
       revokedAtMs: row.revoked_at_ms,
       revokedReason: row.revoked_reason,
+      shareableStateGeneration: row.shareable_state_generation ?? 1,
       members: members.map(publicMember)
     };
   }
@@ -367,7 +379,8 @@ export class IntegrationRegistry {
     const row = this.state.storage.sql.exec(
       `SELECT default_link.source_group_key, default_link.target_platform,
               default_link.integration_id, default_link.target_group_key,
-              default_link.created_at_ms, default_link.updated_at_ms
+              default_link.created_at_ms, default_link.updated_at_ms,
+              integration.shareable_state_generation
        FROM integration_default_links default_link
        JOIN integrations integration
          ON integration.integration_id = default_link.integration_id
@@ -880,7 +893,8 @@ export class IntegrationRegistry {
 
   effectiveCandidateRealm(group, targetPlatform) {
     const selected = this.state.storage.sql.exec(
-      `SELECT default_link.integration_id
+      `SELECT default_link.integration_id,
+              integration.shareable_state_generation
        FROM integration_default_links default_link
        JOIN integrations integration
          ON integration.integration_id = default_link.integration_id
@@ -892,11 +906,14 @@ export class IntegrationRegistry {
       targetPlatform
     ).toArray()[0];
     return selected
-      ? createIntegrationRealmIdentity({ id: selected.integration_id })
+      ? createIntegrationRealmIdentity(
+          { id: selected.integration_id },
+          { generation: selected.shareable_state_generation ?? 1 }
+        )
       : createStandaloneRealmIdentity(group);
   }
 
-  persistPendingDiscovery(row, discovery) {
+  persistPendingDiscovery(row, discovery, { replaceVersion = null } = {}) {
     const nowMs = Date.now();
     const result = this.state.storage.transactionSync(() => {
       const current = this.pendingInvitationByReservation(row.reservation_id);
@@ -915,8 +932,18 @@ export class IntegrationRegistry {
         return { expired: true };
       }
       const existing = this.latestPendingDiscovery(row.invitation_id);
-      if (existing) return this.publicPendingDiscovery(row.invitation_id);
-      const discoveryVersion = 1;
+      if (replaceVersion === null && existing) {
+        return this.publicPendingDiscovery(row.invitation_id);
+      }
+      if (
+        replaceVersion !== null &&
+        existing?.discovery_version !== replaceVersion
+      ) {
+        return this.publicPendingDiscovery(row.invitation_id);
+      }
+      const discoveryVersion = existing
+        ? existing.discovery_version + 1
+        : 1;
       this.state.storage.sql.exec(
         `INSERT INTO integration_pending_discoveries
           (invitation_id, discovery_version, requires_resolution,
@@ -962,9 +989,11 @@ export class IntegrationRegistry {
       audit(this.state.storage.sql, {
         integrationId: row.pending_integration_id,
         invitationId: row.invitation_id,
-        event: discovery.requiresResolution
-          ? "integration.state_discovery.collisions_found.v1"
-          : "integration.state_discovery.automatically_resolved.v1",
+        event: replaceVersion === null
+          ? discovery.requiresResolution
+            ? "integration.state_discovery.collisions_found.v1"
+            : "integration.state_discovery.automatically_resolved.v1"
+          : "integration.state_discovery.refreshed.v1",
         occurredAtMs: nowMs
       });
       return this.publicPendingDiscovery(row.invitation_id);
@@ -1005,6 +1034,38 @@ export class IntegrationRegistry {
       throw error;
     }
     return this.persistPendingDiscovery(row, discovery);
+  }
+
+  async refreshPendingDiscovery(reservationId, replaceVersion) {
+    const row = this.pendingInvitationByReservation(reservationId);
+    if (!row || row.pending_status !== "awaiting_state_resolution") {
+      throw new IntegrationRegistryError(
+        "The pending integration is no longer available for rediscovery.",
+        { status: 409, code: "integration_state_discovery_stale" }
+      );
+    }
+    const discordGroup = parseGroupKey(row.discord_group_key);
+    const twitchGroup = parseGroupKey(row.twitch_group_key);
+    const discordRealm = this.effectiveCandidateRealm(discordGroup, "twitch");
+    const twitchRealm = this.effectiveCandidateRealm(twitchGroup, "discord");
+    let discovery;
+    try {
+      discovery = await discoverIntegrationShareableState(this.env, {
+        discordRealm,
+        twitchRealm,
+        correlationId: `integration-state-rediscovery:${row.pending_integration_id}`
+      });
+    } catch (error) {
+      if (error instanceof IntegrationStateDiscoveryError) {
+        throw new IntegrationRegistryError(error.message, {
+          status: error.status,
+          code: error.code,
+          cause: error
+        });
+      }
+      throw error;
+    }
+    return this.persistPendingDiscovery(row, discovery, { replaceVersion });
   }
 
   expirePendingRow(row, nowMs) {
@@ -1489,6 +1550,283 @@ export class IntegrationRegistry {
     return result;
   }
 
+  pendingFinalizationPlan(row) {
+    const discovery = this.latestPendingDiscovery(row.invitation_id);
+    if (!discovery) {
+      throw new IntegrationRegistryError(
+        "Shareable-state discovery has not completed.",
+        { status: 409, code: "integration_state_discovery_required" }
+      );
+    }
+    const resolution = this.publicPendingResolution(row.invitation_id);
+    if (discovery.requires_resolution && !resolution) {
+      throw new IntegrationRegistryError(
+        "Shareable-state collisions still require a decision.",
+        { status: 409, code: "integration_state_resolution_required" }
+      );
+    }
+    const selectedByKey = new Map((resolution?.selections ?? []).map(
+      (selection) => [
+        `${selection.featureId}\u0000${selection.namespaceId}`,
+        selection.selection
+      ]
+    ));
+    const namespaces = this.state.storage.sql.exec(
+      `SELECT feature_id, namespace_id, schema_version,
+              discord_mutation_version, discord_fingerprint,
+              twitch_mutation_version, twitch_fingerprint,
+              outcome, automatic_selection
+       FROM integration_pending_namespace_discoveries
+       WHERE invitation_id = ? AND discovery_version = ?
+       ORDER BY feature_id, namespace_id`,
+      row.invitation_id,
+      discovery.discovery_version
+    ).toArray().map((namespace) => {
+      const key = `${namespace.feature_id}\u0000${namespace.namespace_id}`;
+      const selection = resolution
+        ? selectedByKey.get(key)
+        : namespace.automatic_selection;
+      if (!PENDING_STATE_SELECTIONS.has(selection)) {
+        throw new IntegrationRegistryError(
+          "The shareable-state finalization plan is incomplete.",
+          { status: 409, code: "integration_state_resolution_required" }
+        );
+      }
+      return {
+        featureId: namespace.feature_id,
+        namespaceId: namespace.namespace_id,
+        schemaVersion: namespace.schema_version,
+        selection,
+        discord: {
+          mutationVersion: namespace.discord_mutation_version,
+          fingerprint: namespace.discord_fingerprint
+        },
+        twitch: {
+          mutationVersion: namespace.twitch_mutation_version,
+          fingerprint: namespace.twitch_fingerprint
+        }
+      };
+    });
+    if (resolution && selectedByKey.size !== namespaces.length) {
+      throw new IntegrationRegistryError(
+        "The shareable-state finalization plan is inconsistent.",
+        { status: 409, code: "integration_state_resolution_required" }
+      );
+    }
+    try {
+      return {
+        version: discovery.discovery_version,
+        discordRealm: JSON.parse(discovery.discord_realm_json),
+        twitchRealm: JSON.parse(discovery.twitch_realm_json),
+        namespaces
+      };
+    } catch (cause) {
+      throw new IntegrationRegistryError(
+        "The shareable-state discovery record is invalid.",
+        { status: 500, code: "integration_state_discovery_invalid", cause }
+      );
+    }
+  }
+
+  finalizationCandidateRealmsAreCurrent(row, plan) {
+    const discordRealm = this.effectiveCandidateRealm(
+      parseGroupKey(row.discord_group_key),
+      "twitch"
+    );
+    const twitchRealm = this.effectiveCandidateRealm(
+      parseGroupKey(row.twitch_group_key),
+      "discord"
+    );
+    return shareableStateRealmObjectName(discordRealm) ===
+        shareableStateRealmObjectName(plan.discordRealm) &&
+      shareableStateRealmObjectName(twitchRealm) ===
+        shareableStateRealmObjectName(plan.twitchRealm);
+  }
+
+  async releaseFinalizationSeals(seals, correlationId) {
+    await Promise.allSettled(seals.map((seal) =>
+      releaseShareableStateNamespaceSeal(this.env, {
+        realm: seal.realm,
+        featureId: seal.featureId,
+        namespaceId: seal.namespaceId,
+        sealId: seal.sealId,
+        correlationId
+      })
+    ));
+  }
+
+  async acquireFinalizationSeals(row, plan, correlationId) {
+    const unitsByKey = new Map();
+    for (const namespace of plan.namespaces) {
+      for (const [side, realm] of [
+        ["discord", plan.discordRealm],
+        ["twitch", plan.twitchRealm]
+      ]) {
+        const realmKey = shareableStateRealmObjectName(realm);
+        const key = `${realmKey}\u0000${namespace.featureId}\u0000${namespace.namespaceId}`;
+        const unit = unitsByKey.get(key) ?? {
+          realm,
+          realmKey,
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId,
+          sides: []
+        };
+        unit.sides.push(side);
+        unitsByKey.set(key, unit);
+      }
+    }
+    const units = [...unitsByKey.values()].sort((left, right) =>
+      left.realmKey.localeCompare(right.realmKey) ||
+      left.featureId.localeCompare(right.featureId) ||
+      left.namespaceId.localeCompare(right.namespaceId)
+    );
+    const acquired = [];
+    const snapshots = new Map();
+    const expiresAtMs = Date.now() + FINALIZATION_SEAL_LEASE_MS;
+    try {
+      for (const unit of units) {
+        const sealId =
+          `finalize:${row.pending_integration_id}:v${plan.version}:` +
+          `${unit.featureId}:${unit.namespaceId}`;
+        const sealed = await sealShareableStateNamespace(this.env, {
+          realm: unit.realm,
+          featureId: unit.featureId,
+          namespaceId: unit.namespaceId,
+          sealId,
+          expiresAtMs,
+          correlationId
+        });
+        acquired.push({ ...unit, sealId });
+        for (const side of unit.sides) {
+          snapshots.set(
+            `${unit.featureId}\u0000${unit.namespaceId}\u0000${side}`,
+            sealed.snapshot
+          );
+        }
+      }
+      return { acquired, snapshots };
+    } catch (cause) {
+      await this.releaseFinalizationSeals(acquired, correlationId);
+      if (cause instanceof ShareableStateRealmError) {
+        throw new IntegrationRegistryError(
+          "Shareable state is busy with another transition.",
+          {
+            status: cause.code === "shareable_state_transition_sealed" ? 409 : 503,
+            code: cause.code === "shareable_state_transition_sealed"
+              ? "integration_state_finalization_busy"
+              : "integration_state_finalization_unavailable",
+            cause
+          }
+        );
+      }
+      throw cause;
+    }
+  }
+
+  finalizationSnapshotsAreCurrent(plan, snapshots) {
+    return plan.namespaces.every((namespace) =>
+      ["discord", "twitch"].every((side) => {
+        const snapshot = snapshots.get(
+          `${namespace.featureId}\u0000${namespace.namespaceId}\u0000${side}`
+        );
+        const expected = namespace[side];
+        return snapshot?.namespace.schemaVersion === namespace.schemaVersion &&
+          snapshot.mutationVersion === expected.mutationVersion &&
+          snapshot.fingerprint === expected.fingerprint;
+      })
+    );
+  }
+
+  async materializeFinalization(row, plan, snapshots, correlationId) {
+    const realm = createIntegrationRealmIdentity(
+      { id: row.pending_integration_id },
+      { generation: plan.version }
+    );
+    const expectedFingerprints = new Map();
+    try {
+      for (const namespace of plan.namespaces) {
+        const idempotencyKey =
+          `finalize:${row.pending_integration_id}:v${plan.version}:` +
+          `${namespace.featureId}:${namespace.namespaceId}`;
+        let result;
+        if (namespace.selection === "reset") {
+          result = await initializeEmptyShareableStateNamespace(this.env, {
+            realm,
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId,
+            idempotencyKey,
+            correlationId
+          });
+        } else {
+          const snapshot = snapshots.get(
+            `${namespace.featureId}\u0000${namespace.namespaceId}\u0000` +
+            namespace.selection
+          );
+          result = await cloneShareableStateSnapshot(this.env, {
+            realm,
+            snapshot,
+            idempotencyKey,
+            correlationId
+          });
+        }
+        expectedFingerprints.set(
+          `${namespace.featureId}\u0000${namespace.namespaceId}`,
+          result.fingerprint
+        );
+      }
+      for (const namespace of plan.namespaces) {
+        const snapshot = await snapshotShareableStateNamespace(this.env, {
+          realm,
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId,
+          correlationId
+        });
+        const expectedFingerprint = expectedFingerprints.get(
+          `${namespace.featureId}\u0000${namespace.namespaceId}`
+        );
+        if (
+          snapshot.mutationVersion !== 1 ||
+          snapshot.namespace.schemaVersion !== namespace.schemaVersion ||
+          snapshot.fingerprint !== expectedFingerprint ||
+          (namespace.selection === "reset" && snapshot.meaningful)
+        ) {
+          throw new IntegrationRegistryError(
+            "The new integration realm could not be verified.",
+            { status: 503, code: "integration_state_finalization_invalid" }
+          );
+        }
+        if (namespace.selection !== "reset") {
+          const source = snapshots.get(
+            `${namespace.featureId}\u0000${namespace.namespaceId}\u0000` +
+            namespace.selection
+          );
+          if (!shareableStateSnapshotsEqual(source, snapshot)) {
+            throw new IntegrationRegistryError(
+              "The new integration realm could not be verified.",
+              { status: 503, code: "integration_state_finalization_invalid" }
+            );
+          }
+        }
+      }
+    } catch (cause) {
+      if (cause instanceof IntegrationRegistryError) throw cause;
+      if (cause instanceof ShareableStateRealmError) {
+        throw new IntegrationRegistryError(
+          "The new integration realm could not be materialized.",
+          {
+            status: cause.code === "shareable_state_transition_sealed" ? 409 : 503,
+            code: cause.code === "shareable_state_transition_sealed"
+              ? "integration_state_finalization_busy"
+              : "integration_state_finalization_unavailable",
+            cause
+          }
+        );
+      }
+      throw cause;
+    }
+    return { generation: plan.version, realm };
+  }
+
   async activateInvitation(input) {
     const invitationId = validatedOpaqueId(
       input?.invitationId,
@@ -1498,18 +1836,131 @@ export class IntegrationRegistry {
       input?.reservationId,
       "Integration continuation ID"
     );
-    const discovery = await this.ensurePendingDiscovery(reservationId);
-    if (discovery?.namespaces.length > 0) {
+    let row = this.pendingInvitationByReservation(reservationId);
+    if (!row || row.invitation_id !== invitationId) {
       throw new IntegrationRegistryError(
-        "Shareable state must be materialized before this integration can activate.",
-        {
-          status: 409,
-          code: "integration_state_finalization_required"
-        }
+        "The pending integration is invalid or unavailable.",
+        { status: 404, code: "integration_pending_not_found" }
       );
     }
-    const nowMs = Date.now();
-    const result = this.state.storage.transactionSync(() => {
+    if (
+      new Set(["active", "completed"]).has(row.invitation_status) &&
+      row.completed_integration_id
+    ) {
+      return {
+        integration: this.getIntegration(row.completed_integration_id),
+        alreadyLinked: false,
+        replayed: true
+      };
+    }
+    if (
+      row.pending_status === "expired" ||
+      row.pending_expires_at_ms <= Date.now()
+    ) {
+      if (row.pending_status !== "expired") {
+        this.state.storage.transactionSync(() => this.expirePendingRow(
+          this.pendingInvitationByReservation(reservationId),
+          Date.now()
+        ));
+      }
+      await this.armNextExpiration();
+      throw new IntegrationRegistryError("The pending integration expired.", {
+        status: 410,
+        code: "integration_pending_expired"
+      });
+    }
+    if (
+      row.invitation_status !== "awaiting_state_resolution" ||
+      row.pending_status !== "awaiting_state_resolution"
+    ) {
+      throw new IntegrationRegistryError(
+        "The pending integration is not ready for activation.",
+        { status: 409, code: "integration_pending_not_ready" }
+      );
+    }
+
+    await this.ensurePendingDiscovery(reservationId);
+    row = this.pendingInvitationByReservation(reservationId);
+    if (
+      new Set(["active", "completed"]).has(row?.invitation_status) &&
+      row.completed_integration_id
+    ) {
+      return {
+        integration: this.getIntegration(row.completed_integration_id),
+        alreadyLinked: false,
+        replayed: true
+      };
+    }
+    const existingBeforeMaterialization = this.findExistingIntegration(
+      row.discord_group_key,
+      row.twitch_group_key
+    );
+    const correlationId = `integration-state-finalize:${row.pending_integration_id}`;
+    let plan = null;
+    let seals = [];
+    let materializedGeneration = 1;
+    let result;
+    try {
+      if (!existingBeforeMaterialization) {
+        plan = this.pendingFinalizationPlan(row);
+        if (
+          plan.namespaces.length > 0 &&
+          !this.finalizationCandidateRealmsAreCurrent(row, plan)
+        ) {
+          await this.refreshPendingDiscovery(reservationId, plan.version);
+          throw new IntegrationRegistryError(
+            "Shareable state changed while the link was being finalized.",
+            { status: 409, code: "integration_state_rediscovery_required" }
+          );
+        }
+        const sealed = await this.acquireFinalizationSeals(
+          row,
+          plan,
+          correlationId
+        );
+        seals = sealed.acquired;
+        if (
+          (
+            plan.namespaces.length > 0 &&
+            !this.finalizationCandidateRealmsAreCurrent(row, plan)
+          ) ||
+          !this.finalizationSnapshotsAreCurrent(plan, sealed.snapshots)
+        ) {
+          await this.releaseFinalizationSeals(seals, correlationId);
+          seals = [];
+          await this.refreshPendingDiscovery(reservationId, plan.version);
+          throw new IntegrationRegistryError(
+            "Shareable state changed while the link was being finalized.",
+            { status: 409, code: "integration_state_rediscovery_required" }
+          );
+        }
+        const materialized = await this.materializeFinalization(
+          row,
+          plan,
+          sealed.snapshots,
+          correlationId
+        );
+        materializedGeneration = materialized.generation;
+        const current = this.pendingInvitationByReservation(reservationId);
+        const concurrentlyActivated = Boolean(
+          current?.completed_integration_id &&
+          new Set(["active", "completed"]).has(current.invitation_status)
+        );
+        if (
+          plan.namespaces.length > 0 &&
+          !concurrentlyActivated &&
+          !this.finalizationCandidateRealmsAreCurrent(row, plan)
+        ) {
+          await this.refreshPendingDiscovery(reservationId, plan.version);
+          throw new IntegrationRegistryError(
+            "Shareable state changed while the link was being finalized.",
+            { status: 409, code: "integration_state_rediscovery_required" }
+          );
+        }
+      }
+
+      const nowMs = Date.now();
+      result = this.state.storage.transactionSync(() => {
       const row = this.pendingInvitationByReservation(reservationId);
       if (!row || row.invitation_id !== invitationId) {
         throw new IntegrationRegistryError(
@@ -1543,6 +1994,16 @@ export class IntegrationRegistry {
           { status: 409, code: "integration_pending_not_ready" }
         );
       }
+      if (
+        plan &&
+        this.latestPendingDiscovery(row.invitation_id)?.discovery_version !==
+          plan.version
+      ) {
+        throw new IntegrationRegistryError(
+          "Shareable state changed while the link was being finalized.",
+          { status: 409, code: "integration_state_rediscovery_required" }
+        );
+      }
 
       let integrationId = this.findExistingIntegration(
         row.discord_group_key,
@@ -1555,14 +2016,16 @@ export class IntegrationRegistry {
           `INSERT INTO integrations
             (integration_id, status, created_at_ms, updated_at_ms,
              activated_at_ms, created_by_platform, created_by_actor_id,
-             completed_by_platform, completed_by_actor_id)
-           VALUES (?, 'active', ?, ?, ?, 'discord', ?, 'twitch', ?)`,
+             completed_by_platform, completed_by_actor_id,
+             shareable_state_generation)
+           VALUES (?, 'active', ?, ?, ?, 'discord', ?, 'twitch', ?, ?)`,
           integrationId,
           nowMs,
           nowMs,
           nowMs,
           row.discord_actor_id,
-          row.twitch_actor_id
+          row.twitch_actor_id,
+          materializedGeneration
         );
         this.state.storage.sql.exec(
           `INSERT INTO integration_members
@@ -1594,6 +2057,16 @@ export class IntegrationRegistry {
           groupKey: row.twitch_group_key,
           occurredAtMs: nowMs
         });
+        if (plan?.namespaces.length > 0) {
+          audit(this.state.storage.sql, {
+            integrationId,
+            invitationId,
+            event: "integration.state_resolution.applied.v1",
+            actor: { platform: "twitch", id: row.twitch_actor_id },
+            groupKey: row.twitch_group_key,
+            occurredAtMs: nowMs
+          });
+        }
       }
 
       const routes = this.state.storage.sql.exec(
@@ -1678,7 +2151,10 @@ export class IntegrationRegistry {
         nowMs
       });
       return { integrationId, alreadyLinked, replayed: false };
-    });
+      });
+    } finally {
+      await this.releaseFinalizationSeals(seals, correlationId);
+    }
 
     await this.armNextExpiration();
     if (result.expired) {
@@ -1705,7 +2181,8 @@ export class IntegrationRegistry {
     }
     const rows = this.state.storage.sql.exec(
       `SELECT i.integration_id, i.status, i.created_at_ms, i.updated_at_ms,
-              i.activated_at_ms, i.revoked_at_ms, i.revoked_reason
+              i.activated_at_ms, i.revoked_at_ms, i.revoked_reason,
+              i.shareable_state_generation
        FROM integrations i
        JOIN integration_members member
          ON member.integration_id = i.integration_id

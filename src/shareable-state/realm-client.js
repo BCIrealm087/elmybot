@@ -305,6 +305,62 @@ export async function snapshotShareableStateNamespace(env, {
   }));
 }
 
+export async function sealShareableStateNamespace(env, {
+  realm,
+  featureId,
+  namespaceId,
+  sealId,
+  expiresAtMs,
+  correlationId
+}) {
+  const result = await requestShareableStateRealm(env, {
+    realm,
+    featureId,
+    namespaceId,
+    operation: "seal-snapshot",
+    storage: { sealId, expiresAtMs },
+    correlationId
+  });
+  if (
+    result?.sealId !== sealId ||
+    result?.expiresAtMs !== expiresAtMs
+  ) {
+    throw new ShareableStateRealmError(
+      "The shareable-state transition seal response is invalid.",
+      { status: 502, code: "shareable_state_transition_seal_invalid" }
+    );
+  }
+  return Object.freeze({
+    sealId,
+    expiresAtMs,
+    snapshot: normalizeSnapshot(result.snapshot)
+  });
+}
+
+export async function releaseShareableStateNamespaceSeal(env, {
+  realm,
+  featureId,
+  namespaceId,
+  sealId,
+  correlationId
+}) {
+  const result = await requestShareableStateRealm(env, {
+    realm,
+    featureId,
+    namespaceId,
+    operation: "release-seal",
+    storage: { sealId },
+    correlationId
+  });
+  if (typeof result?.released !== "boolean") {
+    throw new ShareableStateRealmError(
+      "The shareable-state transition seal response is invalid.",
+      { status: 502, code: "shareable_state_transition_seal_invalid" }
+    );
+  }
+  return Object.freeze({ released: result.released });
+}
+
 export async function inventoryShareableStateNamespaces(env, {
   realm,
   correlationId
@@ -351,6 +407,7 @@ export async function cloneShareableStateSnapshot(env, {
   realm,
   snapshot,
   expectedTargetMutationVersion = 0,
+  idempotencyKey,
   correlationId
 }) {
   const normalized = normalizeSnapshot(snapshot);
@@ -359,7 +416,32 @@ export async function cloneShareableStateSnapshot(env, {
     featureId: normalized.namespace.featureId,
     namespaceId: normalized.namespace.namespaceId,
     operation: "clone-snapshot",
-    storage: { snapshot: normalized, expectedTargetMutationVersion },
+    storage: {
+      snapshot: normalized,
+      expectedTargetMutationVersion,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey })
+    },
+    correlationId
+  });
+}
+
+export async function initializeEmptyShareableStateNamespace(env, {
+  realm,
+  featureId,
+  namespaceId,
+  expectedTargetMutationVersion = 0,
+  idempotencyKey,
+  correlationId
+}) {
+  return await requestShareableStateRealm(env, {
+    realm,
+    featureId,
+    namespaceId,
+    operation: "initialize-empty",
+    storage: {
+      expectedTargetMutationVersion,
+      idempotencyKey
+    },
     correlationId
   });
 }

@@ -3,8 +3,9 @@
 Step 8 adds the browser decision surface for genuinely different, nonempty
 shareable state discovered while linking Discord and Twitch. It builds on the
 immutable discovery revision described in
-[`shareable-state-discovery.md`](shareable-state-discovery.md); it does not read
-feature storage or activate the integration itself.
+[`shareable-state-discovery.md`](shareable-state-discovery.md). The page does
+not read feature storage itself; its accepted decisions are handed to the
+Step 9 finalizer.
 
 ## What the broadcaster sees
 
@@ -73,7 +74,14 @@ Missing choices return the page with a bounded validation message. Expired or
 cancelled links cannot acquire a resolution. The existing cancel action remains
 available before final activation and leaves both candidate states unchanged.
 
-Step 8 records decisions but deliberately leaves the link pending. Step 9 will
-recheck the recorded snapshot versions and fingerprints, materialize the
-selected namespaces in a fresh integration realm, and activate the link
-idempotently.
+An accepted resolution now starts finalization immediately. If a retryable
+failure interrupts the operation, the resumable page offers the same protected
+finalization action without asking for the decisions again. Namespaces with no
+collision can finalize directly after Twitch verification.
+
+If either candidate changed since discovery, finalization releases its seals,
+records a new discovery revision, and returns the browser to the collision page
+when another choice is required. Successful finalization materializes the
+selected namespaces in a fresh integration realm and activates the link
+idempotently. See
+[`shareable-state-finalization.md`](shareable-state-finalization.md).
