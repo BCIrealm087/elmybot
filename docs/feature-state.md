@@ -1,11 +1,10 @@
 # Feature configuration, state ownership, and cooldowns
 
 Framework actions can use controlled per-group, per-integration, or resolved
-shareable persistence
-without receiving a Durable Object binding, object name, storage key prefix,
-or SQL handle. The runtime derives the feature namespace and allows an
-integration scope only through a default-link snapshot resolved by the current
-action invocation.
+shareable persistence without receiving a Durable Object binding, object name,
+storage key prefix, or SQL handle. The runtime derives the feature namespace
+and resolves shareable state through the current group's selected integration
+when one exists.
 
 The `shareableState` service resolves declared namespaces to standalone or
 default-integration realms. Protected discovery, reconciliation, finalization,
@@ -21,12 +20,6 @@ Discord guild and a Twitch channel, `ctx.state` still resolves two independent
 namespaces because the invocations have different origin groups. Linking those
 groups does not merge their configuration, state, or cooldowns.
 
-`await ctx.links.default(otherPlatform)` identifies the origin group's selected
-active relationship. That read-only identity lookup does not change the owner
-or namespace of `ctx.state`; it can instead be passed to
-`ctx.integrationState.for(link)` when the product requirement explicitly makes
-the selected integration the owner.
-
 Use this decision table before adding state:
 
 | Product requirement | State owner | Supported contributor shape |
@@ -34,12 +27,13 @@ Use this decision table before adding state:
 | Each Discord guild or Twitch channel has its own count, settings, or collection | The origin group | Use `ctx.state` or `ctx.config` |
 | One group remembers local data and sends notifications or effects to linked groups | The origin group | Keep local state and use declared routes/effects for delivery |
 | New state must work standalone and become authoritative through the selected relationship | The effective standalone or integration realm | Declare the namespace and use `ctx.shareableState.current(otherPlatform, namespaceId)` |
-| Existing linked-only state awaiting migration | The selected integration relationship | Temporarily resolve a default link and use `ctx.integrationState.for(link)` |
 
 “Works on Discord and Twitch” means the behavior is available on both
 platforms; it does not by itself mean the data is shared. Choose independent
 state unless the requirement explicitly says that both platforms must observe
-the same value and that the value exists because those groups are linked.
+the same value when they select an integration. Linking is not required for the
+feature to work: before a default integration exists, each group uses its own
+standalone shareable-state realm.
 
 Examples:
 
@@ -65,7 +59,34 @@ Resolved shareable state has these currently implemented rules:
 6. Feature code supplies only the other platform and its own declared namespace.
    It never receives a realm, integration ID, generation, or storage handle.
 
-The legacy `integrationState` compatibility service has these rules:
+New shareable state declares only `shareableState`, then resolves a namespace:
+
+```js
+const otherPlatform = ctx.origin.group.platform === "discord"
+  ? "twitch"
+  : "discord";
+const state = await ctx.shareableState.current(otherPlatform, "score");
+const score = await state.increment("value");
+```
+
+The feature definition must declare `score` in `shareableState`. The returned
+scope has the same atomic state and bounded-counter operations. The framework
+never infers that ordinary state belongs in a shareable realm.
+
+## Compatibility only: legacy integration state
+
+New features should use `shareableState`, not `integrationState`. The latter
+remains temporarily available for installed features whose deployed data has
+not completed an explicit migration. Preserving such data is maintainer work
+and requires a reviewed migration declaration and feature-specific
+compatibility tests.
+
+`await ctx.links.default(otherPlatform)` identifies the origin group's selected
+active relationship. That read-only identity lookup does not change the owner
+or namespace of `ctx.state`; legacy code can pass the resulting snapshot to
+`ctx.integrationState.for(link)` when the integration owns its existing data.
+
+The compatibility service has these rules:
 
 1. The directional default selected at invocation time chooses the integration
    ledger. Opposite directions are independent and share data only when they
@@ -84,26 +105,10 @@ The legacy `integrationState` compatibility service has these rules:
 6. Each state or bounded-counter call is atomic. There is no transaction that
    spans integration state and origin-group state.
 
-Feature code cannot pass an integration ID directly. It must declare both
+Legacy feature code cannot pass an integration ID directly. It must declare both
 `links` and `integrationState`, resolve the current default, and pass the exact
 frozen snapshot to `ctx.integrationState.for()`. A copied, reconstructed, or
 previous-invocation object is rejected.
-
-New shareable state declares only `shareableState`, then resolves a namespace:
-
-```js
-const otherPlatform = ctx.origin.group.platform === "discord"
-  ? "twitch"
-  : "discord";
-const state = await ctx.shareableState.current(otherPlatform, "score");
-const score = await state.increment("value");
-```
-
-The feature definition must declare `score` in `shareableState`. The returned
-scope has the same atomic state and bounded-counter operations. The framework
-never infers that ordinary or integration state belongs in a new realm. A
-production feature with legacy data needs an explicit, reviewed migration
-declaration and feature-specific compatibility tests.
 
 Do not imitate shared state by embedding another platform's group ID or an
 integration ID in a local `ctx.state` key. The value remains owned by the origin
@@ -165,7 +170,10 @@ The action lists `"shareableState"` in `uses.services`, and the feature declares
 `game_deaths`. This is the current `fun.deaths` shape: its counter namespace is
 shareable while `last_game` stays in ordinary `ctx.state`.
 
-Integration state exposes the same state operations after resolving a default:
+### Compatibility API for installed features
+
+Legacy integration state exposes the same state operations after resolving a
+default. New features should use the shareable-state example above instead:
 
 ```js
 const targetPlatform = ctx.origin.group.platform === "discord"
@@ -182,7 +190,7 @@ const sharedDeaths = ctx.integrationState
 await sharedDeaths.increment();
 ```
 
-The action must list `"integrationState"` and `"links"` in `uses.services`.
+The legacy action must list `"integrationState"` and `"links"` in `uses.services`.
 The returned integration-state scope has `get`, `set`, `delete`, `increment`,
 and `boundedCounter` with the same validation, limits, and atomicity as
 `ctx.state`.

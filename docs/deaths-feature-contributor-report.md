@@ -7,17 +7,28 @@ perspective of a hobby programmer contributing a self-contained feature to
 Elmybot. It records the canonical steps in the order they were performed and
 assesses how approachable each step felt.
 
-The requested behavior is:
+> **Current outcome — read this before the historical record:** `fun.deaths`
+> now uses a declared `game_deaths` shareable-state namespace. It works with
+> independent standalone counters before linking and resolves the selected
+> integration's shared counters after linking. Its remembered game remains
+> local to each Discord server or Twitch channel. The original implementation
+> and several intermediate designs below are preserved as a chronological
+> contributor-experience record; they do not describe the current storage
+> behavior. See [Shareable-state Step 12](#shareable-state-step-12-migrate-fundeaths)
+> and the [current state-ownership guide](feature-state.md#choose-the-state-boundary-first).
+
+The initially requested behavior was:
 
 - anyone can display the stored deaths for a named game;
 - moderators can add one, subtract one, or reset that game's count;
 - the command is available on Discord and Twitch; and
 - multi-word game names are supported.
 
-Counts use the framework's existing origin-group namespace. A Discord server
-and a Twitch channel therefore have independent counts even if an Elmybot
-integration links them. Cross-platform synchronization was not requested and
-is not implied by “works on both platforms.”
+At that stage, counts used the framework's origin-group namespace. A Discord
+server and a Twitch channel therefore had independent counts even if an
+Elmybot integration linked them. Later product decisions added intentionally
+shared counts while retaining standalone operation; the current-outcome note
+above points to that final design.
 
 ## Step-by-step record
 

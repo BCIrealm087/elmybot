@@ -34,19 +34,28 @@ behavior.
 ## 2. Pick a pattern only if you need it
 
 If the generated Discord-only command is close to what you want, keep editing
-it and skip this table. Otherwise, open only the relevant reference:
+it and skip this table. If the command stores data or interacts with another
+platform, answer these three questions before choosing a pattern:
+
+1. **Does each community own its own data?** Use group-local state.
+2. **Should the command work before linking and share one value through the
+   selected integration after linking?** Use resolved shareable state.
+3. **Does the command only need to send something to another group?** Keep its
+   state local and use a route; cross-platform delivery does not require shared
+   storage.
+
+Then open only the relevant reference:
 
 | Your feature needs | Read this next |
 | --- | --- |
 | The same behavior on Discord and Twitch | [Shared-command cookbook](feature-authoring.md#cookbook-2-shared-discord-and-twitch-command) |
 | Raw Twitch text, quoting, or token parsing | [Twitch test-runtime section](feature-authoring.md#the-feature-test-kit) |
-| A counter, score, quote list, or other group-local memory | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) and [state ownership](feature-state.md#choose-the-state-boundary-first) |
-| One value shared by linked Discord and Twitch groups | [State-ownership decision](feature-state.md#choose-the-state-boundary-first) before writing code |
+| A counter, score, quote list, or other group-local memory | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) after checking the [state-ownership decision](feature-state.md#choose-the-state-boundary-first) |
+| A value that works standalone and becomes shared through a selected integration | [Shareable-state namespace example](feature-authoring.md#declare-and-resolve-a-shareable-state-namespace) after checking the [state-ownership decision](feature-state.md#choose-the-state-boundary-first) |
 | Public reads but moderator-only changes | [Conditional-access cookbook](feature-authoring.md#cookbook-7-conditionally-protected-command-modes) |
 | A Discord-specific option or response | [Native-command cookbook](feature-authoring.md#cookbook-1-platform-native-command) |
 | Sending to a linked Discord or Twitch group | [Routed-command cookbook](feature-authoring.md#cookbook-3-routed-cross-platform-command) |
 | Reading the one selected linked group without sending yet | [Default-link resolver](feature-authoring.md#read-the-selected-linked-group) |
-| Sharing one authoritative value across the selected link | [Stateful-command cookbook](feature-authoring.md#cookbook-6-stateful-command) |
 | Running later or repeatedly | [Scheduled-action cookbook](feature-authoring.md#cookbook-4-scheduled-action) |
 | Reacting to a Twitch or Discord event | [Event-action cookbook](feature-authoring.md#cookbook-5-event-driven-action) |
 
@@ -57,7 +66,10 @@ Two complete features are useful as nearby examples:
 - [`fun.deaths`](../packages/features/fun-deaths/src/feature.js) combines shared
   behavior, quoted Twitch input, standalone-or-linked counters, per-platform
   remembered state, conditional moderator access, and an explicit legacy
-  integration-state migration.
+  integration-state migration. Its migration marker preserves already deployed
+  data and is not part of a new feature's normal shape; use the
+  [migration-free namespace example](feature-authoring.md#declare-and-resolve-a-shareable-state-namespace)
+  when starting a new shareable command.
 
 ## 3. Install it explicitly
 

@@ -481,10 +481,10 @@ const runtime = createFeatureTestRuntime(feature, {
 ```
 
 A link identifies the selected relationship; it does not make `ctx.state`
-integration-owned or shared. It can be passed to the separately declared
-`integrationState` service when the relationship should own the data. Read the
-[state-ownership decision](feature-state.md#choose-the-state-boundary-first)
-before storing data that both sides must mutate.
+integration-owned or shared. New features that need one value across the
+selected relationship should declare a shareable namespace as shown next.
+The older `integrationState` service is a compatibility path for installed
+features awaiting reviewed data migration, not the normal authoring model.
 
 ## Declare and resolve a shareable-state namespace
 
@@ -584,29 +584,26 @@ identity in the feature only when the domain requires it—for example, if game
 names should be case-insensitive.
 
 When both members of the selected relationship must update one authoritative
-value, declare `links` and `integrationState`, then scope the same state API
-through the resolved default:
+value, declare a shareable namespace on the feature and resolve it through
+`shareableState`. The same command then works in the origin group's standalone
+realm before linking and in the selected integration realm afterward:
 
 ```js
 const targetPlatform = ctx.origin.group.platform === "discord"
   ? "twitch"
   : "discord";
-const link = await ctx.links.default(targetPlatform);
-if (link === null) {
-  return { output: { message: "A default link is required." }, effects: [] };
-}
-
-const deaths = ctx.integrationState
-  .for(link)
+const deaths = (await ctx.shareableState.current(targetPlatform, "game_deaths"))
   .boundedCounter("deaths", normalizedGameName);
 const value = await deaths.increment();
 ```
 
-Only the exact snapshot returned during this action invocation is accepted.
-Changing the directional default selects another integration ledger, and a
-revoked relationship cannot be read or mutated. Keep group-local convenience
-state—such as the last selected game—in `ctx.state`; there is no transaction
-spanning the two owners.
+The action declares `shareableState`, while the feature declares `game_deaths`
+as shown in [Declare and resolve a shareable-state namespace](#declare-and-resolve-a-shareable-state-namespace).
+Changing the directional default affects later resolutions. Keep group-local
+convenience state—such as the last selected game—in `ctx.state`; there is no
+transaction spanning the two owners. See the
+[compatibility-only legacy section](feature-state.md#compatibility-only-legacy-integration-state)
+only when maintaining already deployed integration-owned data.
 
 ## Cookbook 7: conditionally protected command modes
 
