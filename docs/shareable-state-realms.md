@@ -132,8 +132,9 @@ schema upgrades fail closed.
 When a revoked default has no fallback, resolution materializes the recorded
 standalone successor generation before returning it. A partial copy remains
 unreachable and replay resumes with per-namespace idempotency keys. See
-[`shareable-state-revocation.md`](shareable-state-revocation.md). Migrating
-`fun.deaths` from its current integration-owned ledger remains deferred.
+[`shareable-state-revocation.md`](shareable-state-revocation.md). `fun.deaths`
+now uses these realms and adopts its former integration-owned ledger through
+the explicit migration path documented in [`feature-state.md`](feature-state.md).
 
 The protected inventory operation now supplies generic pending-link discovery
 with declared namespace identity, versions, fingerprints, and safe summaries.

@@ -401,7 +401,7 @@ describe('Discord platform', () => {
     await expect(commands.deaths.exec(memberRead, env, 'deaths', {
       sourceInteraction: memberRead,
     })).resolves.toMatchObject({
-      content: 'Death counts require a default linked Twitch channel.',
+      content: 'Dark Souls deaths: 0',
     });
 
     const memberWrite = buildSlashInteraction({
@@ -428,7 +428,7 @@ describe('Discord platform', () => {
     await expect(commands.deaths.exec(moderatorWrite, env, 'deaths', {
       sourceInteraction: moderatorWrite,
     })).resolves.toMatchObject({
-      content: 'Death counts require a default linked Twitch channel.',
+      content: 'Dark Souls deaths: 42',
     });
   });
 

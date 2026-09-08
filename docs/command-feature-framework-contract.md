@@ -173,6 +173,10 @@ Requirements:
   `presence`. Arbitrary summary callbacks and raw-value rendering are rejected.
 - `limits.maxEntries` is 1–100 and defaults to 100.
   `limits.maxValueBytes` is 1–16,384 and defaults to 16,384.
+- `adoptLegacyIntegrationState: true` is reserved for a reviewed migration of
+  an installed feature whose complete legacy integration-state namespace maps
+  to this declaration. It is omitted for every new feature and may not be
+  `false`.
 - Unknown fields are rejected, and all normalized declarations and nested
   objects are frozen.
 

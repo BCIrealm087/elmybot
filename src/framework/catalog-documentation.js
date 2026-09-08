@@ -117,7 +117,8 @@ export function generateFeatureCatalogMarkdown(
       namespace.compatibleVersions.join(", "),
       namespace.collisionSummary.kind,
       `${namespace.limits.maxEntries} entries; ` +
-        `${namespace.limits.maxValueBytes} bytes/value`
+        `${namespace.limits.maxValueBytes} bytes/value`,
+      namespace.adoptLegacyIntegrationState ? "integrationState" : "—"
     ])
   );
   const workspaceRows = workspacePackages.map((workspacePackage) => [
@@ -196,7 +197,8 @@ export function generateFeatureCatalogMarkdown(
         "Schema",
         "Compatible schemas",
         "Collision summary",
-        "Limits"
+        "Limits",
+        "Legacy adoption"
       ],
       shareableStateRows
     ),

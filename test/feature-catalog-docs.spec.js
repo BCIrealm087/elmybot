@@ -66,7 +66,11 @@ describe("Generated feature catalog", () => {
 
     expect(markdown).toContain(
       "fun.score | `score` | Shared score | 2 | 1, 2 | entry_count | " +
-      "4 entries; 256 bytes/value"
+      "4 entries; 256 bytes/value | —"
+    );
+    expect(generateFeatureCatalogMarkdown(featureRegistry)).toContain(
+      "fun.deaths | `game_deaths` | Per-game death counts | 1 | 1 | " +
+      "entry_count | 100 entries; 16384 bytes/value | integrationState"
     );
   });
 });

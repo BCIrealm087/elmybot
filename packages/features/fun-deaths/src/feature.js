@@ -36,12 +36,6 @@ function otherPlatform(platform) {
   return platform === "discord" ? "twitch" : "discord";
 }
 
-function missingLinkMessage(platform) {
-  return platform === "discord"
-    ? "Death counts require a default linked Twitch channel."
-    : "Death counts require a default linked Discord server.";
-}
-
 function parseOperation(operation) {
   if (operation === undefined || operation === "check") {
     return Object.freeze({ kind: "check" });
@@ -56,7 +50,14 @@ function parseOperation(operation) {
 export const feature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "fun.deaths",
-  description: "Tracks shared per-game deaths for linked Discord and Twitch groups.",
+  description: "Tracks per-game deaths locally or across linked Discord and Twitch groups.",
+  shareableState: [{
+    id: "game_deaths",
+    label: "Per-game death counts",
+    schemaVersion: 1,
+    collisionSummary: { kind: "entry_count" },
+    adoptLegacyIntegrationState: true
+  }],
   actions: [
     defineAction({
       kind: FUN_DEATHS_ACTION_KIND,
@@ -86,7 +87,7 @@ export const feature = defineFeature({
         })
       }),
       uses: {
-        services: ["authorization", "integrationState", "links", "state"]
+        services: ["authorization", "shareableState", "state"]
       },
       async execute(ctx, { game, operation }) {
         if (game !== undefined && operation === undefined) {
@@ -122,18 +123,11 @@ export const feature = defineFeature({
           };
         }
 
-        const link = await ctx.links.default(
-          otherPlatform(ctx.origin.group.platform)
+        const sharedState = await ctx.shareableState.current(
+          otherPlatform(ctx.origin.group.platform),
+          "game_deaths"
         );
-        if (link === null) {
-          return {
-            output: { message: missingLinkMessage(ctx.origin.group.platform) },
-            effects: []
-          };
-        }
-
-        const deaths = ctx.integrationState
-          .for(link)
+        const deaths = sharedState
           .boundedCounter("game", gameIdentity(selectedGame));
 
         let count;
@@ -162,7 +156,7 @@ export const feature = defineFeature({
     discord: [
       discordActionCommand({
         name: "deaths",
-        description: "Check or update shared deaths for a linked game.",
+        description: "Check or update a game's local or shared death count.",
         availability: "guild",
         actionKind: FUN_DEATHS_ACTION_KIND,
         options: [
@@ -191,7 +185,7 @@ export const feature = defineFeature({
     twitch: [
       twitchActionCommand({
         name: "deaths",
-        description: "Check or update shared deaths for a linked game.",
+        description: "Check or update a game's local or shared death count.",
         actionKind: FUN_DEATHS_ACTION_KIND,
         parse: twitchTokens([
           { arg: "operation", type: "string", optional: true },

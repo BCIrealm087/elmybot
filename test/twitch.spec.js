@@ -166,7 +166,7 @@ describe("Twitch feature commands", () => {
 		await expect(twitchCommands.deaths.exec(member, env, {
 			messageId: `deaths-message-${++twitchMessageIdCounter}`,
 			argsText: 'check "Dark Souls"'
-		})).resolves.toBe("Death counts require a default linked Discord server.");
+		})).resolves.toBe("Dark Souls deaths: 0");
 		await expect(twitchCommands.deaths.exec(member, env, {
 			messageId: `deaths-message-${++twitchMessageIdCounter}`,
 			argsText: '42 "Dark Souls"'
@@ -180,7 +180,7 @@ describe("Twitch feature commands", () => {
 		await expect(twitchCommands.deaths.exec(moderator, env, {
 			messageId: `deaths-message-${++twitchMessageIdCounter}`,
 			argsText: '42 "Dark Souls"'
-		})).resolves.toBe("Death counts require a default linked Discord server.");
+		})).resolves.toBe("Dark Souls deaths: 42");
 	});
 });
 

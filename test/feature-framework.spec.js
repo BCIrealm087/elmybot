@@ -112,7 +112,8 @@ describe("Command and feature framework", () => {
           schemaVersion: 2,
           compatibleVersions: [2, 1],
           collisionSummary: { kind: "entry_count" },
-          limits: { maxEntries: 4, maxValueBytes: 256 }
+          limits: { maxEntries: 4, maxValueBytes: 256 },
+          adoptLegacyIntegrationState: true
         }
       ]
     });
@@ -124,7 +125,8 @@ describe("Command and feature framework", () => {
         schemaVersion: 2,
         compatibleVersions: [1, 2],
         collisionSummary: { kind: "entry_count" },
-        limits: { maxEntries: 4, maxValueBytes: 256 }
+        limits: { maxEntries: 4, maxValueBytes: 256 },
+        adoptLegacyIntegrationState: true
       }
     ]);
     expect(Object.isFrozen(definition.shareableState)).toBe(true);
@@ -201,7 +203,7 @@ describe("Command and feature framework", () => {
           id: "score",
           label: "Score",
           schemaVersion: 1,
-          migration: "copy"
+          adoptLegacyIntegrationState: false
         }]
       }
     ];

@@ -1,4 +1,6 @@
 import { IntegrationCoordinatorError } from "./coordinator-errors.js";
+import { INTEGRATION_FEATURE_STATE_MIGRATION_PATH } from
+  "../framework/feature-storage.js";
 
 export function integrationCoordinatorObjectName(integrationId) {
   return `integration-coordinator:${integrationId}`;
@@ -90,5 +92,24 @@ export async function retryIntegrationEffect(env, integrationId, idempotencyKey)
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ integrationId, idempotencyKey })
+  }));
+}
+
+export async function snapshotAndSealLegacyIntegrationFeatureState(env, {
+  integration,
+  featureId,
+  targetNamespaceId,
+  correlationId
+}) {
+  return checkedCoordinatorResponse(await integrationCoordinatorStub(
+    env,
+    integration?.id
+  ).fetch(`https://integration-coordinator${INTEGRATION_FEATURE_STATE_MIGRATION_PATH}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(correlationId ? { "x-correlation-id": correlationId } : {})
+    },
+    body: JSON.stringify({ integration, featureId, targetNamespaceId })
   }));
 }

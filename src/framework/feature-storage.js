@@ -14,6 +14,8 @@ const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 export const FEATURE_STORAGE_PATH_PREFIX = "/internal/framework/";
 export const INTEGRATION_FEATURE_STATE_PATH_PREFIX =
   "/internal/framework/integration-state/";
+export const INTEGRATION_FEATURE_STATE_MIGRATION_PATH =
+  "/internal/framework/integration-state-migration/snapshot";
 
 export class FeatureStorageUserFacingError extends Error {
   constructor(message, status = 422) {
@@ -115,7 +117,73 @@ export function initializeFeatureStorageTables(state) {
 
     CREATE INDEX IF NOT EXISTS framework_feature_cooldowns_expiry
       ON framework_feature_cooldowns(expires_at_ms);
+
+    CREATE TABLE IF NOT EXISTS framework_feature_state_migrations (
+      feature_id TEXT PRIMARY KEY,
+      target_namespace_id TEXT NOT NULL,
+      sealed_at_ms INTEGER NOT NULL
+    );
   `);
+}
+
+function requireNamespaceId(value) {
+  return requireString(value, KEY_PATTERN, "The shareable namespace ID is invalid.", 64);
+}
+
+export function legacyFeatureStateMigration(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const targetNamespaceId = requireNamespaceId(input?.targetNamespaceId);
+  return state.storage.transactionSync(() => {
+    const existing = state.storage.sql.exec(
+      `SELECT target_namespace_id, sealed_at_ms
+       FROM framework_feature_state_migrations WHERE feature_id = ?`,
+      featureId
+    ).toArray()[0];
+    if (existing && existing.target_namespace_id !== targetNamespaceId) {
+      throw new FeatureStorageUserFacingError(
+        "Legacy feature state was already assigned to another shareable namespace.",
+        409
+      );
+    }
+    const sealedAtMs = existing?.sealed_at_ms ?? Date.now();
+    if (!existing) {
+      state.storage.sql.exec(
+        `INSERT INTO framework_feature_state_migrations
+          (feature_id, target_namespace_id, sealed_at_ms)
+         VALUES (?, ?, ?)`,
+        featureId,
+        targetNamespaceId,
+        sealedAtMs
+      );
+    }
+    const entries = state.storage.sql.exec(
+      `SELECT value_key, value_json
+       FROM framework_feature_values
+       WHERE value_kind = 'state' AND feature_id = ?
+       ORDER BY value_key ASC`,
+      featureId
+    ).toArray().map((entry) => ({
+      key: entry.value_key,
+      value: JSON.parse(entry.value_json)
+    }));
+    return { featureId, targetNamespaceId, sealedAtMs, entries };
+  });
+}
+
+export function legacyFeatureStateIsSealed(state, featureId) {
+  const normalized = requireFeatureId(featureId);
+  return Boolean(state.storage.sql.exec(
+    `SELECT 1 AS sealed FROM framework_feature_state_migrations
+     WHERE feature_id = ?`,
+    normalized
+  ).toArray()[0]);
+}
+
+export function featureStateOperationMutates(operation, input) {
+  if (["state/set", "state/delete", "state/increment"].includes(operation)) {
+    return true;
+  }
+  return operation === "state/bounded-counter" && input?.operation !== "get";
 }
 
 function valueRow(sql, valueKind, featureId, key) {

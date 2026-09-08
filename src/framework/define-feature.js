@@ -205,7 +205,8 @@ function shareableState(value) {
       "schemaVersion",
       "compatibleVersions",
       "collisionSummary",
-      "limits"
+      "limits",
+      "adoptLegacyIntegrationState"
     ]), entryPath);
     if (
       typeof entry.id !== "string" ||
@@ -229,6 +230,12 @@ function shareableState(value) {
       `${entryPath}.schemaVersion`,
       MAX_SHAREABLE_SCHEMA_VERSION
     );
+    if (
+      entry.adoptLegacyIntegrationState !== undefined &&
+      entry.adoptLegacyIntegrationState !== true
+    ) {
+      fail(`${entryPath}.adoptLegacyIntegrationState`, "must be true when provided.");
+    }
     return Object.freeze({
       id: entry.id,
       label,
@@ -242,7 +249,10 @@ function shareableState(value) {
         entry.collisionSummary,
         `${entryPath}.collisionSummary`
       ),
-      limits: shareableLimits(entry.limits, `${entryPath}.limits`)
+      limits: shareableLimits(entry.limits, `${entryPath}.limits`),
+      ...(entry.adoptLegacyIntegrationState === true
+        ? { adoptLegacyIntegrationState: true }
+        : {})
     });
   });
   return Object.freeze(namespaces);

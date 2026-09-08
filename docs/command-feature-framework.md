@@ -471,9 +471,9 @@ so those representations cannot silently drift.
     resolve a default-link snapshot and pass that exact invocation-local
     capability to `ctx.integrationState.for(link)`. The per-integration
     coordinator verifies active membership and stores a feature namespace with
-    the same bounded operations as group state. The redesigned `fun.deaths`
-    feature keeps its remembered game local to each platform group while both
-    directions of one selected integration share a death ledger.
+    the same bounded operations as group state. This compatibility API first
+    supported `fun.deaths`; the feature has since moved its counters to
+    `shareableState` while retaining group-local remembered games.
 
 ## Shareable-state follow-up sequence
 
@@ -498,8 +498,8 @@ when groups link. Each step is intended to land and pass CI independently:
    feature with declared namespaces may request `shareableState` and pin one
    namespace through `current(otherPlatform, namespaceId)`. No default selects
    the origin group's standalone realm; an active default selects that
-   integration's realm. Existing `integrationState` remains available while
-   lifecycle reconciliation and feature migrations are still staged.
+   integration's realm. Existing `integrationState` remains available as a
+   compatibility service for features that have not explicitly migrated.
 5. **Add snapshot, fingerprint, and cloning primitives — completed.** Internal
    realm infrastructure can capture one declared namespace as an immutable,
    versioned snapshot, derive a deterministic content fingerprint and bounded
@@ -540,7 +540,11 @@ when groups link. Each step is intended to land and pass CI independently:
     cancellation and expiry, command/finalizer races, browser replay, CSRF and
     continuation authorization, revocation divergence, relinking, and
     independently selected many-link realms.
-12. **Migrate `fun.deaths` to shareable state.**
+12. **Migrate `fun.deaths` to shareable state — completed.** Only per-game
+    counters moved to `game_deaths`; remembered games remain group-local. The
+    command now works without a link, reconciles standalone ledgers through the
+    generic link flow, continues independently after revocation, and adopts
+    existing integration-owned counters through a sealed, idempotent migration.
 
 ## Success criteria
 

@@ -19,9 +19,11 @@ import {
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
   INTEGRATION_PENDING_TTL_MS,
+  integrationCoordinatorStub,
   integrationRegistryStub,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
+  resolvePendingIntegrationState,
   resumePendingIntegration,
   revokeIntegration,
   revokeIntegrationsForGroup,
@@ -31,6 +33,10 @@ import {
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { initializeRegistryTables } from "../src/integrations/registry-schema.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
+import {
+  createIntegrationRealmIdentity,
+  shareableStateRealmStub
+} from "../src/shareable-state/index.js";
 
 const integrationEnv = {
   ...env,
@@ -343,7 +349,12 @@ describe("Cross-platform integration linking", () => {
       stateDiscovery: {
         version: 1,
         requiresResolution: false,
-        namespaces: []
+        namespaces: [{
+          featureId: "fun.deaths",
+          namespaceId: "game_deaths",
+          outcome: "both_empty",
+          automaticSelection: "reset"
+        }]
       }
     });
     const activated = await activatePendingIntegration(integrationEnv, {
@@ -786,6 +797,233 @@ describe("Cross-platform integration linking", () => {
     });
   });
 
+  it("adopts and seals an existing linked deaths ledger on first shareable access", async () => {
+    const linked = await activateIntegration();
+    const invocation = createCommandInvocation({
+      kind: "fun.deaths.manage.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:legacy-deaths-adoption"
+    });
+    const runtime = createFeatureServiceRuntime(integrationEnv, invocation);
+    const link = await runtime.featureServices.links.default(
+      "fun.deaths",
+      "twitch"
+    );
+    const descriptor = {
+      name: "game",
+      subject: "hades",
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      initial: 0
+    };
+    const realm = createIntegrationRealmIdentity(linked.completion.integration, {
+      generation: linked.completion.integration.shareableStateGeneration
+    });
+    await runInDurableObject(
+      shareableStateRealmStub(integrationEnv, realm),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_legacy_adoptions
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_materializations
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_namespaces
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+      }
+    );
+
+    await expect(runtime.featureServices.integrationState.boundedCounter(
+      "fun.deaths",
+      link,
+      descriptor,
+      "set",
+      37
+    )).resolves.toBe(37);
+    await runInDurableObject(
+      integrationCoordinatorStub(integrationEnv, linked.completion.integration.id),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT value_json FROM framework_feature_values
+           WHERE feature_id = 'fun.deaths' AND value_kind = 'state'`
+        ).toArray()).toEqual([{ value_json: "37" }]);
+      }
+    );
+    const shared = await runtime.featureServices.shareableState.current(
+      "fun.deaths",
+      "twitch",
+      "game_deaths"
+    );
+    const adoptedCount = await runtime.featureServices.shareableState.boundedCounter(
+      "fun.deaths",
+      shared,
+      descriptor,
+      "get"
+    );
+    let adoptionRows;
+    await runInDurableObject(
+      shareableStateRealmStub(integrationEnv, realm),
+      async (_instance, state) => {
+        adoptionRows = {
+          adoptions: state.storage.sql.exec(
+            "SELECT * FROM shareable_state_realm_legacy_adoptions"
+          ).toArray(),
+          values: state.storage.sql.exec(
+            "SELECT * FROM shareable_state_realm_values"
+          ).toArray()
+        };
+      }
+    );
+    expect({ adoptedCount, adoptionRows }).toMatchObject({
+      adoptedCount: 37,
+      adoptionRows: {
+        adoptions: [{ outcome: "adopted", entry_count: 1 }]
+      }
+    });
+    await expect(runtime.featureServices.integrationState.boundedCounter(
+      "fun.deaths",
+      link,
+      descriptor,
+      "increment",
+      1
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "integration_feature_state_migrated"
+    });
+    await expect(runtime.featureServices.shareableState.boundedCounter(
+      "fun.deaths",
+      shared,
+      descriptor,
+      "get"
+    )).resolves.toBe(37);
+  });
+
+  it("carries deaths through standalone collision, linking, revocation, and relinking", async () => {
+    const group = discordGroup();
+    const channel = twitchGroup();
+    let invocationSequence = 0;
+    const deathsState = async (originGroup, targetPlatform) => {
+      invocationSequence += 1;
+      const runtime = createFeatureServiceRuntime(
+        integrationEnv,
+        createCommandInvocation({
+          kind: "fun.deaths.manage.v1",
+          origin: {
+            group: originGroup,
+            actor: originGroup.platform === "discord"
+              ? discordActor()
+              : twitchActor(originGroup.id)
+          },
+          sourceEventId:
+            `${originGroup.platform}:test:deaths-lifecycle:${invocationSequence}`
+        })
+      );
+      const scope = await runtime.featureServices.shareableState.current(
+        "fun.deaths",
+        targetPlatform,
+        "game_deaths"
+      );
+      const descriptor = {
+        name: "game",
+        subject: "hades",
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+        initial: 0
+      };
+      return {
+        get: async () => await runtime.featureServices.shareableState.boundedCounter(
+          "fun.deaths", scope, descriptor, "get"
+        ),
+        set: async (value) => await runtime.featureServices.shareableState.boundedCounter(
+          "fun.deaths", scope, descriptor, "set", value
+        )
+      };
+    };
+
+    await (await deathsState(group, "twitch")).set(3);
+    await (await deathsState(channel, "discord")).set(5);
+
+    const first = await prepareIntegration({ group, channel });
+    const firstVerification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: first.reservation.invitationId,
+      reservationId: first.reservation.reservationId,
+      group: channel,
+      actor: twitchActor(channel.id),
+      groupLabel: first.login
+    });
+    expect(firstVerification.pendingIntegration.stateDiscovery).toMatchObject({
+      requiresResolution: true,
+      namespaces: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        outcome: "collision"
+      }]
+    });
+    await resolvePendingIntegrationState(integrationEnv, {
+      reservationId: first.reservation.reservationId,
+      discoveryVersion: firstVerification.pendingIntegration.stateDiscovery.version,
+      selections: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        selection: "discord"
+      }]
+    });
+    const firstCompletion = await activatePendingIntegration(integrationEnv, {
+      invitationId: first.reservation.invitationId,
+      reservationId: first.reservation.reservationId
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(3);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(3);
+    await (await deathsState(group, "twitch")).set(4);
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: firstCompletion.integration.id,
+      group,
+      actor: first.actor,
+      reason: "test_deaths_standalone_continuation"
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(4);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    await (await deathsState(group, "twitch")).set(6);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+
+    const second = await prepareIntegration({ group, channel });
+    const secondVerification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: second.reservation.invitationId,
+      reservationId: second.reservation.reservationId,
+      group: channel,
+      actor: twitchActor(channel.id),
+      groupLabel: second.login
+    });
+    expect(secondVerification.pendingIntegration.stateDiscovery).toMatchObject({
+      requiresResolution: true,
+      namespaces: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        outcome: "collision"
+      }]
+    });
+    await resolvePendingIntegrationState(integrationEnv, {
+      reservationId: second.reservation.reservationId,
+      discoveryVersion: secondVerification.pendingIntegration.stateDiscovery.version,
+      selections: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        selection: "twitch"
+      }]
+    });
+    await activatePendingIntegration(integrationEnv, {
+      invitationId: second.reservation.invitationId,
+      reservationId: second.reservation.reservationId
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(4);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+  });
+
   it("resolves and pins standalone or active integration shareable-state realms", async () => {
     const unlinkedGroup = discordGroup();
     const standaloneRuntime = createFeatureServiceRuntime(
@@ -1004,10 +1242,39 @@ describe("Cross-platform integration linking", () => {
   it("serializes concurrent first-link completion to one directional winner", async () => {
     const group = discordGroup();
     const actor = discordActor();
-    const [first, second] = await Promise.all([
-      activateIntegration({ group, actor, channel: twitchGroup() }),
-      activateIntegration({ group, actor, channel: twitchGroup() })
+    const prepared = await Promise.all([
+      prepareIntegration({ group, actor, channel: twitchGroup() }),
+      prepareIntegration({ group, actor, channel: twitchGroup() })
     ]);
+    const attempts = await Promise.all(prepared.map((candidate) =>
+      completePreparedIntegration(candidate).catch((error) => error)
+    ));
+    const completed = [];
+    for (const [index, attempt] of attempts.entries()) {
+      if (attempt instanceof Error) {
+        expect(attempt).toMatchObject({ status: 409 });
+        let resumed;
+        let completion;
+        for (let retry = 0; retry < 3 && completion === undefined; retry += 1) {
+          resumed = await resumePendingIntegration(integrationEnv, {
+            reservationId: prepared[index].reservation.reservationId
+          });
+          try {
+            completion = await activatePendingIntegration(integrationEnv, {
+              invitationId: prepared[index].reservation.invitationId,
+              reservationId: prepared[index].reservation.reservationId
+            });
+          } catch (error) {
+            if (error.code !== "integration_state_rediscovery_required") throw error;
+          }
+        }
+        expect(completion).toBeDefined();
+        completed.push({ ...prepared[index], verification: resumed, completion });
+      } else {
+        completed.push(attempt);
+      }
+    }
+    const [first, second] = completed;
     const candidates = new Set([
       first.completion.integration.id,
       second.completion.integration.id
@@ -1297,10 +1564,11 @@ describe("Cross-platform integration linking", () => {
     ]);
     let completed = concurrentCompletion;
     if (concurrentCompletion instanceof Error) {
-      expect(concurrentCompletion).toMatchObject({
-        status: 409,
-        code: "shareable_state_transition"
-      });
+      expect(concurrentCompletion.status).toBe(409);
+      expect([
+        "shareable_state_transition",
+        "integration_state_rediscovery_required"
+      ]).toContain(concurrentCompletion.code);
       completed = await completePreparedIntegration(replacement);
     }
 

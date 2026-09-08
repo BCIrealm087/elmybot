@@ -239,7 +239,7 @@ describe("fun.deaths", () => {
     })).toReply("Hades deaths: 1");
   });
 
-  it("requires a default link and does not remember a failed selection", async () => {
+  it("works in standalone state and remembers a successful local selection", async () => {
     const group = discordTestGroup();
     const runtime = createFeatureTestRuntime(feature);
 
@@ -247,13 +247,27 @@ describe("fun.deaths", () => {
       group,
       actor: discordTestModerator(),
       args: { operation: "plus", game: "Hades" }
-    })).toReply("Death counts require a default linked Twitch channel.");
+    })).toReply("Hades deaths: 1");
     (await runtime.discord.command("deaths", {
       group,
       actor: discordTestActor()
-    })).toReply(
-      "No game is selected yet. A moderator must check or update a named game first."
-    );
+    })).toReply("Hades deaths: 1");
+  });
+
+  it("isolates standalone death ledgers by platform group", async () => {
+    const discordGroup = discordTestGroup({ id: "standalone-guild" });
+    const twitchGroup = twitchTestGroup({ id: "standalone-channel" });
+    const runtime = createFeatureTestRuntime(feature);
+
+    (await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestModerator(),
+      args: { operation: "plus", game: "Hades" }
+    })).toReply("Hades deaths: 1");
+    (await runtime.twitch.commandText("!deaths check Hades", {
+      group: twitchGroup,
+      actor: twitchTestActor()
+    })).toReply("Hades deaths: 0");
   });
 
   it("accepts punctuation and Unicode without exposing storage-key rules", async () => {

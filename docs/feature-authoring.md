@@ -488,7 +488,7 @@ before storing data that both sides must mutate.
 
 ## Declare and resolve a shareable-state namespace
 
-The staged shareable-state initiative lets a feature declare a namespace that
+The shareable-state lifecycle lets a feature declare a namespace that
 can resolve independently for an unlinked group and through its selected
 integration when linked:
 
@@ -527,12 +527,12 @@ affects later resolutions without moving either realm's data.
 
 This does not reclassify `ctx.state`, and local preferences remain ordinary
 group state. Snapshot, collision resolution, safe finalization, and independent
-post-revocation successors are implemented, but existing-data migration is
-still staged. Do not migrate a production feature until its explicit migration
-step.
+post-revocation successors are implemented. Existing-data migration remains an
+explicit maintainer-reviewed step; new features should never claim legacy
+state.
 See the
 [`shareable-state lifecycle contract`](shareable-state-lifecycle.md) for the
-staged behavior and constraints.
+implemented behavior and constraints.
 
 ## Cookbook 6: stateful command
 

@@ -1,9 +1,10 @@
 # `@elmybot/feature-fun-deaths`
 
-Tracks one non-negative death count per game in the active integration selected
-by a Discord server's or Twitch channel's directional default. Both directions
-share counts when they select the same integration. Each platform group keeps
-its own remembered game.
+Tracks one non-negative death count per game. An unlinked Discord server or
+Twitch channel uses its own standalone ledger. When a directional default link
+exists, the selected integration owns the ledger and both directions share
+counts when they select that integration. Each platform group always keeps its
+own remembered game.
 
 Ordinary members can read a count. Broadcasters, moderators, Discord owners,
 intrinsic Discord moderators, and configured trusted Discord roles can use the
@@ -12,7 +13,13 @@ the count exactly.
 
 Using a named game updates the remembered game only for a moderator. An
 ordinary member may check a named game once without changing what a later
-argument-free command checks. The command requires an active default link.
+argument-free command checks.
+
+When groups link, empty, one-sided, or identical ledgers reconcile
+automatically. Different nonempty ledgers are shown in the integration flow so
+the Twitch broadcaster can choose Discord's counts, Twitch's counts, reset the
+new shared ledger, or cancel. Revoking the last link gives both groups
+independent successors starting from the final shared counts.
 
 ## Commands
 

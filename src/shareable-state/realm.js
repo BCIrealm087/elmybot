@@ -4,6 +4,9 @@ import {
   createPlatformGroupRef,
   IntegrationContractError
 } from "../integrations/contracts.js";
+import {
+  snapshotAndSealLegacyIntegrationFeatureState
+} from "../integrations/coordinator-client.js";
 
 const FEATURE_ID_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
 const NAMESPACE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -263,6 +266,16 @@ export function initializeShareableStateRealmTables(state) {
       mutation_version INTEGER NOT NULL,
       created_at_ms INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS shareable_state_realm_legacy_adoptions (
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('adopted', 'already_materialized')),
+      source_sealed_at_ms INTEGER,
+      entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
+      completed_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, namespace_id)
+    );
   `);
   const namespaceColumns = new Set(
     state.storage.sql.exec("PRAGMA table_info(shareable_state_realm_namespaces)")
@@ -504,6 +517,114 @@ async function snapshotNamespace(state, namespace) {
   };
 }
 
+function legacyAdoptionCompleted(sql, namespace) {
+  return Boolean(sql.exec(
+    `SELECT 1 AS completed FROM shareable_state_realm_legacy_adoptions
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0]);
+}
+
+function recordLegacyAdoption(state, namespace, {
+  outcome,
+  sourceSealedAtMs = null,
+  entryCount
+}) {
+  state.storage.sql.exec(
+    `INSERT INTO shareable_state_realm_legacy_adoptions
+      (feature_id, namespace_id, outcome, source_sealed_at_ms,
+       entry_count, completed_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(feature_id, namespace_id) DO NOTHING`,
+    namespace.featureId,
+    namespace.namespaceId,
+    outcome,
+    sourceSealedAtMs,
+    entryCount,
+    Date.now()
+  );
+}
+
+async function adoptLegacyIntegrationState(
+  state,
+  env,
+  identity,
+  namespace,
+  correlationId
+) {
+  if (
+    identity.kind !== "integration" ||
+    namespace.declaration.adoptLegacyIntegrationState !== true ||
+    legacyAdoptionCompleted(state.storage.sql, namespace)
+  ) {
+    return;
+  }
+  const current = namespaceSnapshotRows(state, namespace);
+  if (current.mutationVersion !== 0 || current.entries.length !== 0) {
+    recordLegacyAdoption(state, namespace, {
+      outcome: "already_materialized",
+      entryCount: current.entries.length
+    });
+    return;
+  }
+  const source = await snapshotAndSealLegacyIntegrationFeatureState(env, {
+    integration: identity.owner,
+    featureId: namespace.featureId,
+    targetNamespaceId: namespace.namespaceId,
+    correlationId
+  });
+  if (
+    source?.featureId !== namespace.featureId ||
+    source?.targetNamespaceId !== namespace.namespaceId ||
+    !Number.isSafeInteger(source?.sealedAtMs) ||
+    source.sealedAtMs < 0 ||
+    !Array.isArray(source?.entries)
+  ) {
+    fail("Legacy integration state returned an invalid migration snapshot.", {
+      status: 502,
+      code: "shareable_state_legacy_snapshot_invalid"
+    });
+  }
+  const entries = source.entries.map((entry) => ({
+    key: entry.key,
+    valueJson: serializeValue(
+      entry.value,
+      namespace.declaration.limits.maxValueBytes
+    )
+  })).sort((left, right) => left.key.localeCompare(right.key));
+  const snapshot = {
+    formatVersion: SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION,
+    namespace: {
+      featureId: namespace.featureId,
+      namespaceId: namespace.namespaceId,
+      schemaVersion: namespace.declaration.schemaVersion
+    },
+    mutationVersion: 0,
+    fingerprint: await fingerprintSnapshotRows(
+      namespace,
+      namespace.declaration.schemaVersion,
+      entries
+    ),
+    meaningful: entries.length > 0,
+    summary: collisionSummary(namespace.declaration, entries.length),
+    entries: entries.map((entry) => ({
+      key: entry.key,
+      value: JSON.parse(entry.valueJson)
+    }))
+  };
+  await cloneSnapshot(state, namespace, {
+    snapshot,
+    expectedTargetMutationVersion: 0,
+    idempotencyKey: `legacy:${namespace.featureId}:${namespace.namespaceId}`
+  });
+  recordLegacyAdoption(state, namespace, {
+    outcome: "adopted",
+    sourceSealedAtMs: source.sealedAtMs,
+    entryCount: entries.length
+  });
+}
+
 function activeNamespaceSeal(sql, namespace, nowMs = Date.now()) {
   const row = sql.exec(
     `SELECT seal_id, expires_at_ms
@@ -643,7 +764,7 @@ function releaseNamespaceSeal(state, namespace, input) {
   return { released };
 }
 
-async function namespaceInventory(state, registry) {
+async function namespaceInventory(state, registry, prepareNamespace) {
   const declarations = registry.features.flatMap((feature) =>
     feature.shareableState.map((declaration) => ({
       featureId: feature.id,
@@ -663,6 +784,7 @@ async function namespaceInventory(state, registry) {
       declaration: item.declaration
     });
     ensureNamespace(state, namespace);
+    await prepareNamespace(namespace);
     const captured = namespaceSnapshotRows(state, namespace);
     namespaces.push({
       featureId: item.featureId,
@@ -1201,7 +1323,29 @@ export class ShareableStateRealmBackend {
     this.state = state;
     this.env = env;
     this.featureRegistry = featureRegistry;
+    this.legacyAdoptions = new Map();
     initializeShareableStateRealmTables(state);
+  }
+
+  async prepareLegacyAdoption(identity, namespace, correlationId) {
+    const key = `${namespace.featureId}\u0000${namespace.namespaceId}`;
+    const existing = this.legacyAdoptions.get(key);
+    if (existing) return await existing;
+    const operation = adoptLegacyIntegrationState(
+      this.state,
+      this.env,
+      identity,
+      namespace,
+      correlationId
+    );
+    this.legacyAdoptions.set(key, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.legacyAdoptions.get(key) === operation) {
+        this.legacyAdoptions.delete(key);
+      }
+    }
   }
 
   async fetch(request) {
@@ -1216,6 +1360,8 @@ export class ShareableStateRealmBackend {
     if (!REALM_OPERATIONS.has(operation)) {
       return new Response("Not found", { status: 404 });
     }
+    const correlationId =
+      request.headers.get("x-correlation-id") ?? crypto.randomUUID();
     try {
       let input;
       try {
@@ -1228,11 +1374,19 @@ export class ShareableStateRealmBackend {
       if (operation === "inventory") {
         return noStoreJson(await namespaceInventory(
           this.state,
-          this.featureRegistry
+          this.featureRegistry,
+          async (namespace) => await this.prepareLegacyAdoption(
+            identity,
+            namespace,
+            correlationId
+          )
         ));
       }
       const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
       ensureNamespace(this.state, namespace);
+      if (!new Set(["clone-snapshot", "initialize-empty"]).has(operation)) {
+        await this.prepareLegacyAdoption(identity, namespace, correlationId);
+      }
       const result = await runOperation(
         this.state,
         namespace,
@@ -1244,8 +1398,6 @@ export class ShareableStateRealmBackend {
       if (error instanceof ShareableStateRealmError) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }
-      const correlationId =
-        request.headers.get("x-correlation-id") ?? crypto.randomUUID();
       logError("shareable_state.realm_request_failed", {
         platform: "shared",
         correlationId,

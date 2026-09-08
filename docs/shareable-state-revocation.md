@@ -122,4 +122,5 @@ The focused revocation suite covers:
 The broader lifecycle, authorization, CSRF, concurrency, and many-link matrix
 is documented in
 [`shareable-state-lifecycle-verification.md`](shareable-state-lifecycle-verification.md).
-Migrating `fun.deaths` and adopting its existing ledgers remains Step 12.
+The `fun.deaths` lifecycle test now verifies this continuation with real death
+counters through revocation, divergence, and relinking.

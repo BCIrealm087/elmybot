@@ -8,9 +8,13 @@ import {
 } from "./contracts.js";
 import {
   FeatureStorageUserFacingError,
+  featureStateOperationMutates,
   handleFeatureStateStorageOperation,
   initializeFeatureStorageTables,
-  INTEGRATION_FEATURE_STATE_PATH_PREFIX
+  INTEGRATION_FEATURE_STATE_MIGRATION_PATH,
+  INTEGRATION_FEATURE_STATE_PATH_PREFIX,
+  legacyFeatureStateIsSealed,
+  legacyFeatureStateMigration
 } from "../framework/feature-storage.js";
 import {
   getIntegrationById,
@@ -215,11 +219,37 @@ export class IntegrationCoordinatorBackend {
     }
 
     this.ensureCoordinatorIdentity(integration.id);
+    if (
+      featureStateOperationMutates(operation, input?.storage) &&
+      legacyFeatureStateIsSealed(this.state, input?.storage?.featureId)
+    ) {
+      throw new IntegrationCoordinatorError(
+        "This legacy feature-state namespace has migrated to shareable state.",
+        { status: 409, code: "integration_feature_state_migrated" }
+      );
+    }
     return await handleFeatureStateStorageOperation(
       this.state,
       operation,
       input?.storage
     );
+  }
+
+  async migrateFeatureState(input) {
+    let integration;
+    try {
+      integration = createIntegrationRef(input?.integration);
+    } catch (error) {
+      if (error instanceof IntegrationContractError) {
+        throw new IntegrationCoordinatorError(
+          "The integration feature-state migration scope is invalid.",
+          { status: 422, code: "integration_feature_state_scope_invalid" }
+        );
+      }
+      throw error;
+    }
+    this.ensureCoordinatorIdentity(integration.id);
+    return legacyFeatureStateMigration(this.state, input);
   }
 
   validateExecution(input) {
@@ -650,6 +680,18 @@ export class IntegrationCoordinatorBackend {
   async fetch(request) {
     const url = new URL(request.url);
     try {
+      if (
+        request.method === "POST" &&
+        url.pathname === INTEGRATION_FEATURE_STATE_MIGRATION_PATH
+      ) {
+        let input;
+        try {
+          input = await request.json();
+        } catch {
+          throw new IntegrationCoordinatorError("Request body must be valid JSON.");
+        }
+        return noStoreJson(await this.migrateFeatureState(input));
+      }
       if (
         request.method === "POST" &&
         url.pathname.startsWith(INTEGRATION_FEATURE_STATE_PATH_PREFIX)

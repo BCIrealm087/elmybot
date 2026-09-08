@@ -58,9 +58,9 @@ groups can manage only relationships they belong to, each platform actor can
 change only its own outgoing direction, and a selected target must be an active
 member of the exact integration.
 
-## Scope boundary
+## Feature proof
 
-This matrix validates the generic lifecycle before Step 12. It does not claim
-that `fun.deaths` has migrated or that its legacy integration ledger has been
-adopted. Step 12 must still add feature-specific standalone, collision,
-revocation, relinking, and legacy-data tests around that migration.
+The generic matrix is complemented by `fun.deaths` tests that exercise
+standalone group isolation, a real death-ledger collision, explicit platform
+selection, linked sharing, revocation successors, post-revocation divergence,
+relinking, and one-time adoption and sealing of a legacy integration ledger.

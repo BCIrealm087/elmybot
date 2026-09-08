@@ -55,8 +55,9 @@ Two complete features are useful as nearby examples:
 - [`core.alive`](../packages/features/alive/src/feature.js) is the smallest
   shared Discord and Twitch command.
 - [`fun.deaths`](../packages/features/fun-deaths/src/feature.js) combines shared
-  behavior, quoted Twitch input, integration-owned counters, per-platform
-  remembered state, and conditional moderator access.
+  behavior, quoted Twitch input, standalone-or-linked counters, per-platform
+  remembered state, conditional moderator access, and an explicit legacy
+  integration-state migration.
 
 ## 3. Install it explicitly
 

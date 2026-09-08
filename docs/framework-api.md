@@ -87,7 +87,7 @@ Changing a default selects another ledger; revocation blocks access without
 deleting data; and relinking creates a new ledger. See
 [`feature-state.md`](feature-state.md) for the full ownership contract.
 
-The staged `shareableState` service is available only to features declaring at
+The `shareableState` service is available only to features declaring at
 least one shareable namespace. `await ctx.shareableState.current(
 otherPlatform, namespaceId)` pins one frozen state scope: the origin group's
 standalone realm when no directional default exists, or that default
@@ -97,9 +97,9 @@ not expose links, realm IDs, generations, snapshots, or storage enumeration.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented
-but intentionally absent from the feature-facing scope. Existing features with
-data to preserve must not migrate to `shareableState` until their explicit
-migration stage adopts legacy ledgers.
+but intentionally absent from the feature-facing scope. An existing feature
+may adopt its known legacy integration-state layout only through an explicit,
+reviewed `adoptLegacyIntegrationState` declaration; new features do not use it.
 
 Actions with argument-dependent protected modes may add validated
 `conditionalAccess` metadata. It identifies the capability, input argument, and

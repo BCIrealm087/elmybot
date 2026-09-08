@@ -10,8 +10,8 @@ action invocation.
 The `shareableState` service resolves declared namespaces to standalone or
 default-integration realms. Protected discovery, reconciliation, finalization,
 and post-revocation successor infrastructure is implemented;
-`integrationState` continues to support existing features until their explicit
-migration can adopt legacy data. See the
+`integrationState` remains as a compatibility service for features that have
+not completed an explicit legacy-data migration. See the
 [`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md).
 
 ## Choose the state boundary first
@@ -47,8 +47,8 @@ Examples:
   channel uses origin-group state.
 - A Twitch stream-online event that sends a Discord message uses a route and an
   effect. Delivery across platforms does not make it shared state.
-- Death counts or one tournament scoreboard that moderators update from either
-  member of one Discord–Twitch link use integration-owned state.
+- Death counts or one tournament scoreboard that must work before linking and
+  reconcile at link time use resolved shareable state.
 
 Resolved shareable state has these currently implemented rules:
 
@@ -100,10 +100,10 @@ const score = await state.increment("value");
 ```
 
 The feature definition must declare `score` in `shareableState`. The returned
-scope has the same atomic state and bounded-counter operations. Current
-production features with legacy data must wait for their explicit migration;
-the framework does not infer that ordinary or integration state belongs in a
-new realm.
+scope has the same atomic state and bounded-counter operations. The framework
+never infers that ordinary or integration state belongs in a new realm. A
+production feature with legacy data needs an explicit, reviewed migration
+declaration and feature-specific compatibility tests.
 
 Do not imitate shared state by embedding another platform's group ID or an
 integration ID in a local `ctx.state` key. The value remains owned by the origin
@@ -162,8 +162,8 @@ await sharedDeaths
 ```
 
 The action lists `"shareableState"` in `uses.services`, and the feature declares
-`game_deaths`. Until `fun.deaths` reaches its migration step, it continues to
-use the compatibility service below.
+`game_deaths`. This is the current `fun.deaths` shape: its counter namespace is
+shareable while `last_game` stays in ordinary `ctx.state`.
 
 Integration state exposes the same state operations after resolving a default:
 
@@ -186,6 +186,13 @@ The action must list `"integrationState"` and `"links"` in `uses.services`.
 The returned integration-state scope has `get`, `set`, `delete`, `increment`,
 and `boundedCounter` with the same validation, limits, and atomicity as
 `ctx.state`.
+
+For a reviewed migration from that compatibility service, a namespace may set
+`adoptLegacyIntegrationState: true`. On the first access to an older integration
+realm, the framework atomically seals that feature's legacy state against new
+writes and clones its state entries into the declared namespace exactly once.
+New features must not set this flag; it exists only to preserve an installed
+feature's known legacy layout.
 
 `boundedCounter(name, subject, options)` accepts an ordinary storage-safe name
 and an arbitrary non-empty subject up to 300 characters. The runtime maps the
@@ -291,8 +298,9 @@ also demonstrates operator configuration and a five-second actor cooldown.
 
 The proof test for independent state should use two explicit groups, mutate one,
 and assert that the other remains unchanged. The workspace `fun.deaths` feature
-is the integration-state proof: its death ledger is shared by commands whose
-directional defaults select the same integration, while its remembered game is
-stored separately in each origin group. Its tests cover both member groups,
-default switching, unlinked use, authorization, raw Twitch syntax, and the
-zero-floor counter; the infrastructure suite covers membership and revocation.
+is the shareable-state proof: its death ledger is standalone without a default
+and shared by commands whose directional defaults select the same integration,
+while its remembered game is stored separately in each origin group. Its tests
+cover group isolation, collision choice, linking, revocation continuation,
+relinking, default switching, authorization, raw Twitch syntax, legacy-ledger
+adoption, and the zero-floor counter.

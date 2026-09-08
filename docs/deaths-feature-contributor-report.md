@@ -1272,3 +1272,49 @@ suite passed 26 files and 291 tests. ESLint, API-boundary checks, workspace
 validation, generated-document freshness, JavaScript syntax, and the whitespace
 check passed. The non-deploying Worker dry run remains delegated to GitHub
 Actions.
+
+## Shareable-state Step 12: migrate `fun.deaths`
+
+The command now declares one `game_deaths` shareable namespace and resolves it
+through `ctx.shareableState.current()`. Its per-game bounded counters therefore
+work in an isolated standalone realm when no default link exists and in the
+selected integration realm when one does. The `last_game` preference was left
+on `ctx.state`, so Discord and Twitch continue remembering different games even
+while they read and update the same linked counts. The former link-required
+reply and the feature's direct dependency on `links` and `integrationState`
+were removed.
+
+Existing linked ledgers required one deliberately narrow compatibility path.
+The namespace opts into a maintainer-only legacy adoption marker. On first use
+of an older integration realm, that realm asks the matching integration
+coordinator to snapshot and permanently seal only `fun.deaths` state. The realm
+then materializes those same hashed counter keys under `game_deaths` with a
+stable idempotency key. A retry reuses the same snapshot, while an older Worker
+invocation can still read the legacy ledger but cannot mutate it after the
+seal. Newly finalized realms already have lifecycle materialization records and
+are marked as such without attempting legacy adoption.
+
+The feature tests now prove unlinked operation and Discord/Twitch standalone
+isolation in addition to the existing syntax, permission, local-memory,
+default-switching, and bounded-counter behavior. Infrastructure-backed tests
+seed and adopt a real legacy death counter, verify that the old writer is
+sealed, create different standalone Discord and Twitch ledgers, choose one in
+collision resolution, share it after activation, fork it on revocation, let
+the successors diverge, and reconcile them again on relinking.
+
+**Assessment:** the final command-facing change is exactly as small as the
+framework initiative was intended to make it: declare a namespace and replace
+manual link resolution with one effective-state lookup. A hobby contributor
+building a new command would not encounter the migration machinery at all.
+Preserving an already deployed linked ledger is necessarily maintainer work;
+the explicit marker and generic seal-and-copy implementation keep that burden
+out of the command body. The lifecycle tests are substantial, but they are
+framework integration evidence rather than a template every hobbyist must
+reproduce. For a fresh shareable command, focused argument, authorization, and
+reply tests plus a small standalone/linked behavior test remain a reasonable
+contribution surface.
+
+The completed local verification passed 26 files and 295 tests. ESLint,
+feature API-boundary checks, workspace-package validation, generated-catalog
+freshness, tracked JavaScript syntax checks, and the whitespace check also
+passed. The non-deploying Worker dry run remains delegated to GitHub Actions.

@@ -1,9 +1,8 @@
 # Shareable feature-state lifecycle contract
 
-Status: staged design contract. The behavior in this document is the normative
-target for the shareable-state initiative, but it is not part of Framework API
-v1 and is not implemented merely because it is documented. Until the staged
-implementation reaches a feature, that feature continues to follow the current
+Status: implemented lifecycle contract. The behavior in this document is the
+normative contract for declared shareable state in Framework API v1. Features
+that have not explicitly migrated continue to follow the compatibility
 [`integrationState` contract](feature-state.md).
 
 Implementation progress: namespace declarations, standalone and integration
@@ -17,7 +16,8 @@ finalizer orchestration are also implemented. Revocation now freezes archived
 integration realms and provides lazy, independently writable standalone
 successors when no fallback link remains. The complete generic lifecycle,
 security, concurrency, replay, and many-link verification matrix is also in
-place. Feature migration remains staged.
+place. `fun.deaths` now exercises the complete lifecycle in production feature
+code, including adoption of its prior linked-only ledger.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -51,9 +51,8 @@ model.
 
 Ordinary `ctx.state`, configuration, cooldowns, routes, effects, schedules,
 OAuth credentials, and integration-management data are outside shareable
-namespaces. For example, `fun.deaths` may eventually declare its per-game death
-counters shareable while keeping each group's remembered game in ordinary
-group-local state.
+namespaces. `fun.deaths` declares its per-game death counters shareable while
+keeping each group's remembered game in ordinary group-local state.
 
 ## Required invariants
 
@@ -118,10 +117,9 @@ standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
 
 This resolution API, pending-link activation barrier, collision discovery,
-finalization, and revocation continuation are implemented. Until the explicit
-feature-migration stage lands, maintainers must not migrate an existing
-production feature whose standalone or legacy integration data needs adoption.
-No installed feature uses the new service yet.
+finalization, and revocation continuation are implemented. `fun.deaths` is the
+first installed feature using the service and its explicit legacy-adoption
+path is covered by migration and lifecycle tests.
 
 ## Link lifecycle
 
@@ -344,7 +342,8 @@ shareableState: [{
   schemaVersion: 1,
   compatibleVersions: [1],
   collisionSummary: { kind: "entry_count" },
-  limits: { maxEntries: 100, maxValueBytes: 16_384 }
+  limits: { maxEntries: 100, maxValueBytes: 16_384 },
+  adoptLegacyIntegrationState: true
 }]
 ```
 
@@ -422,9 +421,9 @@ outcomes are recorded as framework decisions rather than attributed to a user.
   active, revoking, revoked, cancelled, and expired states without exposing
   state payloads.
 
-## Compatibility and staged rollout
+## Compatibility and explicit rollout
 
-This contract does not change current production behavior by itself.
+Declaring a namespace does not reclassify existing storage by itself.
 
 1. Existing group `ctx.state` remains group-owned and is never reclassified
    automatically.
@@ -439,10 +438,11 @@ This contract does not change current production behavior by itself.
 6. Rollout must not reactivate revoked integration data, overwrite established
    defaults, or copy ordinary local state into a shareable namespace.
 
-For `fun.deaths`, the intended later migration adopts existing integration-owned
-death counters as integration realms, creates standalone counter realms for
-unlinked groups, and leaves `last_game` in ordinary group state. The command
-changes only after the generic lifecycle and migration tests pass.
+`fun.deaths` now adopts existing integration-owned death counters into the
+matching integration realm, creates standalone counter realms for unlinked
+groups, and leaves `last_game` in ordinary group state. The legacy namespace is
+sealed before copying, the target materialization is idempotent, and new links
+use the ordinary collision lifecycle.
 
 ## Rejected shortcuts
 
@@ -462,7 +462,7 @@ The contract deliberately rejects several simpler-looking implementations:
   explicit platform choice is safer until a later contract defines reviewed,
   schema-specific merge behavior.
 
-## Acceptance scenarios for later implementation
+## Acceptance scenarios
 
 The completed system must demonstrate at least these observable scenarios:
 
