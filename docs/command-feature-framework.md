@@ -534,7 +534,12 @@ when groups link. Each step is intended to land and pass CI independently:
     independent standalone successor from the final shared snapshot; partial
     copies and retries cannot expose stale or incomplete state. See
     [shareable-state revocation](shareable-state-revocation.md).
-11. **Add lifecycle, security, concurrency, and many-link tests.**
+11. **Add lifecycle, security, concurrency, and many-link tests — completed.**
+    The layered [verification matrix](shareable-state-lifecycle-verification.md)
+    covers standalone and linked ownership, every collision outcome,
+    cancellation and expiry, command/finalizer races, browser replay, CSRF and
+    continuation authorization, revocation divergence, relinking, and
+    independently selected many-link realms.
 12. **Migrate `fun.deaths` to shareable state.**
 
 ## Success criteria

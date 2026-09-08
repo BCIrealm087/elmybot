@@ -1234,3 +1234,41 @@ race test also passed independently. The complete local suite passed 26 files
 and 286 tests. ESLint, API-boundary checks, workspace validation, generated
 documentation freshness, JavaScript syntax, and the whitespace check passed.
 The non-deploying Worker dry run remains delegated to GitHub Actions.
+
+## Shareable-state Step 11: lifecycle and security verification
+
+This pass treated the complete lifecycle as a product contract rather than
+adding one oversized end-to-end test. Existing realm, registry, browser, and
+feature-runtime cases were mapped against the Step 11 requirements first. New
+tests then filled the substantive gaps: they verify the actual finalized
+contents for automatic one-sided and identical decisions, reset a nonempty
+collision, cancel after saving choices without materializing a realm, reject
+missing or foreign browser continuations and stale forms, replay a completed
+form submission and refresh without another activation, select an active
+fallback realm after revocation, and keep opposite many-link directions on
+independent state ledgers.
+
+The resulting matrix also makes the concurrency story reviewable. Commands may
+change candidate state while a person considers the resolution page; the
+finalizer detects that stale snapshot and rediscovers it. Once finalization
+seals a namespace, reads remain possible but a mutation receives a retryable
+transition result. Registry and browser replays converge on one integration,
+while revocation alarms and partial copies converge on one archived result and
+one successor generation.
+
+**Assessment:** this step is valuable to a hobby contributor mainly because it
+removes uncertainty from the framework beneath their command. A casual author
+should not need to invent tests for OAuth continuations, CSRF, many-link
+topology, Durable Object races, or state migration sagas. The contributor still
+owns focused tests for their command's arguments, permissions, replies, and
+feature-specific migration. The framework suite now supplies credible evidence
+that the same declared namespace behaves safely before linking, during
+collision resolution, after default changes, and after unlinking.
+
+The exact coverage-to-test mapping is maintained in
+[`shareable-state-lifecycle-verification.md`](shareable-state-lifecycle-verification.md).
+The expanded focused matrix passed 4 files and 18 tests. The complete local
+suite passed 26 files and 291 tests. ESLint, API-boundary checks, workspace
+validation, generated-document freshness, JavaScript syntax, and the whitespace
+check passed. The non-deploying Worker dry run remains delegated to GitHub
+Actions.

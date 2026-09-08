@@ -64,9 +64,20 @@ function routeEnvironment(pending, recordedRequests) {
     async fetch(input, init) {
       const pathname = new URL(input).pathname;
       const body = init?.body ? JSON.parse(init.body) : null;
+      if (body?.reservationId !== "resume-token") {
+        return Response.json({
+          error: "Pending integration not found.",
+          code: "integration_pending_not_found"
+        }, { status: 404 });
+      }
       if (pathname === "/invitations/resume") {
         recordedRequests.resumes.push(body);
-        return Response.json({ pendingIntegration: pending, integration: null });
+        return Response.json({
+          pendingIntegration: pending,
+          integration: pending.status === "active"
+            ? { id: "active-integration-id", status: "active" }
+            : null
+        });
       }
       if (pathname === "/invitations/resolve-state") {
         recordedRequests.resolutions.push(body);
@@ -87,6 +98,7 @@ function routeEnvironment(pending, recordedRequests) {
       if (pathname === "/invitations/activate") {
         recordedRequests.activations ??= [];
         recordedRequests.activations.push(body);
+        pending.status = "active";
         return Response.json({
           integration: { id: "active-integration-id", status: "active" },
           alreadyLinked: false,
@@ -224,5 +236,94 @@ describe("Twitch integration state-resolution page", () => {
       invitationId: "invitation-id",
       reservationId: "resume-token"
     }]);
+  });
+
+  it("rejects missing, foreign, and stale continuations without saving choices", async () => {
+    const pending = pendingIntegration();
+    const recorded = { resumes: [], resolutions: [] };
+    const environment = routeEnvironment(pending, recorded);
+    const form = new URLSearchParams({
+      discovery_version: "3",
+      choice_0: "discord",
+      choice_1: "twitch"
+    });
+    const missing = await handleTwitchManagementRoute(
+      new Request("https://example.com/twitch/integrations/resolve-state", {
+        method: "POST",
+        headers: { origin: "https://example.com" },
+        body: form
+      }),
+      environment,
+      {}
+    );
+    expect(missing.status).toBe(404);
+
+    const foreign = await handleTwitchManagementRoute(
+      new Request("https://example.com/twitch/integrations/resolve-state", {
+        method: "POST",
+        headers: {
+          origin: "https://example.com",
+          cookie: "elmybot_integration_resume=foreign-token"
+        },
+        body: form
+      }),
+      environment,
+      {}
+    );
+    expect(foreign.status).toBe(404);
+
+    const stale = await handleTwitchManagementRoute(
+      integrationRequest("/twitch/integrations/resolve-state", {
+        method: "POST",
+        headers: { origin: "https://example.com" },
+        body: new URLSearchParams({
+          discovery_version: "2",
+          choice_0: "discord",
+          choice_1: "twitch"
+        })
+      }),
+      environment,
+      {}
+    );
+    expect(stale.status).toBe(422);
+    expect(await stale.text()).toContain("This page is out of date");
+    expect(recorded.resolutions).toHaveLength(0);
+  });
+
+  it("treats a repeated resolution submission and refresh as read-only replay", async () => {
+    const pending = pendingIntegration();
+    const recorded = { resumes: [], resolutions: [] };
+    const environment = routeEnvironment(pending, recorded);
+    const request = () => integrationRequest(
+      "/twitch/integrations/resolve-state",
+      {
+        method: "POST",
+        headers: { origin: "https://example.com" },
+        body: new URLSearchParams({
+          discovery_version: "3",
+          choice_0: "twitch",
+          choice_1: "reset"
+        })
+      }
+    );
+
+    const first = await handleTwitchManagementRoute(request(), environment, {});
+    const repeated = await handleTwitchManagementRoute(
+      request(),
+      environment,
+      {}
+    );
+    const refreshed = await handleTwitchManagementRoute(
+      integrationRequest("/twitch/integrations/pending"),
+      environment,
+      {}
+    );
+    expect(first.status).toBe(200);
+    expect(repeated.status).toBe(200);
+    expect(refreshed.status).toBe(200);
+    expect(await repeated.text()).toContain("Twitch and Discord are linked");
+    expect(await refreshed.text()).toContain("Twitch and Discord are linked");
+    expect(recorded.resolutions).toHaveLength(1);
+    expect(recorded.activations).toHaveLength(1);
   });
 });

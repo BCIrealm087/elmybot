@@ -120,5 +120,6 @@ The focused revocation suite covers:
 - relinking discovery from the current successor generation.
 
 The broader lifecycle, authorization, CSRF, concurrency, and many-link matrix
-remains Step 11. Migrating `fun.deaths` and adopting its existing ledgers
-remains Step 12.
+is documented in
+[`shareable-state-lifecycle-verification.md`](shareable-state-lifecycle-verification.md).
+Migrating `fun.deaths` and adopting its existing ledgers remains Step 12.

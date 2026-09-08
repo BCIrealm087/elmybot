@@ -15,7 +15,9 @@ and idempotent activation as distinct states. Generic collision discovery and
 automatic selection planning, the resolution UI, and concurrency-safe
 finalizer orchestration are also implemented. Revocation now freezes archived
 integration realms and provides lazy, independently writable standalone
-successors when no fallback link remains. Feature migration remains staged.
+successors when no fallback link remains. The complete generic lifecycle,
+security, concurrency, replay, and many-link verification matrix is also in
+place. Feature migration remains staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become

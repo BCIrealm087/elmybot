@@ -168,4 +168,53 @@ describe("Effective shareable-state resolution", () => {
       args: { amount: 1 }
     }).then((result) => result.toReply("score: 5"));
   });
+
+  it("keeps opposite directions on independently selected integration realms", async () => {
+    const discord = discordTestGroup({ id: "many-link-guild" });
+    const twitchOne = twitchTestGroup({ id: "many-link-channel-one" });
+    const twitchTwo = twitchTestGroup({ id: "many-link-channel-two" });
+    const firstDiscordLink = defaultTestLink({
+      sourceGroup: discord,
+      targetGroup: twitchOne,
+      integrationId: "many-link-integration-one"
+    });
+    const firstTwitchLink = defaultTestLink({
+      sourceGroup: twitchOne,
+      targetGroup: discord,
+      integrationId: "many-link-integration-one"
+    });
+    const secondDiscordLink = defaultTestLink({
+      sourceGroup: discord,
+      targetGroup: twitchTwo,
+      integrationId: "many-link-integration-two"
+    });
+    const runtime = createFeatureTestRuntime(scoreFeature, {
+      defaultLinks: [firstDiscordLink, firstTwitchLink]
+    });
+
+    await runtime.discord.command("shareable_score", {
+      group: discord,
+      args: { amount: 2 }
+    }).then((result) => result.toReply("score: 2"));
+    await runtime.twitch.command("shareable_score", {
+      group: twitchOne,
+      args: { amount: 3 }
+    }).then((result) => result.toReply("score: 5"));
+
+    runtime.links.set([secondDiscordLink, firstTwitchLink]);
+    await runtime.discord.command("shareable_score", {
+      group: discord,
+      args: { amount: 7 }
+    }).then((result) => result.toReply("score: 7"));
+    await runtime.twitch.command("shareable_score", {
+      group: twitchOne,
+      args: { amount: 1 }
+    }).then((result) => result.toReply("score: 6"));
+
+    runtime.links.set([firstDiscordLink, firstTwitchLink]);
+    await runtime.discord.command("shareable_score", {
+      group: discord,
+      args: { amount: 2 }
+    }).then((result) => result.toReply("score: 8"));
+  });
 });

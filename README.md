@@ -435,6 +435,7 @@ npm run feature:workspaces
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)
 - [Shareable-state revocation and standalone continuation](docs/shareable-state-revocation.md)
+- [Shareable-state lifecycle verification](docs/shareable-state-lifecycle-verification.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

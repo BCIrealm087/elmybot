@@ -446,6 +446,12 @@ describe("Pending integration shareable-state discovery", () => {
           .toEqual([{ key: "value", value: "twitch:collision" }]);
         expect(realms.targets.get("test.discovery\u0000both_empty").meaningful)
           .toBe(false);
+        expect(realms.targets.get("test.discovery\u0000discord_only").entries)
+          .toEqual([{ key: "value", value: "discord:discord_only" }]);
+        expect(realms.targets.get("test.discovery\u0000twitch_only").entries)
+          .toEqual([{ key: "value", value: "twitch:twitch_only" }]);
+        expect(realms.targets.get("test.discovery\u0000identical").entries)
+          .toEqual([{ key: "value", value: "discord:identical" }]);
         expect((await registry.activateInvitation({
           invitationId: invitation.invitationId,
           reservationId
@@ -456,6 +462,127 @@ describe("Pending integration shareable-state discovery", () => {
              AND event = 'integration.state_resolution.applied.v1'`,
           invitation.invitationId
         ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("resets a nonempty collision without changing either candidate", async () => {
+    const discord = discordGroup();
+    const twitch = twitchGroup();
+    await runInDurableObject(
+      integrationRegistryStub(env),
+      async (_registryInstance, registryState) => {
+        const realms = finalizingRealmBinding();
+        const registry = new IntegrationRegistry(registryState, {
+          ...env,
+          SHAREABLE_STATE_REALM: realms.binding
+        });
+        const invitation = await registry.createInvitation({
+          group: discord,
+          actor: { platform: "discord", id: uniqueId("manager"), claims: [] },
+          connectUrl: "https://example.com/twitch/integrations/connect"
+        });
+        const reservationId = crypto.randomUUID();
+        const reservation = await registry.reserveInvitation({
+          token: invitationToken(invitation),
+          reservationId,
+          reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
+        });
+        await registry.verifyInvitation({
+          invitationId: reservation.invitationId,
+          reservationId,
+          group: twitch,
+          actor: {
+            platform: "twitch",
+            id: twitch.id,
+            claims: ["twitch.broadcaster"]
+          }
+        });
+        await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "reset"
+          }]
+        });
+
+        await expect(registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        })).resolves.toMatchObject({
+          integration: { status: "active" }
+        });
+        expect(realms.targets.get("test.discovery\u0000collision"))
+          .toMatchObject({ meaningful: false, entries: [] });
+        expect(inventory("discord").namespaces.find(
+          (namespace) => namespace.namespaceId === "collision"
+        )).toMatchObject({ meaningful: true, fingerprint: fingerprint("4") });
+        expect(inventory("twitch").namespaces.find(
+          (namespace) => namespace.namespaceId === "collision"
+        )).toMatchObject({ meaningful: true, fingerprint: fingerprint("5") });
+      }
+    );
+  });
+
+  it("cancels after collision resolution without materializing shared state", async () => {
+    const discord = discordGroup();
+    const twitch = twitchGroup();
+    await runInDurableObject(
+      integrationRegistryStub(env),
+      async (_registryInstance, registryState) => {
+        const realms = finalizingRealmBinding();
+        const registry = new IntegrationRegistry(registryState, {
+          ...env,
+          SHAREABLE_STATE_REALM: realms.binding
+        });
+        const invitation = await registry.createInvitation({
+          group: discord,
+          actor: { platform: "discord", id: uniqueId("manager"), claims: [] },
+          connectUrl: "https://example.com/twitch/integrations/connect"
+        });
+        const reservationId = crypto.randomUUID();
+        const reservation = await registry.reserveInvitation({
+          token: invitationToken(invitation),
+          reservationId,
+          reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
+        });
+        await registry.verifyInvitation({
+          invitationId: reservation.invitationId,
+          reservationId,
+          group: twitch,
+          actor: {
+            platform: "twitch",
+            id: twitch.id,
+            claims: ["twitch.broadcaster"]
+          }
+        });
+        await registry.resolveInvitationState({
+          reservationId,
+          discoveryVersion: 1,
+          selections: [{
+            featureId: "test.discovery",
+            namespaceId: "collision",
+            selection: "discord"
+          }]
+        });
+
+        const cancelled = await registry.cancelInvitation({ reservationId });
+        expect(cancelled.pendingIntegration.status).toBe("cancelled");
+        expect(realms.targets.size).toBe(0);
+        expect(registry.listIntegrations(new URL(
+          `https://registry/integrations?groupKey=${encodeURIComponent(
+            `discord:guild:${discord.id}`
+          )}`
+        )).total).toBe(0);
+        await expect(registry.activateInvitation({
+          invitationId: invitation.invitationId,
+          reservationId
+        })).rejects.toMatchObject({
+          status: 409,
+          code: "integration_pending_not_ready"
+        });
       }
     );
   });

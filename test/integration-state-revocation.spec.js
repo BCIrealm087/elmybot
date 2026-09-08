@@ -440,6 +440,16 @@ describe("Integration shareable-state revocation", () => {
           integration: { id: fallbackId },
           targetGroup: { id: fallbackTwitch.id }
         });
+        await expect(registry.resolveEffectiveShareableState({
+          sourceGroup: discord,
+          targetPlatform: "twitch"
+        })).resolves.toMatchObject({
+          defaultLink: {
+            integration: { id: fallbackId },
+            targetGroup: { id: fallbackTwitch.id }
+          },
+          standaloneRealm: null
+        });
         expect(state.storage.sql.exec(
           `SELECT COUNT(*) AS total FROM shareable_state_standalone_successors
            WHERE group_key = ?`,
