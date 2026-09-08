@@ -17,6 +17,22 @@ two words:
 npm run feature:new -- fun-hype --workspace
 ```
 
+That default `minimal` recipe creates a small public Discord command. If you
+already know that you need a common combination, select one explicitly:
+
+| Recipe | Command | Generated starting point |
+| --- | --- | --- |
+| Minimal | `npm run feature:new -- fun-hype --workspace` | One public Discord command and its success test |
+| Shared command | `npm run feature:new -- fun-hype --workspace --template shared-command` | One action bound to Discord and Twitch, tested through both platforms |
+| Local counter | `npm run feature:new -- fun-score --workspace --template local-counter` | Independent per-group scores, public reads, moderator updates, and boundary tests |
+| Shareable counter | `npm run feature:new -- fun-score --workspace --template shareable-counter` | Standalone scores that share through selected links, public reads, moderator updates, and standalone/linked tests |
+
+Choose `local-counter` when each Discord server or Twitch channel owns its
+score. Choose `shareable-counter` when each group should work before linking
+but use one score through its selected cross-platform integration afterward.
+The shareable recipe declares a fresh namespace and deliberately contains no
+legacy-adoption settings.
+
 The recommended workspace scaffold creates only the files you normally edit:
 
 ```text
@@ -27,15 +43,17 @@ packages/features/fun-hype/
   test/feature.spec.js
 ```
 
-The generated feature is a small public Discord command with a passing-shaped
-test. Replace its `TODO` descriptions, response, and assertion with your own
-behavior.
+Every recipe produces readable JavaScript and meaningful deployment-free
+tests using the same public API as hand-written features. The generated files
+are yours to change: add native options, custom validation, schedules, events,
+routes, or other declared services when the feature genuinely needs them.
+Recipes are starting points, not runtime modes or restrictions.
 
 ## 2. Pick a pattern only if you need it
 
-If the generated Discord-only command is close to what you want, keep editing
-it and skip this table. If the command stores data or interacts with another
-platform, answer these three questions before choosing a pattern:
+If your selected recipe is close to what you want, keep editing it and skip
+this table. If the command needs a combination not covered by a recipe, answer
+these three questions before choosing a pattern:
 
 1. **Does each community own its own data?** Use group-local state.
 2. **Should the command work before linking and share one value through the

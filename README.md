@@ -420,6 +420,10 @@ npm run feature:new -- fun-hype --workspace
 npm run feature:workspaces
 ```
 
+The scaffold also offers optional `shared-command`, `local-counter`, and
+`shareable-counter` recipes. They generate ordinary editable JavaScript and
+focused tests; the minimal recipe remains the default.
+
 ## Detailed documentation
 
 - [First-feature quickstart](docs/feature-quickstart.md)

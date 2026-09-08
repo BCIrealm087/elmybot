@@ -24,6 +24,22 @@ From the repository root:
 npm run feature:new -- fun-hype --workspace
 ```
 
+The omitted template name means `minimal`. Three optional recipes cover common
+combinations without limiting later edits:
+
+```sh
+npm run feature:new -- fun-hype --workspace --template shared-command
+npm run feature:new -- fun-score --workspace --template local-counter
+npm run feature:new -- fun-score --workspace --template shareable-counter
+```
+
+`shared-command` binds one action to Discord and Twitch. Both counter recipes
+generate public `show` behavior plus moderator-only `plus`, `minus`, and
+`reset` operations. `local-counter` keeps a value per origin group;
+`shareable-counter` works in isolated standalone state and resolves through a
+directional default link when one exists. Its namespace is new and contains no
+legacy-adoption metadata. Each recipe includes focused behavioral tests.
+
 The name must contain at least two lowercase dash-separated words. The scaffold
 converts `fun-hype` to feature ID `fun.hype`, command `hype`, and action kind
 `fun.hype.run.v1`. It creates:
@@ -38,7 +54,9 @@ packages/features/fun-hype/
 
 The package imports production helpers from `@elmybot/framework` and test
 helpers from `@elmybot/framework/testing`. It starts private and remains part of
-this repository; publishing it is a separate future decision.
+this repository; publishing it is a separate future decision. A recipe does
+not add runtime discovery or constrain the resulting feature: after generation,
+the JavaScript files are ordinary contributor-owned code.
 
 The scaffold never overwrites an existing file and does not install the feature
 automatically. Add its exact version to the root `dependencies` without
@@ -91,7 +109,8 @@ npm run feature:new -- fun-hype
 It creates `src/features/fun-hype/feature.js` and
 `test/features/fun-hype.spec.js`. Import that feature by relative path in the
 same explicit installed catalog. The contributor APIs and behavioral contracts
-are otherwise identical.
+are otherwise identical. The same `--template` choices work for this local
+form.
 
 ## Choose the smallest useful feature shape
 
