@@ -557,8 +557,8 @@ the origin group's selected cross-platform relationship through the integration
 registry. Config and state are scoped through `GroupConfig`; integration state
 is scoped through the per-integration coordinator. Shareable state resolves to
 the dedicated realm Durable Object but is unused by installed features while
-revocation continuation and feature migration remain staged. Its snapshot,
-fingerprint, comparison, sealing, cloning, and finalization operations are
+feature migration remains staged. Its snapshot, fingerprint, comparison,
+sealing, cloning, finalization, permanent archive, and successor operations are
 protected infrastructure capabilities and never appear in an action context.
 Declarative cooldowns use the per-group boundary and are enforced before action
 code.

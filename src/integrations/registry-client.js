@@ -99,6 +99,10 @@ export async function getIntegrationDefaultLink(env, input) {
   return postRegistry(env, "/default-links/get", input);
 }
 
+export async function resolveEffectiveShareableStateRealm(env, input) {
+  return postRegistry(env, "/shareable-state/resolve", input);
+}
+
 export async function setIntegrationDefaultLink(env, input) {
   return postRegistry(env, "/default-links/set", input);
 }

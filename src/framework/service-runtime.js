@@ -5,7 +5,8 @@ import {
 import { integrationCoordinatorStub } from "../integrations/coordinator-client.js";
 import {
   getIntegrationById,
-  getIntegrationDefaultLink
+  getIntegrationDefaultLink,
+  resolveEffectiveShareableStateRealm
 } from "../integrations/registry-client.js";
 import {
   createIntegrationRef,
@@ -15,6 +16,7 @@ import {
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
   requestShareableStateRealm,
+  shareableStateRealmObjectName,
   ShareableStateRealmError
 } from "../shareable-state/index.js";
 
@@ -165,15 +167,35 @@ async function resolveShareableState(
   targetPlatform,
   namespaceId
 ) {
-  const result = await getIntegrationDefaultLink(env, {
+  const result = await resolveEffectiveShareableStateRealm(env, {
     sourceGroup: invocation.origin.group,
-    targetPlatform
+    targetPlatform,
+    correlationId: invocation.correlationId
   });
   if (result.defaultLink === null) {
+    let realm;
+    try {
+      realm = createStandaloneRealmIdentity(
+        result.standaloneRealm?.ownerGroup,
+        { generation: result.standaloneRealm?.generation }
+      );
+    } catch (cause) {
+      throw new FeatureServiceRuntimeError(
+        "Shareable-state resolution returned an invalid standalone owner.",
+        { code: "shareable_state_resolution_invalid", status: 502, cause }
+      );
+    }
+    if (realm.ownerGroup.key !== invocation.origin.group.key) {
+      throw new FeatureServiceRuntimeError(
+        "Shareable-state resolution returned an invalid standalone owner.",
+        { code: "shareable_state_resolution_invalid", status: 502 }
+      );
+    }
     return Object.freeze({
       featureId,
       namespaceId,
-      realm: createStandaloneRealmIdentity(invocation.origin.group)
+      targetPlatform,
+      realm
     });
   }
   const link = normalizedDefaultLink(
@@ -184,6 +206,7 @@ async function resolveShareableState(
   return Object.freeze({
     featureId,
     namespaceId,
+    targetPlatform,
     realm: createIntegrationRealmIdentity(link.integration, {
       generation: link.integration.shareableStateGeneration ?? 1
     }),
@@ -192,7 +215,32 @@ async function resolveShareableState(
 }
 
 async function requireWritableShareableStateScope(env, invocation, scope) {
-  if (scope.realm.kind !== "integration") return;
+  if (scope.realm.kind === "standalone") {
+    let current;
+    try {
+      current = await resolveEffectiveShareableStateRealm(env, {
+        sourceGroup: invocation.origin.group,
+        targetPlatform: scope.targetPlatform,
+        correlationId: invocation.correlationId
+      });
+    } catch (cause) {
+      throw new FeatureServiceRuntimeError(
+        "The selected standalone shareable state is transitioning.",
+        { code: "shareable_state_transition", status: 409, cause }
+      );
+    }
+    if (
+      current.defaultLink !== null ||
+      shareableStateRealmObjectName(current.standaloneRealm) !==
+        shareableStateRealmObjectName(scope.realm)
+    ) {
+      throw new FeatureServiceRuntimeError(
+        "The selected standalone shareable state is no longer current.",
+        { code: "shareable_state_transition", status: 409 }
+      );
+    }
+    return;
+  }
   let result;
   try {
     result = await getIntegrationById(env, scope.link.integration.id);
@@ -207,6 +255,7 @@ async function requireWritableShareableStateScope(env, invocation, scope) {
   );
   if (
     result?.integration?.status !== "active" ||
+    result.integration.shareableStateGeneration !== scope.realm.generation ||
     !memberKeys.has(invocation.origin.group.key) ||
     !memberKeys.has(scope.link.targetGroup.key)
   ) {

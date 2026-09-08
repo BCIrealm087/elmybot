@@ -1286,15 +1286,23 @@ describe("Cross-platform integration linking", () => {
       channel: twitchGroup()
     });
 
-    const [revoked, completed] = await Promise.all([
+    const [revoked, concurrentCompletion] = await Promise.all([
       revokeIntegration(integrationEnv, {
         integrationId: original.completion.integration.id,
         group,
         actor,
         reason: "test_concurrent_replacement"
       }),
-      completePreparedIntegration(replacement)
+      completePreparedIntegration(replacement).catch((error) => error)
     ]);
+    let completed = concurrentCompletion;
+    if (concurrentCompletion instanceof Error) {
+      expect(concurrentCompletion).toMatchObject({
+        status: 409,
+        code: "shareable_state_transition"
+      });
+      completed = await completePreparedIntegration(replacement);
+    }
 
     expect(revoked.revoked).toBe(true);
     expect((await getIntegrationDefaultLink(integrationEnv, {

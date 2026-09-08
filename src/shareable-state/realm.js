@@ -22,6 +22,7 @@ const REALM_OPERATIONS = new Set([
   "bounded-counter",
   "snapshot",
   "seal-snapshot",
+  "freeze-snapshot",
   "release-seal",
   "clone-snapshot",
   "initialize-empty",
@@ -30,7 +31,7 @@ const REALM_OPERATIONS = new Set([
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
   "/internal/shareable-state/realm/";
-export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 2;
+export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 3;
 export const SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION = 1;
 
 export class ShareableStateRealmError extends Error {
@@ -228,6 +229,8 @@ export function initializeShareableStateRealmTables(state) {
       mutation_version INTEGER NOT NULL DEFAULT 0 CHECK (mutation_version >= 0),
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL,
+      freeze_id TEXT,
+      frozen_at_ms INTEGER,
       PRIMARY KEY (feature_id, namespace_id)
     );
 
@@ -261,6 +264,21 @@ export function initializeShareableStateRealmTables(state) {
       created_at_ms INTEGER NOT NULL
     );
   `);
+  const namespaceColumns = new Set(
+    state.storage.sql.exec("PRAGMA table_info(shareable_state_realm_namespaces)")
+      .toArray()
+      .map((column) => column.name)
+  );
+  if (!namespaceColumns.has("freeze_id")) {
+    state.storage.sql.exec(
+      "ALTER TABLE shareable_state_realm_namespaces ADD COLUMN freeze_id TEXT"
+    );
+  }
+  if (!namespaceColumns.has("frozen_at_ms")) {
+    state.storage.sql.exec(
+      "ALTER TABLE shareable_state_realm_namespaces ADD COLUMN frozen_at_ms INTEGER"
+    );
+  }
 }
 
 function normalizeRealmIdentity(value) {
@@ -361,7 +379,7 @@ function namespaceDeclaration(registry, input) {
 
 function ensureNamespace(state, namespace) {
   const existing = state.storage.sql.exec(
-    `SELECT schema_version, mutation_version
+    `SELECT schema_version, mutation_version, freeze_id
      FROM shareable_state_realm_namespaces
      WHERE feature_id = ? AND namespace_id = ?`,
     namespace.featureId,
@@ -383,6 +401,12 @@ function ensureNamespace(state, namespace) {
     return;
   }
   if (existing.schema_version === namespace.declaration.schemaVersion) return;
+  if (existing.freeze_id) {
+    fail("The archived shareable-state namespace cannot be upgraded in place.", {
+      status: 409,
+      code: "shareable_state_realm_frozen"
+    });
+  }
   if (!namespace.declaration.compatibleVersions.includes(existing.schema_version)) {
     fail("The stored shareable-state schema is not compatible with this feature.", {
       status: 409,
@@ -503,12 +527,60 @@ function activeNamespaceSeal(sql, namespace, nowMs = Date.now()) {
 }
 
 function requireNamespaceWritable(sql, namespace) {
+  const frozen = sql.exec(
+    `SELECT freeze_id FROM shareable_state_realm_namespaces
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0];
+  if (frozen?.freeze_id) {
+    fail("Shareable state is permanently frozen after integration revocation.", {
+      status: 409,
+      code: "shareable_state_realm_frozen"
+    });
+  }
   if (activeNamespaceSeal(sql, namespace)) {
     fail("Shareable state is temporarily sealed for an integration transition.", {
       status: 409,
       code: "shareable_state_transition_sealed"
     });
   }
+}
+
+async function freezeNamespaceSnapshot(state, namespace, input) {
+  const freezeId = requireTransitionToken(
+    input?.freezeId,
+    "The permanent freeze ID"
+  );
+  state.storage.transactionSync(() => {
+    const existing = state.storage.sql.exec(
+      `SELECT freeze_id FROM shareable_state_realm_namespaces
+       WHERE feature_id = ? AND namespace_id = ?`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).one();
+    if (existing.freeze_id && existing.freeze_id !== freezeId) {
+      fail("Shareable state was already frozen by another transition.", {
+        status: 409,
+        code: "shareable_state_realm_frozen"
+      });
+    }
+    if (!existing.freeze_id) {
+      state.storage.sql.exec(
+        `UPDATE shareable_state_realm_namespaces
+         SET freeze_id = ?, frozen_at_ms = ?
+         WHERE feature_id = ? AND namespace_id = ?`,
+        freezeId,
+        Date.now(),
+        namespace.featureId,
+        namespace.namespaceId
+      );
+    }
+  });
+  return {
+    freezeId,
+    snapshot: await snapshotNamespace(state, namespace)
+  };
 }
 
 async function sealNamespaceSnapshot(state, namespace, input) {
@@ -1105,6 +1177,8 @@ async function runOperation(state, namespace, operation, input) {
       return await snapshotNamespace(state, namespace);
     case "seal-snapshot":
       return await sealNamespaceSnapshot(state, namespace, input);
+    case "freeze-snapshot":
+      return await freezeNamespaceSnapshot(state, namespace, input);
     case "release-seal":
       return releaseNamespaceSeal(state, namespace, input);
     case "clone-snapshot":

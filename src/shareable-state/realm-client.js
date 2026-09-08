@@ -337,6 +337,33 @@ export async function sealShareableStateNamespace(env, {
   });
 }
 
+export async function freezeShareableStateNamespace(env, {
+  realm,
+  featureId,
+  namespaceId,
+  freezeId,
+  correlationId
+}) {
+  const result = await requestShareableStateRealm(env, {
+    realm,
+    featureId,
+    namespaceId,
+    operation: "freeze-snapshot",
+    storage: { freezeId },
+    correlationId
+  });
+  if (result?.freezeId !== freezeId) {
+    throw new ShareableStateRealmError(
+      "The shareable-state permanent freeze response is invalid.",
+      { status: 502, code: "shareable_state_realm_freeze_invalid" }
+    );
+  }
+  return Object.freeze({
+    freezeId,
+    snapshot: normalizeSnapshot(result.snapshot)
+  });
+}
+
 export async function releaseShareableStateNamespaceSeal(env, {
   realm,
   featureId,

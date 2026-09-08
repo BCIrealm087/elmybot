@@ -211,6 +211,42 @@ export function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
       ON integration_group_revocations(requested_at_ms, group_key);
+
+    CREATE TABLE IF NOT EXISTS integration_revocation_jobs (
+      integration_id TEXT PRIMARY KEY,
+      actor_platform TEXT,
+      actor_id TEXT,
+      group_key TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      requested_at_ms INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_revocation_jobs_requested
+      ON integration_revocation_jobs(requested_at_ms, integration_id);
+
+    CREATE TABLE IF NOT EXISTS integration_revocation_namespaces (
+      integration_id TEXT NOT NULL,
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      mutation_version INTEGER NOT NULL,
+      fingerprint TEXT NOT NULL,
+      meaningful INTEGER NOT NULL,
+      PRIMARY KEY (integration_id, feature_id, namespace_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shareable_state_standalone_successors (
+      group_key TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      source_integration_id TEXT NOT NULL,
+      source_generation INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      ready_at_ms INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS shareable_state_successors_pending
+      ON shareable_state_standalone_successors(status, created_at_ms, group_key);
   `);
 
   // `pending` was the pre-lifecycle name for an invitation that had not yet

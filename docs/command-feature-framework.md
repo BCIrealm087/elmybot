@@ -527,7 +527,13 @@ when groups link. Each step is intended to land and pass CI independently:
    fresh integration realm with per-namespace idempotency keys. Only a complete
    realm can cross the registry's activation barrier, and replay returns the
    existing integration without duplicate defaults or audit events.
-10. **Implement revocation and standalone continuation.**
+10. **Implement revocation and standalone continuation — completed.** Active
+    integrations enter a resumable `revoking` transition, permanently freeze
+    their declared namespaces, repair defaults, and record metadata-only
+    recovery manifests. Directions without a fallback lazily materialize an
+    independent standalone successor from the final shared snapshot; partial
+    copies and retries cannot expose stale or incomplete state. See
+    [shareable-state revocation](shareable-state-revocation.md).
 11. **Add lifecycle, security, concurrency, and many-link tests.**
 12. **Migrate `fun.deaths` to shareable state.**
 

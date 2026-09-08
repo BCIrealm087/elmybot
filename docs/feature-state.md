@@ -7,11 +7,11 @@ or SQL handle. The runtime derives the feature namespace and allows an
 integration scope only through a default-link snapshot resolved by the current
 action invocation.
 
-The `shareableState` service now resolves declared namespaces to standalone or
-default-integration realms. Protected snapshot and cloning primitives exist,
-but pending-link discovery and reconciliation remain staged; `integrationState`
-continues to support existing features until they can migrate without losing
-legacy data. See the
+The `shareableState` service resolves declared namespaces to standalone or
+default-integration realms. Protected discovery, reconciliation, finalization,
+and post-revocation successor infrastructure is implemented;
+`integrationState` continues to support existing features until their explicit
+migration can adopt legacy data. See the
 [`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md).
 
 ## Choose the state boundary first
@@ -60,7 +60,9 @@ Resolved shareable state has these currently implemented rules:
    copying state; an already pinned active integration scope is not redirected.
 4. Revocation or transition blocks a pinned integration scope rather than
    falling back to standalone state.
-5. Feature code supplies only the other platform and its own declared namespace.
+5. After revocation, a direction without an active fallback resolves a fresh
+   standalone generation copied from the frozen final integration state.
+6. Feature code supplies only the other platform and its own declared namespace.
    It never receives a realm, integration ID, generation, or storage handle.
 
 The legacy `integrationState` compatibility service has these rules:

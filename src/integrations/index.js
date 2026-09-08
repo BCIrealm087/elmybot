@@ -30,6 +30,7 @@ export {
   listIntegrationsForGroup,
   listIntegrationAudit,
   reserveIntegrationInvitation,
+  resolveEffectiveShareableStateRealm,
   resolvePendingIntegrationState,
   resumePendingIntegration,
   revokeIntegration,

@@ -232,7 +232,8 @@ the management, audit, and recovery model.
   or use Twitch-native Elmybot behavior.
 - Revoking a selected relationship moves each affected directional default to
   the oldest remaining active link. If none remains, that direction has no
-  default until it is linked again.
+  default and its next shareable-state access lazily creates an independent
+  standalone successor from the revoked relationship's frozen final state.
 - Disconnecting or invalidating the Twitch broadcaster authorization revokes all
   active integrations containing that Twitch channel. If registry revocation is
   temporarily unavailable, the channel authorization records pending
@@ -256,7 +257,8 @@ instead of applying stale intent. It materializes a generation-bound fresh
 integration realm before the registry transaction makes routes, members, and
 directional defaults visible. Retrying the operation resumes that same result;
 feature and route code cannot bypass the activation barrier. Revocation-time
-standalone successors and the first feature migration remain staged.
+standalone successors preserve the final shared state independently for every
+direction without a fallback. The first feature migration remains staged.
 
 ## Deployment notes
 

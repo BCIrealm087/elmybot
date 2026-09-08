@@ -13,8 +13,9 @@ checks, comparisons, and fresh-realm cloning are also implemented. Linking
 now persists Twitch verification, awaiting-resolution, cancellation, expiry,
 and idempotent activation as distinct states. Generic collision discovery and
 automatic selection planning, the resolution UI, and concurrency-safe
-finalizer orchestration are also implemented. Revocation successors and
-feature migration remain staged.
+finalizer orchestration are also implemented. Revocation now freezes archived
+integration realms and provides lazy, independently writable standalone
+successors when no fallback link remains. Feature migration remains staged.
 
 This contract lets a feature keep working independently in a Discord guild or
 Twitch channel and then share one authoritative state when those groups become
@@ -114,11 +115,11 @@ There is no feature-level fallback from a failed integration operation to a
 standalone realm. Realm selection happens once before state access so one
 logical command cannot partially mutate two owners.
 
-This resolution API, pending-link activation barrier, collision discovery, and
-finalization are implemented. Until revocation successors and feature migration
-land, maintainers must not migrate an existing production feature whose
-standalone or legacy integration data would need reconciliation. No installed
-feature uses the new service yet.
+This resolution API, pending-link activation barrier, collision discovery,
+finalization, and revocation continuation are implemented. Until the explicit
+feature-migration stage lands, maintainers must not migrate an existing
+production feature whose standalone or legacy integration data needs adoption.
+No installed feature uses the new service yet.
 
 ## Link lifecycle
 
@@ -301,11 +302,13 @@ For the final case, revocation uses another idempotent transition:
    complete.
 6. Mark the integration revoked and retain its frozen realm and history.
 
-Successor creation may be lazy if the group has no immediate command traffic,
-but the pointer and source snapshot must be durably recorded during revocation.
-The first standalone access may finish the idempotent copy. It must never expose
-the group's older pre-link standalone realm as though it contained the final
-shared state.
+Successor creation is lazy if the group has no immediate command traffic. The
+registry durably records the pending generation, frozen source identity, and
+metadata-only snapshot manifest during revocation. The first standalone access
+finishes and verifies the idempotent copy before publishing that generation. It
+never exposes the group's older pre-link standalone realm as though it
+contained the final shared state. The concrete protocol is documented in
+[`shareable-state-revocation.md`](shareable-state-revocation.md).
 
 When both former members become unlinked, both successor realms begin from the
 same final shared snapshot and then diverge independently. Neither platform

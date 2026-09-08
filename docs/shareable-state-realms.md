@@ -19,9 +19,10 @@ namespace request and rejects later requests carrying another owner or
 generation. Discord and Twitch groups with similar raw IDs therefore remain
 distinct, as do different groups on the same platform.
 
-The internal client defaults to generation 1. Later revocation infrastructure
-may select and publish a successor generation, but feature code will never
-choose generations or receive realm identifiers.
+The internal client defaults to generation 1. Revocation infrastructure may
+select and publish a later standalone generation after copying the final
+integration snapshot, but feature code never chooses generations or receives
+realm identifiers.
 
 ## Namespace persistence
 
@@ -101,6 +102,8 @@ The internal client surface is intentionally namespace-specific:
   while ignoring history-only mutation-version differences;
 - `sealShareableStateNamespace(...)` captures a snapshot and temporarily blocks
   writes to that namespace while allowing reads;
+- `freezeShareableStateNamespace(...)` permanently blocks writes while keeping
+  the final snapshot readable for post-revocation recovery;
 - `releaseShareableStateNamespaceSeal(...)` releases only the matching seal;
 - `cloneShareableStateSnapshot(...)` verifies and idempotently initializes one
   fresh target namespace; and
@@ -111,7 +114,7 @@ Cloning accepts only the currently installed schema version. Discovery must
 therefore snapshot each candidate through the current realm code first, which
 performs only declared identity-compatible upgrades before comparison.
 
-## Transition behavior and remaining deferrals
+## Transition and archive behavior
 
 Step 9 uses bounded namespace seals so a mutation is either included before the
 sealed snapshot or receives a retryable transition error. Expired seals are
@@ -120,14 +123,17 @@ transaction. Fresh integration realms use the discovery revision as their
 generation, so partial output from a rejected revision can never become the
 active realm for a later revision.
 
-The remaining stages still do not:
+Step 10 permanently freezes every declared namespace in a revoked integration
+realm. A deterministic freeze ID makes retry safe; the same transition can
+retrieve the final snapshot again, while a different transition cannot claim
+the archive. Reads and snapshots remain available, but mutations and in-place
+schema upgrades fail closed.
 
-- create standalone successor realms from revoked integration state; or
-- migrate `fun.deaths` from its current integration-owned ledger.
-
-Resolution continues to pin generation 1 of the origin group's standalone realm
-or the active default integration's realm. The pending-integration lifecycle is
-implemented; pending relationships are not eligible effective realms.
+When a revoked default has no fallback, resolution materializes the recorded
+standalone successor generation before returning it. A partial copy remains
+unreachable and replay resumes with per-namespace idempotency keys. See
+[`shareable-state-revocation.md`](shareable-state-revocation.md). Migrating
+`fun.deaths` from its current integration-owned ledger remains deferred.
 
 The protected inventory operation now supplies generic pending-link discovery
 with declared namespace identity, versions, fingerprints, and safe summaries.

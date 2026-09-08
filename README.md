@@ -173,6 +173,10 @@ returns to discovery if state changed. Its copy/reset operations and activation
 transaction are replay-safe, so interrupted retries do not create duplicates.
 See
 [`docs/shareable-state-finalization.md`](docs/shareable-state-finalization.md).
+Revoking the last selected link freezes its final shared realm and gives each
+affected group a lazy, independent standalone successor; an eligible active
+fallback continues on its own existing realm instead. See
+[`docs/shareable-state-revocation.md`](docs/shareable-state-revocation.md).
 The integration has three enabled routes:
 
 | Route | Outcome |
@@ -430,6 +434,7 @@ npm run feature:workspaces
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)
+- [Shareable-state revocation and standalone continuation](docs/shareable-state-revocation.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

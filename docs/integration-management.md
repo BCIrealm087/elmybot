@@ -68,7 +68,7 @@ user action and does not synthesize historical audit entries.
 | Manager selects another eligible link | Replace atomically | `integration.default.updated.v1` |
 | Manager selects the current link | No-op; preserve timestamps | None |
 | Selected link is revoked and another is eligible | Promote the oldest eligible link | `integration.default.fallback.v1` |
-| Selected last link is revoked | Remove the unavailable direction | `integration.default.unavailable.v1` |
+| Selected last link is revoked | Remove the direction and record a standalone successor | `integration.default.unavailable.v1`, `integration.state_successor.recorded.v1` |
 | A link is created after unavailability | Assign it as the new first link | `integration.default.assigned.v1` |
 
 The lifecycle applies to single-link revocation and bounded group-wide
@@ -101,9 +101,32 @@ assuming their request won. The losing activation cannot overwrite the winner
 or create a duplicate assignment audit for that direction.
 
 If revocation races activation of a replacement, the operations may serialize
-in either order. The stable postcondition is one active replacement default and
-no stored edge referencing the revoked integration. These are invariant
-guarantees, not a promise about JavaScript promise completion order.
+in either order. Finalization may receive the retryable
+`shareable_state_transition` result and resume after revocation. The stable
+postcondition is one active replacement default and no stored edge referencing
+the revoked integration. These are invariant guarantees, not a promise about
+JavaScript promise completion order.
+
+### Revocation state continuation
+
+Revocation first changes an active integration to `revoking` and permanently
+freezes its declared shareable namespaces. Commands, routes, and new default
+selection cannot use that integration during the transition. A durable job
+lets the registry alarm or a repeated unlink request resume after a realm
+failure without duplicating the terminal audit event.
+
+Fallback promotion uses the fallback integration's existing state. When a
+direction has no fallback, the registry instead records a new standalone
+generation sourced from the frozen final snapshot. Its first access performs
+and verifies the namespace copies idempotently before making that generation
+effective. Until then, callers receive a retryable transition or recovery
+error; they never see a partial successor or the group's older pre-link state.
+
+If both sides become unlinked, each receives its own successor and can diverge
+afterward. Relinking discovers those current standalone generations. The
+archived integration realm, member ledger, metadata-only manifest, and audit
+history remain retained. See
+[`shareable-state-revocation.md`](shareable-state-revocation.md).
 
 ## Default-link management surface
 
@@ -113,7 +136,7 @@ Discord currently exposes the following operations:
 | --- | --- | --- |
 | `/integration_list` | Lists this guild's active integrations and marks its default Twitch link | None |
 | `/integration_default_set integration_id:<id>` | Selects that active member integration as this guild's Twitch default | One directional update or no-op |
-| `/integration_unlink integration_id:<id>` | Revokes one relationship and repairs every direction that selected it | Integration revocation plus fallback/unavailability |
+| `/integration_unlink integration_id:<id>` | Revokes one relationship, repairs selected directions, and preserves final shareable state | Integration revocation plus fallback or standalone successor |
 
 All three require `integration.manage`. The Discord adapter enforces the local
 server owner/Administrator/Manage Server policy. Ordinary moderators and

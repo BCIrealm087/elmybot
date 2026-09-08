@@ -4,7 +4,9 @@ import {
   cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  freezeShareableStateNamespace,
   initializeEmptyShareableStateNamespace,
+  inventoryShareableStateNamespaces,
   releaseShareableStateNamespaceSeal,
   sealShareableStateNamespace,
   shareableStateRealmObjectName,
@@ -50,6 +52,7 @@ export {
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
   resolvePendingIntegrationState,
+  resolveEffectiveShareableStateRealm,
   resumePendingIntegration,
   resolveIntegrationRoutes,
   revokeIntegration,
@@ -72,6 +75,7 @@ const MAX_ROUTE_FANOUT = 25;
 const MAX_PENDING_STATE_SELECTIONS = 500;
 const PENDING_STATE_SELECTIONS = new Set(["discord", "twitch", "reset"]);
 const FINALIZATION_SEAL_LEASE_MS = 60 * 1000;
+const REGISTRY_REVOCATION_RETRY_MS = 5 * 1000;
 
 function noStoreJson(value, status = 200) {
   const response = jsonResponse(value, status);
@@ -123,6 +127,8 @@ export class IntegrationRegistry {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.integrationRevocations = new Map();
+    this.groupRevocations = new Map();
     initializeRegistryTables(state);
   }
 
@@ -143,10 +149,15 @@ export class IntegrationRegistry {
          ((SELECT MIN(expires_at_ms)
            FROM integration_pending_links
            WHERE status IN ('twitch_verified', 'awaiting_state_resolution'))),
-         ((SELECT MIN(requested_at_ms) FROM integration_group_revocations))
+         ((SELECT MIN(requested_at_ms) + ?
+           FROM integration_group_revocations)),
+         ((SELECT MIN(requested_at_ms) + ?
+           FROM integration_revocation_jobs))
        )
        SELECT MIN(next_at_ms) AS next_at_ms FROM next_maintenance`,
-      INTEGRATION_INVITATION_RETENTION_MS
+      INTEGRATION_INVITATION_RETENTION_MS,
+      REGISTRY_REVOCATION_RETRY_MS,
+      REGISTRY_REVOCATION_RETRY_MS
     ).one().next_at_ms;
     if (nextMaintenance === null) await this.state.storage.deleteAlarm();
     else await this.state.storage.setAlarm(Math.max(Date.now(), nextMaintenance));
@@ -557,6 +568,7 @@ export class IntegrationRegistry {
     ).toArray();
     let reassigned = 0;
     let unavailable = 0;
+    const unavailableEdges = [];
 
     for (const edge of affected) {
       const fallback = this.state.storage.sql.exec(
@@ -614,9 +626,13 @@ export class IntegrationRegistry {
         groupKey: edge.source_group_key,
         occurredAtMs: nowMs
       });
+      unavailableEdges.push({
+        sourceGroupKey: edge.source_group_key,
+        targetPlatform: edge.target_platform
+      });
       unavailable += 1;
     }
-    return { reassigned, unavailable };
+    return { reassigned, unavailable, unavailableEdges };
   }
 
   managementStatus(input) {
@@ -910,7 +926,210 @@ export class IntegrationRegistry {
           { id: selected.integration_id },
           { generation: selected.shareable_state_generation ?? 1 }
         )
-      : createStandaloneRealmIdentity(group);
+      : this.currentStandaloneRealm(group);
+  }
+
+  currentStandaloneRealm(groupInput) {
+    const group = validatedGroup(groupInput);
+    const successor = this.state.storage.sql.exec(
+      `SELECT generation
+       FROM shareable_state_standalone_successors
+       WHERE group_key = ?`,
+      group.key
+    ).toArray()[0];
+    return createStandaloneRealmIdentity(group, {
+      generation: successor?.generation ?? 1
+    });
+  }
+
+  defaultLinkTransition(sourceGroup, targetPlatform) {
+    return this.state.storage.sql.exec(
+      `SELECT integration.status
+       FROM integration_default_links default_link
+       JOIN integrations integration
+         ON integration.integration_id = default_link.integration_id
+       WHERE default_link.source_group_key = ?
+         AND default_link.target_platform = ?`,
+      sourceGroup.key,
+      targetPlatform
+    ).toArray()[0]?.status ?? null;
+  }
+
+  async ensureStandaloneSuccessor(groupInput, correlationId) {
+    const group = validatedGroup(groupInput);
+    const successor = this.state.storage.sql.exec(
+      `SELECT group_key, generation, status, source_integration_id,
+              source_generation
+       FROM shareable_state_standalone_successors
+       WHERE group_key = ?`,
+      group.key
+    ).toArray()[0];
+    if (!successor) return createStandaloneRealmIdentity(group);
+    const targetRealm = createStandaloneRealmIdentity(group, {
+      generation: successor.generation
+    });
+    if (successor.status === "ready") return targetRealm;
+    if (successor.status !== "pending") {
+      throw new IntegrationRegistryError(
+        "The standalone shareable-state successor is invalid.",
+        { status: 503, code: "integration_state_successor_invalid" }
+      );
+    }
+    const sourceRealm = createIntegrationRealmIdentity(
+      { id: successor.source_integration_id },
+      { generation: successor.source_generation }
+    );
+    const namespaces = this.state.storage.sql.exec(
+      `SELECT feature_id, namespace_id, schema_version, mutation_version,
+              fingerprint, meaningful
+       FROM integration_revocation_namespaces
+       WHERE integration_id = ?
+       ORDER BY feature_id, namespace_id`,
+      successor.source_integration_id
+    ).toArray();
+    try {
+      for (const namespace of namespaces) {
+        const snapshot = await snapshotShareableStateNamespace(this.env, {
+          realm: sourceRealm,
+          featureId: namespace.feature_id,
+          namespaceId: namespace.namespace_id,
+          correlationId
+        });
+        if (
+          snapshot.namespace.schemaVersion !== namespace.schema_version ||
+          snapshot.mutationVersion !== namespace.mutation_version ||
+          snapshot.fingerprint !== namespace.fingerprint ||
+          snapshot.meaningful !== Boolean(namespace.meaningful)
+        ) {
+          throw new IntegrationRegistryError(
+            "The archived integration state no longer matches its revocation ledger.",
+            { status: 503, code: "integration_state_successor_source_invalid" }
+          );
+        }
+        await cloneShareableStateSnapshot(this.env, {
+          realm: targetRealm,
+          snapshot,
+          idempotencyKey:
+            `successor:${successor.source_integration_id}:` +
+            `g${successor.generation}:${namespace.feature_id}:` +
+            namespace.namespace_id,
+          correlationId
+        });
+        const cloned = await snapshotShareableStateNamespace(this.env, {
+          realm: targetRealm,
+          featureId: namespace.feature_id,
+          namespaceId: namespace.namespace_id,
+          correlationId
+        });
+        if (
+          cloned.mutationVersion !== 1 ||
+          !shareableStateSnapshotsEqual(snapshot, cloned)
+        ) {
+          throw new IntegrationRegistryError(
+            "The standalone shareable-state successor could not be verified.",
+            { status: 503, code: "integration_state_successor_invalid" }
+          );
+        }
+      }
+    } catch (cause) {
+      if (cause instanceof IntegrationRegistryError) throw cause;
+      if (cause instanceof ShareableStateRealmError) {
+        throw new IntegrationRegistryError(
+          "The standalone shareable-state successor is temporarily unavailable.",
+          {
+            status: 503,
+            code: "integration_state_successor_unavailable",
+            cause
+          }
+        );
+      }
+      throw cause;
+    }
+    const readyAtMs = Date.now();
+    this.state.storage.transactionSync(() => {
+      const current = this.state.storage.sql.exec(
+        `SELECT generation, status, source_integration_id
+         FROM shareable_state_standalone_successors
+         WHERE group_key = ?`,
+        group.key
+      ).toArray()[0];
+      if (
+        !current ||
+        current.generation !== successor.generation ||
+        current.source_integration_id !== successor.source_integration_id
+      ) {
+        throw new IntegrationRegistryError(
+          "The standalone shareable-state successor changed during recovery.",
+          { status: 409, code: "integration_state_successor_stale" }
+        );
+      }
+      if (current.status === "ready") return;
+      this.state.storage.sql.exec(
+        `UPDATE shareable_state_standalone_successors
+         SET status = 'ready', ready_at_ms = ?
+         WHERE group_key = ? AND generation = ? AND status = 'pending'`,
+        readyAtMs,
+        group.key,
+        successor.generation
+      );
+      audit(this.state.storage.sql, {
+        integrationId: successor.source_integration_id,
+        event: "integration.state_successor.ready.v1",
+        groupKey: group.key,
+        occurredAtMs: readyAtMs
+      });
+    });
+    return targetRealm;
+  }
+
+  async resolveEffectiveShareableState(input) {
+    const sourceGroup = validatedGroup(input?.sourceGroup);
+    const targetPlatform = validatedPlatform(
+      input?.targetPlatform,
+      "Shareable-state target platform"
+    );
+    if (sourceGroup.platform === targetPlatform) {
+      throw new IntegrationRegistryError(
+        "Shareable state must target another platform.",
+        { status: 422, code: "integration_default_platform_invalid" }
+      );
+    }
+    const transition = this.defaultLinkTransition(sourceGroup, targetPlatform);
+    if (transition && transition !== "active") {
+      throw new IntegrationRegistryError(
+        "Shareable state is transitioning after integration revocation.",
+        { status: 409, code: "shareable_state_transition" }
+      );
+    }
+    let defaultLink = this.getDefaultLink(sourceGroup, targetPlatform);
+    if (defaultLink) return { defaultLink, standaloneRealm: null };
+    const standaloneRealm = await this.ensureStandaloneSuccessor(
+      sourceGroup,
+      input?.correlationId
+    );
+    defaultLink = this.getDefaultLink(sourceGroup, targetPlatform);
+    if (defaultLink) return { defaultLink, standaloneRealm: null };
+    if (this.defaultLinkTransition(sourceGroup, targetPlatform)) {
+      throw new IntegrationRegistryError(
+        "Shareable state changed while its standalone successor was prepared.",
+        { status: 409, code: "shareable_state_transition" }
+      );
+    }
+    return { defaultLink: null, standaloneRealm };
+  }
+
+  async ensureEffectiveCandidateRealm(group, targetPlatform, correlationId) {
+    const resolved = await this.resolveEffectiveShareableState({
+      sourceGroup: group,
+      targetPlatform,
+      correlationId
+    });
+    return resolved.defaultLink
+      ? createIntegrationRealmIdentity(resolved.defaultLink.integration, {
+          generation:
+            resolved.defaultLink.integration.shareableStateGeneration ?? 1
+        })
+      : resolved.standaloneRealm;
   }
 
   persistPendingDiscovery(row, discovery, { replaceVersion = null } = {}) {
@@ -1014,8 +1233,16 @@ export class IntegrationRegistry {
     if (existing) return existing;
     const discordGroup = parseGroupKey(row.discord_group_key);
     const twitchGroup = parseGroupKey(row.twitch_group_key);
-    const discordRealm = this.effectiveCandidateRealm(discordGroup, "twitch");
-    const twitchRealm = this.effectiveCandidateRealm(twitchGroup, "discord");
+    const discordRealm = await this.ensureEffectiveCandidateRealm(
+      discordGroup,
+      "twitch",
+      `integration-state-discovery:${row.pending_integration_id}:discord`
+    );
+    const twitchRealm = await this.ensureEffectiveCandidateRealm(
+      twitchGroup,
+      "discord",
+      `integration-state-discovery:${row.pending_integration_id}:twitch`
+    );
     let discovery;
     try {
       discovery = await discoverIntegrationShareableState(this.env, {
@@ -1046,8 +1273,16 @@ export class IntegrationRegistry {
     }
     const discordGroup = parseGroupKey(row.discord_group_key);
     const twitchGroup = parseGroupKey(row.twitch_group_key);
-    const discordRealm = this.effectiveCandidateRealm(discordGroup, "twitch");
-    const twitchRealm = this.effectiveCandidateRealm(twitchGroup, "discord");
+    const discordRealm = await this.ensureEffectiveCandidateRealm(
+      discordGroup,
+      "twitch",
+      `integration-state-rediscovery:${row.pending_integration_id}:discord`
+    );
+    const twitchRealm = await this.ensureEffectiveCandidateRealm(
+      twitchGroup,
+      "discord",
+      `integration-state-rediscovery:${row.pending_integration_id}:twitch`
+    );
     let discovery;
     try {
       discovery = await discoverIntegrationShareableState(this.env, {
@@ -2247,15 +2482,8 @@ export class IntegrationRegistry {
     };
   }
 
-  revokeIntegration(input) {
-    const integrationId = validatedOpaqueId(input?.integrationId, "Integration ID");
-    const group = validatedGroup(input?.group);
-    const actor = validatedActor(input?.actor, group.platform);
-    const reason = typeof input?.reason === "string" && input.reason.length > 0
-      ? input.reason.slice(0, 100)
-      : "unlinked";
-    const nowMs = Date.now();
-
+  beginIntegrationRevocation({ integrationId, group, actor, reason }) {
+    const requestedAtMs = Date.now();
     return this.state.storage.transactionSync(() => {
       const integration = this.getIntegration(integrationId);
       if (!integration) {
@@ -2270,27 +2498,261 @@ export class IntegrationRegistry {
           { status: 403, code: "integration_group_not_member" }
         );
       }
-      if (integration.status !== "active") {
+      if (integration.status === "revoked") {
+        return { started: false, alreadyRevoked: true, integration };
+      }
+      if (!new Set(["active", "revoking"]).has(integration.status)) {
+        throw new IntegrationRegistryError(
+          "The integration cannot enter revocation from its current state.",
+          { status: 409, code: "integration_revocation_unavailable" }
+        );
+      }
+      if (integration.status === "active") {
+        this.state.storage.sql.exec(
+          `UPDATE integrations
+           SET status = 'revoking', updated_at_ms = ?, revoked_reason = ?
+           WHERE integration_id = ? AND status = 'active'`,
+          requestedAtMs,
+          reason,
+          integrationId
+        );
+        audit(this.state.storage.sql, {
+          integrationId,
+          event: "integration.revocation.started.v1",
+          actor,
+          groupKey: group.key,
+          occurredAtMs: requestedAtMs
+        });
+      }
+      this.state.storage.sql.exec(
+        `INSERT INTO integration_revocation_jobs
+          (integration_id, actor_platform, actor_id, group_key, reason,
+           requested_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(integration_id) DO NOTHING`,
+        integrationId,
+        actor?.platform ?? null,
+        actor?.id ?? null,
+        group.key,
+        reason,
+        requestedAtMs
+      );
+      return {
+        started: integration.status === "active",
+        alreadyRevoked: false,
+        integration: this.getIntegration(integrationId)
+      };
+    });
+  }
+
+  async freezeIntegrationForRevocation(integration, correlationId) {
+    const realm = createIntegrationRealmIdentity(integration, {
+      generation: integration.shareableStateGeneration ?? 1
+    });
+    try {
+      const inventory = await inventoryShareableStateNamespaces(this.env, {
+        realm,
+        correlationId
+      });
+      const manifests = [];
+      for (const namespace of inventory.namespaces) {
+        const frozen = await freezeShareableStateNamespace(this.env, {
+          realm,
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId,
+          freezeId:
+            `revoke:${integration.id}:${namespace.featureId}:` +
+            namespace.namespaceId,
+          correlationId
+        });
+        manifests.push({
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId,
+          schemaVersion: frozen.snapshot.namespace.schemaVersion,
+          mutationVersion: frozen.snapshot.mutationVersion,
+          fingerprint: frozen.snapshot.fingerprint,
+          meaningful: frozen.snapshot.meaningful
+        });
+      }
+      return manifests;
+    } catch (cause) {
+      if (cause instanceof ShareableStateRealmError) {
+        throw new IntegrationRegistryError(
+          "Integration state could not be frozen for revocation.",
+          { status: 503, code: "integration_revocation_state_unavailable" }
+        );
+      }
+      throw cause;
+    }
+  }
+
+  recordStandaloneSuccessor(edge, integration, nowMs) {
+    const sourceGroup = parseGroupKey(edge.sourceGroupKey);
+    const current = this.state.storage.sql.exec(
+      `SELECT generation, status, source_integration_id
+       FROM shareable_state_standalone_successors
+       WHERE group_key = ?`,
+      sourceGroup.key
+    ).toArray()[0];
+    if (current?.status === "pending") {
+      throw new IntegrationRegistryError(
+        "An earlier standalone shareable-state successor is still pending.",
+        { status: 409, code: "integration_state_successor_pending" }
+      );
+    }
+    const generation = (current?.generation ?? 1) + 1;
+    this.state.storage.sql.exec(
+      `INSERT INTO shareable_state_standalone_successors
+        (group_key, generation, status, source_integration_id,
+         source_generation, created_at_ms, ready_at_ms)
+       VALUES (?, ?, 'pending', ?, ?, ?, NULL)
+       ON CONFLICT(group_key) DO UPDATE SET
+         generation = excluded.generation,
+         status = 'pending',
+         source_integration_id = excluded.source_integration_id,
+         source_generation = excluded.source_generation,
+         created_at_ms = excluded.created_at_ms,
+         ready_at_ms = NULL`,
+      sourceGroup.key,
+      generation,
+      integration.id,
+      integration.shareableStateGeneration ?? 1,
+      nowMs
+    );
+    audit(this.state.storage.sql, {
+      integrationId: integration.id,
+      event: "integration.state_successor.recorded.v1",
+      groupKey: sourceGroup.key,
+      occurredAtMs: nowMs
+    });
+  }
+
+  async completeIntegrationRevocation(integrationIdInput) {
+    const integrationId = validatedOpaqueId(integrationIdInput, "Integration ID");
+    const inFlight = this.integrationRevocations.get(integrationId);
+    if (inFlight) return await inFlight;
+    const operation = this.performIntegrationRevocation(integrationId);
+    this.integrationRevocations.set(integrationId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.integrationRevocations.get(integrationId) === operation) {
+        this.integrationRevocations.delete(integrationId);
+      }
+    }
+  }
+
+  async performIntegrationRevocation(integrationId) {
+    const before = this.getIntegration(integrationId);
+    if (!before) {
+      throw new IntegrationRegistryError("The integration was not found.", {
+        status: 404,
+        code: "integration_not_found"
+      });
+    }
+    if (before.status === "revoked") {
+      return { revoked: false, alreadyRevoked: true, integration: before };
+    }
+    if (before.status !== "revoking") {
+      throw new IntegrationRegistryError(
+        "The integration is not awaiting revocation.",
+        { status: 409, code: "integration_revocation_unavailable" }
+      );
+    }
+    const job = this.state.storage.sql.exec(
+      `SELECT actor_platform, actor_id, group_key, reason
+       FROM integration_revocation_jobs
+       WHERE integration_id = ?`,
+      integrationId
+    ).toArray()[0];
+    if (!job) {
+      throw new IntegrationRegistryError(
+        "The integration revocation recovery record is unavailable.",
+        { status: 503, code: "integration_revocation_state_invalid" }
+      );
+    }
+    const manifests = await this.freezeIntegrationForRevocation(
+      before,
+      `integration-revocation:${integrationId}`
+    );
+    const nowMs = Date.now();
+    return this.state.storage.transactionSync(() => {
+      const integration = this.getIntegration(integrationId);
+      if (integration.status === "revoked") {
         return { revoked: false, alreadyRevoked: true, integration };
+      }
+      if (integration.status !== "revoking") {
+        throw new IntegrationRegistryError(
+          "The integration revocation changed while state was being frozen.",
+          { status: 409, code: "integration_revocation_stale" }
+        );
+      }
+      for (const manifest of manifests) {
+        const existing = this.state.storage.sql.exec(
+          `SELECT schema_version, mutation_version, fingerprint, meaningful
+           FROM integration_revocation_namespaces
+           WHERE integration_id = ? AND feature_id = ? AND namespace_id = ?`,
+          integrationId,
+          manifest.featureId,
+          manifest.namespaceId
+        ).toArray()[0];
+        if (existing && (
+          existing.schema_version !== manifest.schemaVersion ||
+          existing.mutation_version !== manifest.mutationVersion ||
+          existing.fingerprint !== manifest.fingerprint ||
+          Boolean(existing.meaningful) !== manifest.meaningful
+        )) {
+          throw new IntegrationRegistryError(
+            "The integration revocation ledger is inconsistent.",
+            { status: 503, code: "integration_revocation_state_invalid" }
+          );
+        }
+        if (!existing) {
+          this.state.storage.sql.exec(
+            `INSERT INTO integration_revocation_namespaces
+              (integration_id, feature_id, namespace_id, schema_version,
+               mutation_version, fingerprint, meaningful)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            integrationId,
+            manifest.featureId,
+            manifest.namespaceId,
+            manifest.schemaVersion,
+            manifest.mutationVersion,
+            manifest.fingerprint,
+            manifest.meaningful ? 1 : 0
+          );
+        }
+      }
+      const repaired = this.repairDefaultLinksForRevokedIntegration(
+        integrationId,
+        nowMs
+      );
+      for (const edge of repaired.unavailableEdges) {
+        this.recordStandaloneSuccessor(edge, integration, nowMs);
       }
       this.state.storage.sql.exec(
         `UPDATE integrations
          SET status = 'revoked', updated_at_ms = ?, revoked_at_ms = ?,
              revoked_reason = ?
-         WHERE integration_id = ?`,
+         WHERE integration_id = ? AND status = 'revoking'`,
         nowMs,
         nowMs,
-        reason,
+        job.reason,
         integrationId
       );
       audit(this.state.storage.sql, {
         integrationId,
         event: "integration.revoked.v1",
-        actor,
-        groupKey: group.key,
+        actor: job.actor_platform && job.actor_id
+          ? { platform: job.actor_platform, id: job.actor_id }
+          : null,
+        groupKey: job.group_key,
         occurredAtMs: nowMs
       });
-      this.repairDefaultLinksForRevokedIntegration(integrationId, nowMs);
+      this.state.storage.sql.exec(
+        "DELETE FROM integration_revocation_jobs WHERE integration_id = ?",
+        integrationId
+      );
       return {
         revoked: true,
         alreadyRevoked: false,
@@ -2299,7 +2761,45 @@ export class IntegrationRegistry {
     });
   }
 
-  processGroupRevocationBatch(groupKey) {
+  async revokeIntegration(input) {
+    const integrationId = validatedOpaqueId(input?.integrationId, "Integration ID");
+    const group = validatedGroup(input?.group);
+    const actor = validatedActor(input?.actor, group.platform);
+    const reason = typeof input?.reason === "string" && input.reason.length > 0
+      ? input.reason.slice(0, 100)
+      : "unlinked";
+    const begun = this.beginIntegrationRevocation({
+      integrationId,
+      group,
+      actor,
+      reason
+    });
+    if (begun.alreadyRevoked) {
+      return { revoked: false, alreadyRevoked: true, integration: begun.integration };
+    }
+    await this.armNextExpiration();
+    try {
+      return await this.completeIntegrationRevocation(integrationId);
+    } finally {
+      await this.armNextExpiration();
+    }
+  }
+
+  async processGroupRevocationBatch(groupKey) {
+    const inFlight = this.groupRevocations.get(groupKey);
+    if (inFlight) return await inFlight;
+    const operation = this.performGroupRevocationBatch(groupKey);
+    this.groupRevocations.set(groupKey, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.groupRevocations.get(groupKey) === operation) {
+        this.groupRevocations.delete(groupKey);
+      }
+    }
+  }
+
+  async performGroupRevocationBatch(groupKey) {
     const job = this.state.storage.sql.exec(
       `SELECT group_key, actor_platform, actor_id, reason
        FROM integration_group_revocations
@@ -2308,13 +2808,12 @@ export class IntegrationRegistry {
     ).toArray()[0];
     if (!job) return { revoked: 0, pending: false };
 
-    const nowMs = Date.now();
     const rows = this.state.storage.sql.exec(
       `SELECT i.integration_id
        FROM integration_members member
        JOIN integrations i
          ON i.integration_id = member.integration_id
-        AND i.status = 'active'
+        AND i.status IN ('active', 'revoking')
        WHERE member.group_key = ?
        ORDER BY i.created_at_ms ASC
        LIMIT ?`,
@@ -2324,32 +2823,28 @@ export class IntegrationRegistry {
     const actor = job.actor_platform && job.actor_id
       ? { platform: job.actor_platform, id: job.actor_id }
       : null;
+    let revoked = 0;
     for (const row of rows) {
-      this.state.storage.sql.exec(
-        `UPDATE integrations
-         SET status = 'revoked', updated_at_ms = ?, revoked_at_ms = ?,
-             revoked_reason = ?
-         WHERE integration_id = ? AND status = 'active'`,
-        nowMs,
-        nowMs,
-        job.reason,
+      const integration = this.getIntegration(row.integration_id);
+      if (integration.status === "active") {
+        this.beginIntegrationRevocation({
+          integrationId: row.integration_id,
+          group: parseGroupKey(groupKey),
+          actor,
+          reason: job.reason
+        });
+      }
+      const completed = await this.completeIntegrationRevocation(
         row.integration_id
       );
-      audit(this.state.storage.sql, {
-        integrationId: row.integration_id,
-        event: "integration.revoked.v1",
-        actor,
-        groupKey,
-        occurredAtMs: nowMs
-      });
-      this.repairDefaultLinksForRevokedIntegration(row.integration_id, nowMs);
+      if (completed.revoked) revoked += 1;
     }
     const pending = Boolean(this.state.storage.sql.exec(
       `SELECT 1 AS present
        FROM integration_members member
        JOIN integrations i
          ON i.integration_id = member.integration_id
-        AND i.status = 'active'
+        AND i.status IN ('active', 'revoking')
        WHERE member.group_key = ?
        LIMIT 1`,
       groupKey
@@ -2359,8 +2854,15 @@ export class IntegrationRegistry {
         "DELETE FROM integration_group_revocations WHERE group_key = ?",
         groupKey
       );
+    } else {
+      this.state.storage.sql.exec(
+        `UPDATE integration_group_revocations SET requested_at_ms = ?
+         WHERE group_key = ?`,
+        Date.now(),
+        groupKey
+      );
     }
-    return { revoked: rows.length, pending };
+    return { revoked, pending };
   }
 
   async revokeForGroup(input) {
@@ -2371,7 +2873,7 @@ export class IntegrationRegistry {
     const reason = typeof input?.reason === "string" && input.reason.length > 0
       ? input.reason.slice(0, 100)
       : "group_authorization_revoked";
-    const result = this.state.storage.transactionSync(() => {
+    this.state.storage.transactionSync(() => {
       this.state.storage.sql.exec(
         `INSERT INTO integration_group_revocations
           (group_key, actor_platform, actor_id, reason, requested_at_ms)
@@ -2386,10 +2888,13 @@ export class IntegrationRegistry {
         reason,
         Date.now()
       );
-      return this.processGroupRevocationBatch(group.key);
     });
     await this.armNextExpiration();
-    return result;
+    try {
+      return await this.processGroupRevocationBatch(group.key);
+    } finally {
+      await this.armNextExpiration();
+    }
   }
 
   async expireInvitations() {
@@ -2504,25 +3009,39 @@ export class IntegrationRegistry {
     });
   }
 
-  processNextGroupRevocation() {
-    return this.state.storage.transactionSync(() => {
-      const job = this.state.storage.sql.exec(
-        `SELECT group_key
-         FROM integration_group_revocations
-         ORDER BY requested_at_ms ASC, group_key ASC
-         LIMIT 1`
-      ).toArray()[0];
-      return job
-        ? this.processGroupRevocationBatch(job.group_key)
-        : { revoked: 0, pending: false };
-    });
+  async processNextGroupRevocation() {
+    const job = this.state.storage.sql.exec(
+      `SELECT group_key
+       FROM integration_group_revocations
+       ORDER BY requested_at_ms ASC, group_key ASC
+       LIMIT 1`
+    ).toArray()[0];
+    return job
+      ? await this.processGroupRevocationBatch(job.group_key)
+      : { revoked: 0, pending: false };
+  }
+
+  async processNextIntegrationRevocation() {
+    const job = this.state.storage.sql.exec(
+      `SELECT integration_id
+       FROM integration_revocation_jobs
+       ORDER BY requested_at_ms ASC, integration_id ASC
+       LIMIT 1`
+    ).toArray()[0];
+    return job
+      ? await this.completeIntegrationRevocation(job.integration_id)
+      : null;
   }
 
   async alarm() {
-    await this.expireInvitations();
-    this.pruneTerminalInvitations();
-    this.processNextGroupRevocation();
-    await this.armNextExpiration();
+    try {
+      await this.expireInvitations();
+      this.pruneTerminalInvitations();
+      await this.processNextGroupRevocation();
+      await this.processNextIntegrationRevocation();
+    } finally {
+      await this.armNextExpiration();
+    }
   }
 
   async fetch(request) {
@@ -2567,6 +3086,14 @@ export class IntegrationRegistry {
       if (request.method === "POST" && url.pathname === "/default-links/set") {
         return noStoreJson(this.setDefaultLink(await request.json()));
       }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/shareable-state/resolve"
+      ) {
+        return noStoreJson(await this.resolveEffectiveShareableState(
+          await request.json()
+        ));
+      }
       if (request.method === "POST" && url.pathname === "/routes/resolve") {
         return noStoreJson(this.resolveRoutes(await request.json()));
       }
@@ -2590,7 +3117,7 @@ export class IntegrationRegistry {
         return noStoreJson({ integration });
       }
       if (request.method === "POST" && url.pathname === "/integrations/revoke") {
-        return noStoreJson(this.revokeIntegration(await request.json()));
+        return noStoreJson(await this.revokeIntegration(await request.json()));
       }
       if (request.method === "POST" && url.pathname === "/groups/revoke") {
         return noStoreJson(await this.revokeForGroup(await request.json()));

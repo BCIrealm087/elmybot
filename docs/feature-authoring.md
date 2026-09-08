@@ -526,9 +526,10 @@ realm. With a default it uses that integration's realm. A later default switch
 affects later resolutions without moving either realm's data.
 
 This does not reclassify `ctx.state`, and local preferences remain ordinary
-group state. Snapshot, collision resolution, and safe finalization are
-implemented, but revocation successors and existing-data migration are still
-staged. Do not migrate a production feature until its explicit migration step.
+group state. Snapshot, collision resolution, safe finalization, and independent
+post-revocation successors are implemented, but existing-data migration is
+still staged. Do not migrate a production feature until its explicit migration
+step.
 See the
 [`shareable-state lifecycle contract`](shareable-state-lifecycle.md) for the
 staged behavior and constraints.

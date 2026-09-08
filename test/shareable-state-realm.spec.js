@@ -6,6 +6,7 @@ import {
   cloneShareableStateSnapshot,
   createIntegrationRealmIdentity,
   createStandaloneRealmIdentity,
+  freezeShareableStateNamespace,
   initializeEmptyShareableStateNamespace,
   inventoryShareableStateNamespaces,
   releaseShareableStateNamespaceSeal,
@@ -543,6 +544,81 @@ describe("Standalone shareable-state realms", () => {
         "set",
         { key: "value", value: 2 }
       ))).status).toBe(200);
+    });
+  });
+
+  it("permanently freezes revoked integration namespaces with replay-safe snapshots", async () => {
+    const identity = createIntegrationRealmIdentity({ id: uniqueId("revoked") });
+    const stub = shareableStateRealmStub(env, identity);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const clientEnv = clientEnvironment(backend);
+      await identityRealmRequest(backend, identity, "score", "set", {
+        key: "value",
+        value: 7
+      });
+      const freezeId = "revoke:test-integration:test.score:score";
+      const frozen = await freezeShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        freezeId
+      });
+      expect(frozen).toMatchObject({
+        freezeId,
+        snapshot: {
+          mutationVersion: 1,
+          entries: [{ key: "value", value: 7 }]
+        }
+      });
+      await expect(freezeShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        freezeId
+      })).resolves.toEqual(frozen);
+      await expect(freezeShareableStateNamespace(clientEnv, {
+        realm: identity,
+        featureId: "test.score",
+        namespaceId: "score",
+        freezeId: "revoke:other:test.score:score"
+      })).rejects.toMatchObject({
+        status: 409,
+        code: "shareable_state_realm_frozen"
+      });
+      expect((await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "get",
+        { key: "value" }
+      ))).data).toEqual({ value: 7 });
+      expect(await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "set",
+        { key: "value", value: 8 }
+      ))).toMatchObject({
+        status: 409,
+        data: { code: "shareable_state_realm_frozen" }
+      });
+      expect(await responseData(await identityRealmRequest(
+        backend,
+        identity,
+        "score",
+        "bounded-counter",
+        {
+          name: "deaths",
+          subject: "game",
+          min: 0,
+          operation: "increment",
+          amount: 1
+        }
+      ))).toMatchObject({
+        status: 409,
+        data: { code: "shareable_state_realm_frozen" }
+      });
     });
   });
 

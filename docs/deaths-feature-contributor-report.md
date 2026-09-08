@@ -1191,3 +1191,46 @@ ESLint, public API boundary checks, workspace-package validation,
 generated-document freshness, tracked JavaScript syntax checks, and the
 whitespace check also passed. The non-deploying Worker dry run remains delegated
 to GitHub Actions.
+
+## Shareable-state Step 10: revocation and standalone continuation
+
+Revoking an active integration now preserves its last authoritative shared
+state instead of exposing either platform's older pre-link standalone data.
+The registry first moves the relationship to `revoking`, writes a durable
+recovery job, and permanently freezes every declared namespace in the
+integration realm. Default repair then either promotes an eligible active link
+or records a new standalone generation sourced from the frozen snapshot.
+
+Standalone copying is deliberately lazy. The first command that needs the
+unlinked group's shareable state verifies the archived metadata, clones every
+namespace with stable idempotency keys, and publishes the new generation only
+after the complete copy matches. If both former members become unlinked, they
+receive separate successors initialized from the same snapshot and can diverge
+normally. Relinking discovery uses those current successors rather than the
+obsolete generation-one realms.
+
+The implementation also made the old single-transaction revocation path a
+resumable saga. A partial freeze or successor copy remains safely retryable;
+terminal audit events are not duplicated; and an integration in transition is
+ineligible for routes, defaults, and feature writes. During the full suite, the
+new asynchronous realm work exposed a real alarm race in the pre-existing
+50-link group-revocation test. Coalescing in-flight integration and group jobs,
+plus bounded delayed alarm recovery, restored one-owner batch semantics without
+weakening crash recovery.
+
+**Assessment:** this is essential framework work and far beyond what a hobby
+command contributor should need to build. Permanent archives, realm
+generations, default topology, partial-copy recovery, alarm concurrency, and
+cross-object idempotency would be highly cumbersome and error-prone inside a
+feature. Centralizing them leaves the contributor-facing model pleasantly
+small: declare a shareable namespace and use the ordinary state handle. The
+remaining complexity for the `deaths` contributor is the explicit legacy-data
+migration in Step 12, not ongoing unlink or relink behavior.
+
+Focused verification covered permanent freezing and 4 revocation scenarios:
+independent successors and divergence, active fallback selection, partial lazy
+copy recovery, and interrupted archive recovery. The bounded group-revocation
+race test also passed independently. The complete local suite passed 26 files
+and 286 tests. ESLint, API-boundary checks, workspace validation, generated
+documentation freshness, JavaScript syntax, and the whitespace check passed.
+The non-deploying Worker dry run remains delegated to GitHub Actions.
