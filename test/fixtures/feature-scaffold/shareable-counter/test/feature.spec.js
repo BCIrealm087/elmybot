@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import feature from "../src/feature.js";
 import {
   createFeatureTestRuntime,
@@ -7,7 +7,8 @@ import {
   discordTestGroup,
   discordTestModerator,
   twitchTestActor,
-  twitchTestGroup
+  twitchTestGroup,
+  twitchTestModerator
 } from "@elmybot/framework/testing";
 
 describe("recipe.shareable", () => {
@@ -43,7 +44,7 @@ describe("recipe.shareable", () => {
     })).toReply("Score: 1");
   });
 
-  it("denies member updates without changing shared state", async () => {
+  it("protects updates and floors the counter at zero", async () => {
     const runtime = createFeatureTestRuntime(feature);
     const group = discordTestGroup();
 
@@ -56,5 +57,20 @@ describe("recipe.shareable", () => {
       group,
       actor: discordTestActor()
     })).toReply("Score: 0");
+    (await runtime.discord.command("shareable", {
+      group,
+      actor: discordTestModerator(),
+      args: { operation: "minus" }
+    })).toReply("Score: 0");
+  });
+
+  it("rejects unsupported operations from raw Twitch text", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+
+    await expect(runtime.twitch.commandText("!shareable multiply", {
+      actor: twitchTestModerator()
+    })).rejects.toMatchObject({
+      code: "action_arguments_invalid"
+    });
   });
 });

@@ -10,6 +10,25 @@ export const featureScaffoldRecipes = Object.freeze([
   "shareable-counter"
 ]);
 
+const RECIPE_TEST_GUIDANCE = Object.freeze({
+  minimal: Object.freeze([
+    "Keep the public Discord success path.",
+    "Add one meaningful invalid case if you add parsing or validation."
+  ]),
+  "shared-command": Object.freeze([
+    "Keep the same success result through Discord and raw Twitch text.",
+    "Add platform-specific cases only when the behavior differs."
+  ]),
+  "local-counter": Object.freeze([
+    "Keep an allowed update and a denied update that leaves state unchanged.",
+    "Keep the counter floor and isolation between two groups."
+  ]),
+  "shareable-counter": Object.freeze([
+    "Keep standalone isolation and two origins selecting the same integration.",
+    "Keep an allowed update, denial without mutation, and the counter floor."
+  ])
+});
+
 export class FeatureScaffoldError extends Error {
   constructor(message, { code = "feature_scaffold_error" } = {}) {
     super(message);
@@ -51,6 +70,12 @@ function requireRecipe(template = DEFAULT_RECIPE) {
     );
   }
   return template;
+}
+
+function recipeTestGuidance(recipe) {
+  return RECIPE_TEST_GUIDANCE[recipe]
+    .map((line) => `- ${line}`)
+    .join("\n");
 }
 
 function frameworkImport(names, source) {
@@ -304,7 +329,7 @@ describe("${identity.featureId}", () => {
 }
 
 function localCounterTestTemplate(identity, testingSource, featureSource) {
-  return `import { describe, it } from "vitest";
+  return `import { describe, expect, it } from "vitest";
 import feature from "${featureSource}";
 ${frameworkImport([
     "createFeatureTestRuntime",
@@ -345,12 +370,22 @@ describe("${identity.featureId}", () => {
       actor: twitchTestModerator()
     })).toReply("Score: 0");
   });
+
+  it("rejects unsupported operations from raw Twitch text", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+
+    await expect(runtime.twitch.commandText("!${identity.commandName} multiply", {
+      actor: twitchTestModerator()
+    })).rejects.toMatchObject({
+      code: "action_arguments_invalid"
+    });
+  });
 });
 `;
 }
 
 function shareableCounterTestTemplate(identity, testingSource, featureSource) {
-  return `import { describe, it } from "vitest";
+  return `import { describe, expect, it } from "vitest";
 import feature from "${featureSource}";
 ${frameworkImport([
     "createFeatureTestRuntime",
@@ -359,7 +394,8 @@ ${frameworkImport([
     "discordTestGroup",
     "discordTestModerator",
     "twitchTestActor",
-    "twitchTestGroup"
+    "twitchTestGroup",
+    "twitchTestModerator"
   ], testingSource)}
 
 describe("${identity.featureId}", () => {
@@ -395,7 +431,7 @@ describe("${identity.featureId}", () => {
     })).toReply("Score: 1");
   });
 
-  it("denies member updates without changing shared state", async () => {
+  it("protects updates and floors the counter at zero", async () => {
     const runtime = createFeatureTestRuntime(feature);
     const group = discordTestGroup();
 
@@ -408,6 +444,21 @@ describe("${identity.featureId}", () => {
       group,
       actor: discordTestActor()
     })).toReply("Score: 0");
+    (await runtime.discord.command("${identity.commandName}", {
+      group,
+      actor: discordTestModerator(),
+      args: { operation: "minus" }
+    })).toReply("Score: 0");
+  });
+
+  it("rejects unsupported operations from raw Twitch text", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+
+    await expect(runtime.twitch.commandText("!${identity.commandName} multiply", {
+      actor: twitchTestModerator()
+    })).rejects.toMatchObject({
+      code: "action_arguments_invalid"
+    });
   });
 });
 `;
@@ -492,6 +543,16 @@ export function workspaceFeatureScaffoldTemplates(
       `TODO: describe the \`${identity.featureId}\` Elmybot feature.\n\n` +
       `Generated from the \`${recipe}\` recipe. The generated JavaScript and ` +
       "tests are ordinary contributor-owned files.\n\n" +
+      "## Tests to keep\n\n" +
+      `${recipeTestGuidance(recipe)}\n\n` +
+      "These tests prove feature behavior. Platform ingress, persistence, " +
+      "delivery, and link lifecycle remain framework integration evidence " +
+      "unless this package changes those behaviors.\n\n" +
+      (recipe === "shareable-counter"
+        ? "`defaultTestLink()` selects an in-memory direction and integration " +
+          "identity; it does not run OAuth, collision resolution, revocation, " +
+          "or migration.\n\n"
+        : "") +
       "Follow the [first-feature quickstart]" +
       "(../../../docs/feature-quickstart.md) for installation and testing.\n"
   });

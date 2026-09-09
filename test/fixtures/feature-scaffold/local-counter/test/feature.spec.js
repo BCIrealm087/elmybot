@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import feature from "../src/feature.js";
 import {
   createFeatureTestRuntime,
@@ -38,5 +38,15 @@ describe("recipe.local", () => {
       group: twitchGroup,
       actor: twitchTestModerator()
     })).toReply("Score: 0");
+  });
+
+  it("rejects unsupported operations from raw Twitch text", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+
+    await expect(runtime.twitch.commandText("!local multiply", {
+      actor: twitchTestModerator()
+    })).rejects.toMatchObject({
+      code: "action_arguments_invalid"
+    });
   });
 });

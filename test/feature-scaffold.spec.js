@@ -64,6 +64,7 @@ describe("Feature scaffold templates", () => {
     expect(templates.featureSource).toContain('from "@elmybot/framework"');
     expect(templates.testSource).toContain('from "@elmybot/framework/testing"');
     expect(templates.readmeSource).toContain("docs/feature-quickstart.md");
+    expect(templates.readmeSource).toContain("## Tests to keep");
   });
 
   it("offers explicit recipes without changing the minimal default", () => {
@@ -103,8 +104,21 @@ describe("Feature scaffold templates", () => {
     expect(shareable.featureSource).not.toContain("adoptLegacyIntegrationState");
     expect(shareable.testSource).toContain("defaultTestLink");
     expect(shareable.testSource).toContain(
-      "denies member updates without changing shared state"
+      "protects updates and floors the counter at zero"
     );
+    expect(local.testSource).toContain(
+      "rejects unsupported operations from raw Twitch text"
+    );
+    expect(shareable.testSource).toContain(
+      "rejects unsupported operations from raw Twitch text"
+    );
+    expect(local.readmeSource).toContain(
+      "denied update that leaves state unchanged"
+    );
+    expect(shareable.readmeSource).toContain(
+      "two origins selecting the same integration"
+    );
+    expect(shareable.readmeSource).toContain("does not run OAuth");
   });
 
   it("keeps executable recipe fixtures identical to generated output", () => {

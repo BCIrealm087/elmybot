@@ -20,12 +20,12 @@ npm run feature:new -- fun-hype --workspace
 That default `minimal` recipe creates a small public Discord command. If you
 already know that you need a common combination, select one explicitly:
 
-| Recipe | Command | Generated starting point |
-| --- | --- | --- |
-| Minimal | `npm run feature:new -- fun-hype --workspace` | One public Discord command and its success test |
-| Shared command | `npm run feature:new -- fun-hype --workspace --template shared-command` | One action bound to Discord and Twitch, tested through both platforms |
-| Local counter | `npm run feature:new -- fun-score --workspace --template local-counter` | Independent per-group scores, public reads, moderator updates, and boundary tests |
-| Shareable counter | `npm run feature:new -- fun-score --workspace --template shareable-counter` | Standalone scores that share through selected links, public reads, moderator updates, and standalone/linked tests |
+| Recipe | Command | Generated starting point | Contributor-owned evidence to keep |
+| --- | --- | --- | --- |
+| Minimal | `npm run feature:new -- fun-hype --workspace` | One public Discord command | The success path; add a meaningful invalid case if you add parsing or validation |
+| Shared command | `npm run feature:new -- fun-hype --workspace --template shared-command` | One action bound to Discord and Twitch | The same result through Discord and raw Twitch text; add platform-specific cases only when behavior differs |
+| Local counter | `npm run feature:new -- fun-score --workspace --template local-counter` | Independent per-group scores with public reads and moderator updates | Allowed and denied updates, unchanged state after denial, counter floor, and isolation between two groups |
+| Shareable counter | `npm run feature:new -- fun-score --workspace --template shareable-counter` | Standalone scores that share through selected links, with public reads and moderator updates | Standalone isolation, two origins sharing one selected integration, protected-update safety, and counter floor |
 
 Choose `local-counter` when each Discord server or Twitch channel owns its
 score. Choose `shareable-counter` when each group should work before linking
@@ -129,6 +129,18 @@ The generated test uses the deployment-free feature runtime. Keep the normal
 success case, then add only the cases your behavior makes important: permission
 denial, invalid input, independent groups, a counter floor, or a missing route.
 
+Use this table to choose focused contributor tests rather than copying a whole
+framework suite:
+
+| Feature behavior | Contributor-owned evidence |
+| --- | --- |
+| Input parsing | Representative valid input and one meaningful invalid case; use raw Twitch text when its syntax matters |
+| Protected updates | An allowed update and a denied update followed by a read proving state did not change |
+| Bounded counters | The relevant floor, ceiling, or assignment boundary |
+| Local preferences or state | Isolation between the groups that must remember independently |
+| Shareable state | Standalone isolation and two origins selecting the same integration |
+| Custom routes or platform options | The relevant missing-route or platform-specific behavior |
+
 For Twitch syntax that matters, test the actual chat text:
 
 ```js
@@ -139,6 +151,20 @@ const result = await runtime.twitch.commandText(
 
 result.toReply("Dark Souls deaths: 1");
 ```
+
+Those tests belong to the command author. Collision selection, stale-snapshot
+retries, revocation forks, CSRF, and legacy adoption remain framework or
+migration evidence unless the contribution changes those behaviors. Platform
+ingress, durable persistence, coordinator retries, and real delivery adapters
+likewise stay in their existing integration suites.
+
+Test fixtures have deliberately narrower meaning. `defaultTestLink()` proves
+which directional selection and integration identity the feature uses; it does
+not run OAuth, collision resolution, revocation, or migration. A
+`linkedTestRoute()` proves behavior against a configured route and makes the
+resulting effect inspectable; it does not prove platform delivery. If framework
+work introduces a lifecycle fixture, that fixture must exercise the real
+lifecycle operations rather than relabel in-memory state.
 
 Run the fast feature check while iterating:
 

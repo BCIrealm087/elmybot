@@ -261,10 +261,39 @@ Convenience helpers are also available: `discordTestModerator()`,
 multi-word strings. For example, a two-field parser can normalize
 `plus "Dark Souls"` into `{ operation: "plus", game: "Dark Souls" }`.
 
-The harness does not replace platform ingress or durability integration tests.
-Use the existing Worker tests when verifying signatures, raw Discord/Twitch
-payload parsing, SQL migrations, alarms, coordinator retries, or real delivery
-adapter behavior.
+### Choose tests by feature behavior
+
+Each feature test should establish the behavior introduced by that feature.
+Use the smallest rows that apply:
+
+| Feature behavior | Contributor-owned evidence |
+| --- | --- |
+| Input parsing | Representative valid input and one meaningful invalid case; use `runtime.twitch.commandText()` when raw syntax matters |
+| Protected updates | An allowed update and a denied update followed by a read proving state did not change |
+| Bounded counters | The relevant floor, ceiling, or assignment boundary |
+| Local preferences or state | Isolation between the groups that must remember independently |
+| Shareable state | Isolated standalone groups and two origins whose defaults select the same integration |
+| Custom routes or platform options | The relevant missing-route result, emitted effect, or platform-specific response |
+
+The test runtime proves feature composition, parsing, authorization decisions,
+state selection, and returned effects. It does not replace platform-ingress or
+durability integration tests. Use the existing Worker suites when changing
+signatures, raw Discord or Twitch payload parsing, SQL migrations, alarms,
+coordinator retries, or real delivery adapters.
+
+Lifecycle guarantees also remain framework evidence unless a contribution
+changes them. Collision selection, stale-snapshot retries, revocation forks,
+CSRF, and legacy adoption are covered by the
+[shareable-state lifecycle verification](shareable-state-lifecycle-verification.md),
+not by every command package.
+
+Fixture names do not widen that boundary. `defaultTestLink()` records a
+directional default and integration identity so a feature test can prove state
+selection. It does not run OAuth, discovery, collision resolution, activation,
+revocation, or migration. `linkedTestRoute()` supplies a configured route and
+lets the test inspect the feature's emitted effect; it does not deliver through
+a real adapter. Any future lifecycle fixture must call the real lifecycle
+operations rather than merely relabeling in-memory state.
 
 ## Cookbook 1: platform-native command
 
