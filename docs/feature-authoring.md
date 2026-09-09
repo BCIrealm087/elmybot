@@ -70,9 +70,8 @@ removing the existing entries:
 }
 ```
 
-Run `npm install` from the repository root to update `package-lock.json` and
-create the workspace link. Then add the feature's default export to the
-explicit catalog in `src/features/index.js`:
+Then add the feature's default export to the explicit catalog in
+`src/features/index.js`:
 
 ```js
 import hypeFeature from "@elmybot/feature-fun-hype";
@@ -83,19 +82,34 @@ export const installedFeatures = Object.freeze([
 ]);
 ```
 
-Then replace the `TODO` behavior and run:
+Run `npm install` from the repository root to update `package-lock.json` and
+create the workspace link:
 
 ```sh
-npm test -- --run packages/features/fun-hype/test/feature.spec.js
-npm run feature:workspaces
-npm run feature:docs
-npm run lint
+npm install
 ```
 
-`npm run feature:workspaces` checks package names, exports, peer compatibility,
-metadata, default feature exports, and root dependency versions. `npm run lint`
-also enforces workspace isolation and verifies that the checked-in
-[`feature-catalog.md`](feature-catalog.md) matches the installed registry.
+Then replace the `TODO` behavior and use the fast check while iterating:
+
+```sh
+npm run feature:check -- fun-hype
+```
+
+The command labels package-link or installation drift separately from behavior
+test failures, public API boundary violations, and a stale
+[`feature-catalog.md`](feature-catalog.md). It checks without editing files.
+Use `npm run feature:docs` as the explicit regeneration action when the catalog
+is stale.
+
+Before review, run the complete readiness mode:
+
+```sh
+npm run feature:check -- fun-hype --ready
+```
+
+It runs every existing local contributor gate, including the complete Vitest
+suite; it does not substitute the feature's focused test for repository-wide
+coverage.
 
 ## Repository-local feature
 
@@ -692,8 +706,9 @@ describe the public and protected modes accurately.
   platform ingress or durability changes.
 - Add the feature once to `installedFeatures`.
 - For a workspace feature, keep its package metadata and root dependency
-  version aligned and run `npm run feature:workspaces`.
-- Run `npm run feature:docs` after installation.
-- Run the complete `npm test -- --run` and `npm run lint` checks.
+  version aligned, then run `npm install` to update the lockfile and link it.
+- Run `npm run feature:docs` after installation and review the generated diff.
+- Run `npm run feature:check -- <feature-directory> --ready`; it includes the
+  complete test suite, workspace validation, lint, boundary, and catalog checks.
 - Do not add secrets, raw platform tokens, direct external `fetch` calls, or
   storage-layout knowledge to feature code.

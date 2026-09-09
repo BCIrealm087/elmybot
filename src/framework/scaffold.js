@@ -460,6 +460,7 @@ export function workspaceFeatureScaffoldTemplates(
   const identity = scaffoldIdentity(slug);
   const recipe = requireRecipe(template);
   const packageName = `@elmybot/feature-${identity.slug}`;
+  const packageVersion = "0.1.0";
   const sources = templateSources(identity, recipe, {
     frameworkSource: "@elmybot/framework",
     testingSource: "@elmybot/framework/testing",
@@ -469,10 +470,11 @@ export function workspaceFeatureScaffoldTemplates(
     identity,
     template: recipe,
     packageName,
+    packageVersion,
     ...sources,
     packageSource: `${JSON.stringify({
       name: packageName,
-      version: "0.1.0",
+      version: packageVersion,
       private: true,
       type: "module",
       exports: { ".": "./src/feature.js" },

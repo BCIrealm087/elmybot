@@ -69,6 +69,7 @@ export async function scaffoldFeature({
       template: templates.template,
       workspace: true,
       packageName: templates.packageName,
+      packageVersion: templates.packageVersion,
       featurePath: files[2].path,
       testPath: files[3].path,
       installImport: `import feature from "${templates.packageName}";`
@@ -142,9 +143,18 @@ async function main() {
     console.log(`Template: ${result.template}`);
     if (result.workspace) {
       console.log(`Package: ${result.packageName}`);
-      console.log("Next: run npm install, add the package to root dependencies, then import it in src/features/index.js.");
+      console.log(
+        `Next: add "${result.packageName}": "${result.packageVersion}" to root dependencies.`
+      );
+      console.log(
+        "Then: import it in src/features/index.js, run npm install, and run " +
+        `npm run feature:check -- ${result.identity.slug}.`
+      );
     } else {
-      console.log("Next: import the feature in src/features/index.js and add it to installedFeatures.");
+      console.log(
+        "Next: import the feature in src/features/index.js, add it once to " +
+        `installedFeatures, and run npm run feature:check -- ${result.identity.slug}.`
+      );
     }
     console.log("Guide: docs/feature-quickstart.md");
   } catch (error) {

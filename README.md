@@ -417,12 +417,15 @@ Create and validate the recommended private workspace package with:
 
 ```sh
 npm run feature:new -- fun-hype --workspace
-npm run feature:workspaces
+npm run feature:check -- fun-hype
 ```
 
 The scaffold also offers optional `shared-command`, `local-counter`, and
 `shareable-counter` recipes. They generate ordinary editable JavaScript and
-focused tests; the minimal recipe remains the default.
+focused tests; the minimal recipe remains the default. Add `--ready` to the
+feature check before review to run the complete suite and every local
+contributor gate. Checks are read-only; `npm run feature:docs` remains the
+explicit catalog-regeneration action.
 
 ## Detailed documentation
 

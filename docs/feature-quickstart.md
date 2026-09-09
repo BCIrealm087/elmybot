@@ -140,27 +140,39 @@ const result = await runtime.twitch.commandText(
 result.toReply("Dark Souls deaths: 1");
 ```
 
-Run the focused test while iterating:
+Run the fast feature check while iterating:
 
 ```sh
-npm test -- --run packages/features/fun-hype/test/feature.spec.js
+npm run feature:check -- fun-hype
 ```
+
+It reports installation drift, runs only this feature's behavior test and
+lint, enforces the public API boundary, and checks that the installed catalog
+is current. It does not edit the catalog or install anything.
 
 ## 5. Run the contributor checks
 
 When the feature is ready:
 
 ```sh
-npm run feature:workspaces
-npm run feature:docs
-npm test -- --run
-npm run lint
+npm run feature:check -- fun-hype --ready
 ```
 
-These commands catch package/install drift, regenerate the feature catalog, run
-all behavior tests, enforce the public feature boundary, and confirm generated
-documentation is current. CI additionally checks JavaScript syntax and performs
-a non-deploying Wrangler build.
+Readiness mode retains the complete test suite and every existing local gate.
+It reports them separately as package linking, exact installation, workspace
+metadata, complete behavior tests, ESLint and the public API boundary, the
+boundary-rule self-check, and catalog freshness. This mode is also read-only.
+
+If it reports a stale feature catalog, regenerate that artifact explicitly and
+review its diff before checking again:
+
+```sh
+npm run feature:docs
+npm run feature:check -- fun-hype --ready
+```
+
+CI additionally checks JavaScript syntax and performs a non-deploying Wrangler
+build.
 
 Before opening a pull request, confirm that the feature contains no secrets,
 raw platform tokens, direct external `fetch` calls, or knowledge of storage

@@ -55,6 +55,7 @@ describe("Feature scaffold templates", () => {
     const templates = workspaceFeatureScaffoldTemplates("fun-hype");
 
     expect(templates.packageName).toBe("@elmybot/feature-fun-hype");
+    expect(templates.packageVersion).toBe("0.1.0");
     expect(JSON.parse(templates.packageSource)).toMatchObject({
       private: true,
       peerDependencies: { "@elmybot/framework": "^1.0.0" },
