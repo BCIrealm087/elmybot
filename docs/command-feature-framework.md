@@ -247,6 +247,14 @@ may explicitly request `ctx.authorization` and ask whether the current actor
 has a reviewed capability. Platform policy still owns the decision; the
 feature receives no raw Discord roles, Twitch badges, or custom authorizer.
 
+For simple validated command modes, the opt-in `modePolicy` addition supplies
+both enforced rules and their catalog metadata. It checks after input and
+baseline access, before cooldowns or feature execution. Existing metadata-only
+`conditionalAccess` and explicit service checks remain supported, especially
+for privileged side effects inside public operations. The
+[normative policy contract](command-feature-framework-contract.md#opt-in-enforced-command-modes)
+defines this first command-only form and its compatibility limits.
+
 ### Route catalog
 
 Replace scattered route declarations and management choices with a registered

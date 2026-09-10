@@ -221,23 +221,23 @@ export const feature = defineFeature({
     defineAction({
       kind: ${identity.constantName},
       capability: null,
-      conditionalAccess: [{
-        capability: access.moderators,
-        when: { argument: "operation", exceptValues: ["show"] }
-      }],
+      // Opt-in enforcement and catalog access come from these same rules.
+      // conditionalAccess alone is metadata and still needs an explicit guard.
+      modePolicy: {
+        rules: [{
+          capability: access.moderators,
+          when: { argument: "operation", exceptValues: ["show"] }
+        }],
+        deniedOutput: { message: UPDATE_DENIED }
+      },
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
         operation: schema.enum(OPERATIONS, { optional: true, default: "show" })
       }),
-      uses: { services: ["authorization", "${service}"] },
+      uses: { services: ["${service}"] },
       async execute(ctx, { operation }) {
-        if (
-          operation !== "show" &&
-          !await ctx.authorization.allows(access.moderators)
-        ) {
-          return { output: { message: UPDATE_DENIED }, effects: [] };
-        }
-
+        // The mode policy ran before this code. Declare authorization and use
+        // ctx.authorization.allows() for privileged side effects in public modes.
         ${stateResolution}
         let value;
         if (operation === "plus") value = await score.increment();
@@ -328,6 +328,34 @@ describe("${identity.featureId}", () => {
 `;
 }
 
+function protectedCounterTest(identity) {
+  return `  it("checks each protected mode with and without the moderator capability", async () => {
+    for (const [operation, expected] of [["plus", 3], ["minus", 1], ["reset", 0]]) {
+      const runtime = createFeatureTestRuntime(feature);
+      const group = discordTestGroup();
+      const invoke = (operation, actor) => runtime.discord.command("${identity.commandName}", {
+        group, actor, args: { operation }
+      });
+      await invoke("plus", discordTestModerator());
+      await invoke("plus", discordTestModerator());
+      const { withoutCapability: denied, withCapability: allowed } = await runCapabilityCases({
+        actor: discordTestActor(),
+        capability: "framework.moderators",
+        invoke: (actor) => invoke(operation, actor),
+        readState: async () => (await invoke("show", discordTestActor())).output
+      });
+
+      expect(denied.error).toBeNull();
+      denied.result.toReply("Only moderators can change the score.");
+      expect(denied.result.effects).toEqual([]);
+      expect(denied.stateAfter).toEqual(denied.stateBefore);
+      expect(allowed.error).toBeNull();
+      allowed.result.toReply(\`Score: \${expected}\`);
+      expect(allowed.stateAfter).toEqual({ message: \`Score: \${expected}\` });
+    }
+  });`;
+}
+
 function localCounterTestTemplate(identity, testingSource, featureSource) {
   return `import { describe, expect, it } from "vitest";
 import feature from "${featureSource}";
@@ -336,6 +364,7 @@ ${frameworkImport([
     "discordTestActor",
     "discordTestGroup",
     "discordTestModerator",
+    "runCapabilityCases",
     "twitchTestActor",
     "twitchTestGroup",
     "twitchTestModerator"
@@ -380,6 +409,8 @@ describe("${identity.featureId}", () => {
       code: "action_arguments_invalid"
     });
   });
+
+${protectedCounterTest(identity)}
 });
 `;
 }
@@ -393,6 +424,7 @@ ${frameworkImport([
     "discordTestActor",
     "discordTestGroup",
     "discordTestModerator",
+    "runCapabilityCases",
     "twitchTestActor",
     "twitchTestGroup",
     "twitchTestModerator"
@@ -460,6 +492,8 @@ describe("${identity.featureId}", () => {
       code: "action_arguments_invalid"
     });
   });
+
+${protectedCounterTest(identity)}
 });
 `;
 }

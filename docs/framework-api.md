@@ -107,6 +107,18 @@ either matching normalized values or normalized exceptions for catalog and
 review purposes; the action still performs the runtime check through
 `ctx.authorization.allows()`.
 
+The additive `defineAction({ modePolicy })` option provides explicitly enforced
+command-mode rules and derives their catalog metadata from the same declaration.
+Its default is `null`, and existing `conditionalAccess` remains metadata-only.
+The two declarations cannot be combined. Input validation and baseline access
+precede mode checks; denial returns static JSON output with no effects before
+cooldowns or feature code. See the
+[mode-policy contract](command-feature-framework-contract.md#opt-in-enforced-command-modes)
+for defaults, limits, authorizer failures, and command-only scope. Explicit
+authorization remains available for custom decisions and privileged side
+effects within public modes. This is a compatible API v1 addition, not a change
+to existing action or persisted-kind semantics.
+
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
 
@@ -118,6 +130,14 @@ not a production feature dependency. Workspace tests use the equivalent
 identity without exposing production registry infrastructure. Its Twitch runtime accepts either parsed
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
+
+The test-only `runCapabilityCases({ actor, capability, invoke, readState })`
+helper runs the same invocation without and with one capability, records each
+result or error, and copies state before and after each case. It does not assert
+policy outcomes or simulate platform authentication. It is exported by both
+test entry points, not the production API. See the
+[test-kit reference](feature-authoring.md#the-feature-test-kit) for explicit
+denial and no-mutation assertions.
 
 All other modules below `src/framework/` are implementation details. In
 particular, `internal.js`, registry composition, service runtimes, storage

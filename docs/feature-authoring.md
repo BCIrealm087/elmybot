@@ -39,6 +39,9 @@ generate public `show` behavior plus moderator-only `plus`, `minus`, and
 `shareable-counter` works in isolated standalone state and resolves through a
 directional default link when one exists. Its namespace is new and contains no
 legacy-adoption metadata. Each recipe includes focused behavioral tests.
+Counter recipes opt into `modePolicy`: one declaration supplies both access
+documentation and enforcement. Their tests exercise every update with and
+without the moderator capability and assert that denial leaves state unchanged.
 
 The name must contain at least two lowercase dash-separated words. The scaffold
 converts `fun-hype` to feature ID `fun.hype`, command `hype`, and action kind
@@ -160,9 +163,10 @@ helps.
 - Actions declare every route, effect, and optional service they may use.
 - Default-link reads declare `links`; the source is always the current origin
   group and the returned relationship is read-only.
-- Argument-dependent protected modes declare `conditionalAccess`, use the
-  `authorization` service for the runtime check, and never inspect platform
-  roles or badges.
+- Simple protected command modes may declare an enforced `modePolicy`.
+  Custom rules declare metadata-only `conditionalAccess` and use the
+  `authorization` service for runtime checks. Neither inspects platform roles
+  or badges.
 - Feature code receives no `env`, OAuth token, request, webhook payload, Durable
   Object ID, SQL handle, coordinator envelope, or retry loop.
 - Effects describe intended platform outcomes. The coordinator owns durable
@@ -256,6 +260,45 @@ const moderator = discordTestActor({
 Convenience helpers are also available: `discordTestModerator()`,
 `discordTestManager()`, `twitchTestModerator()`, and
 `twitchTestBroadcaster()`.
+
+For representative protected inputs, `runCapabilityCases()` changes only one
+explicit capability on the same actor. Import it from the test-only entry and
+assert both outcomes and the state evidence:
+
+```js
+const { withoutCapability: denied, withCapability: allowed } = await runCapabilityCases({
+  actor: discordTestActor(),
+  capability: "framework.moderators",
+  invoke: (actor) => runtime.discord.command("score", {
+    actor, args: { operation: "plus" }
+  }),
+  readState: async () => (await runtime.discord.command("score")).output
+});
+
+expect(denied.error).toBeNull();
+denied.result.toReply("Only moderators can change the score.");
+expect(denied.result.effects).toEqual([]);
+expect(denied.stateAfter).toEqual(denied.stateBefore);
+expect(allowed.error).toBeNull();
+allowed.result.toReply("Score: 1");
+expect(allowed.stateAfter).toEqual({ message: "Score: 1" });
+```
+
+The helper runs without the capability first, then with it, against the same
+runtime; it does not reset state or assert the expected policy for you. Each
+case returns `{ result, error, stateBefore, stateAfter }`; a thrown invocation
+has `result: null` and its original `error` (for example `action_forbidden`).
+Assert the expected error or result explicitly. `readState` is required and
+must return JSON evidence; snapshots are copied before each invocation so an
+accidental mutation remains visible. Observer errors propagate. Observe every
+state value the operation could change, and start each representative input
+with a fresh, appropriately seeded runtime. The generated counter tests show
+`plus`, `minus`, and `reset` starting from a nonzero value. For raw Twitch syntax,
+use `runtime.twitch.commandText()` inside `invoke`.
+
+These are capability-policy tests, not evidence that platform roles or badges
+were authenticated. The helper preserves actor identity, claims, and all other
+capabilities; the test runtime uses the explicit capability list.
 
 `twitchTokens()` accepts ordinary whitespace-delimited tokens and double-quoted
 multi-word strings. For example, a two-field parser can normalize
@@ -670,34 +713,26 @@ only when maintaining already deployed integration-owned data.
 ## Cookbook 7: conditionally protected command modes
 
 Keep the action public when everyone may read but only moderators may mutate.
-Declare `authorization` and ask the existing platform policy about a reviewed
-capability before performing the protected operation:
+For simple validated command modes, use the optional enforced policy:
 
 ```js
 defineAction({
   kind: "fun.score.manage.v1",
   capability: null,
-  conditionalAccess: [
-    {
+  modePolicy: {
+    rules: [{
       capability: access.moderators,
       when: { argument: "operation", values: ["plus"] }
-    }
-  ],
+    }],
+    deniedOutput: { message: "Only moderators can change the score." }
+  },
   supportedOrigins: ["discord", "twitch"],
-  uses: { services: ["authorization", "state"] },
+  uses: { services: ["state"] },
   input: schema.object({
     operation: schema.enum(["show", "plus"], { optional: true, default: "show" })
   }),
   async execute(ctx, { operation }) {
-    if (
-      operation === "plus" &&
-      !await ctx.authorization.allows(access.moderators)
-    ) {
-      return {
-        output: { message: "Only moderators can change the score." },
-        effects: []
-      };
-    }
+    // The mode policy has already checked access before any state use.
     const score = ctx.state.boundedCounter("score", "shared");
     const value = operation === "plus"
       ? await score.increment()
@@ -708,23 +743,53 @@ defineAction({
 ```
 
 Use `exceptValues` instead when every supplied value except a small public set
-requires the capability. The rule matches only when the argument is present,
-so an omitted optional argument remains governed by the action's baseline:
+requires the capability. Matching uses schema-normalized values, including
+defaults; an omitted optional argument without a default matches neither form:
 
 ```js
-conditionalAccess: [{
-  capability: access.moderators,
-  when: { argument: "operation", exceptValues: ["show"] }
-}]
+modePolicy: {
+  rules: [{
+    capability: access.moderators,
+    when: { argument: "operation", exceptValues: ["show"] }
+  }],
+  deniedOutput: { message: "Only moderators can change the score." }
+}
 ```
 
-Use an ordinary action-level capability when the whole action is protected.
-Conditional checks are for commands whose validated modes genuinely have
-different access requirements. `authorization.allows()` accepts only reviewed,
-registered capabilities and returns the platform policy's boolean decision.
-`conditionalAccess` is validated metadata rather than automatic enforcement:
-the explicit check remains required, while generated documentation can now
-describe the public and protected modes accurately.
+Input validation runs first, then the baseline capability, then every matching
+mode rule. A denied mode returns the static `deniedOutput` with no effects,
+before cooldowns or feature code. Make sure both platform renderers accept this
+output shape. The same rules generate the catalog's enforced access label; do
+not also declare `conditionalAccess`. No `authorization` service is needed for
+automatic checks. An ordinary action-level capability remains the right choice
+when the whole action is protected.
+
+This initial policy form is command-only, with guild-only Discord bindings.
+Events and schedules cannot bind to it; they keep their existing authorization
+contracts. See the [normative policy semantics](command-feature-framework-contract.md#opt-in-enforced-command-modes)
+for limits and failure behavior.
+
+### Keep explicit checks for custom decisions and side effects
+
+`conditionalAccess` is still validated documentation metadata, never automatic
+enforcement. Use it with the declared `authorization` service when rules depend
+on custom parsing or state. For example, declare `plus` as moderator-only, then
+check it before the mutation:
+
+```js
+if (operation === "plus" && !await ctx.authorization.allows(access.moderators)) {
+  return { output: { message: "Only moderators can change the score." }, effects: [] };
+}
+```
+
+Keep `ctx.authorization.allows()` when a public operation has a privileged side
+effect. `fun.deaths` intentionally retains its existing explicit checks:
+custom operation-or-integer parsing runs before access checks, and a public
+`check` remembers a named game only for moderators. A whole-mode guard cannot
+express that side-effect distinction. Existing metadata declarations, custom
+denials, and command behavior remain unchanged. Use `runCapabilityCases()` for
+these cases too, asserting the public reply and the intentionally different
+remembered-state results.
 
 ## Before opening a pull request
 

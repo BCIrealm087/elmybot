@@ -63,7 +63,9 @@ function actionAccess(action) {
     }
     return `${capability} when \`${when.argument}\` is ${valueList(when.values)}`;
   });
-  return [baseline, ...conditional].join("; ");
+  return [baseline, ...conditional.map((rule) =>
+    action.modePolicy ? `${rule} (enforced)` : rule
+  )].join("; ");
 }
 
 function commandAccess(registry, command) {

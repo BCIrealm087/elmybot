@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as framework from "../src/framework/index.js";
+import * as testing from "../src/framework/testing.js";
+import * as workspaceTesting from "@elmybot/framework/testing";
 import {
   defineFeature,
   FEATURE_FRAMEWORK_API_VERSION,
@@ -50,6 +52,9 @@ describe("Framework public API v1", () => {
     expect(framework).not.toHaveProperty("mergeCommandDefinitions");
     expect(framework).not.toHaveProperty("discordOptionDescriptor");
     expect(framework).not.toHaveProperty("createFeatureServiceRuntime");
+    expect(framework).not.toHaveProperty("runCapabilityCases");
+    expect(typeof testing.runCapabilityCases).toBe("function");
+    expect(workspaceTesting.runCapabilityCases).toBe(testing.runCapabilityCases);
   });
 
   it("rejects incompatible feature manifests with machine-readable details", () => {

@@ -12,6 +12,7 @@ import {
   SCHEDULED_ACTION_COMMAND_TYPE
 } from "./command-common.js";
 import { createFeatureRegistry } from "./feature-registry.js";
+import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
 
@@ -119,6 +120,41 @@ export function discordTestActor(options = {}) {
 
 export function twitchTestActor(options = {}) {
   return testActor("twitch", options);
+}
+
+// Runs the same input twice, changing only one explicit capability. This helper
+// records evidence; callers must assert denial, no mutation, and allowed behavior.
+export async function runCapabilityCases({ actor, capability, invoke, readState }) {
+  if (capability === null || !isRegisteredCapability(capability)) {
+    throw new FeatureTestRuntimeError("A registered non-public capability is required.");
+  }
+  if (!actor || !Array.isArray(actor.capabilities) ||
+      typeof invoke !== "function" || typeof readState !== "function") {
+    throw new FeatureTestRuntimeError(
+      "Capability cases require an explicit actor, invoke, and readState."
+    );
+  }
+  const base = actor.capabilities.filter((value) => value !== capability);
+  const without = testActor(actor.platform, { ...actor, capabilities: base });
+  const withGrant = testActor(actor.platform, {
+    ...actor, capabilities: [...base, capability]
+  });
+  async function run(caseActor) {
+    const stateBefore = freezeJson(await readState());
+    let result = null;
+    let error = null;
+    try {
+      result = await invoke(caseActor);
+    } catch (cause) {
+      error = cause;
+    }
+    return Object.freeze({
+      result, error, stateBefore, stateAfter: freezeJson(await readState())
+    });
+  }
+  const withoutCapability = await run(without);
+  const withCapability = await run(withGrant);
+  return Object.freeze({ withoutCapability, withCapability });
 }
 
 export function discordTestModerator(options = {}) {

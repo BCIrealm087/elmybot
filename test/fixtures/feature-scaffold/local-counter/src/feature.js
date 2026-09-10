@@ -25,23 +25,23 @@ export const feature = defineFeature({
     defineAction({
       kind: RECIPE_LOCAL_ACTION_KIND,
       capability: null,
-      conditionalAccess: [{
-        capability: access.moderators,
-        when: { argument: "operation", exceptValues: ["show"] }
-      }],
+      // Opt-in enforcement and catalog access come from these same rules.
+      // conditionalAccess alone is metadata and still needs an explicit guard.
+      modePolicy: {
+        rules: [{
+          capability: access.moderators,
+          when: { argument: "operation", exceptValues: ["show"] }
+        }],
+        deniedOutput: { message: UPDATE_DENIED }
+      },
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
         operation: schema.enum(OPERATIONS, { optional: true, default: "show" })
       }),
-      uses: { services: ["authorization", "state"] },
+      uses: { services: ["state"] },
       async execute(ctx, { operation }) {
-        if (
-          operation !== "show" &&
-          !await ctx.authorization.allows(access.moderators)
-        ) {
-          return { output: { message: UPDATE_DENIED }, effects: [] };
-        }
-
+        // The mode policy ran before this code. Declare authorization and use
+        // ctx.authorization.allows() for privileged side effects in public modes.
         const score = ctx.state.boundedCounter("score", "shared");
         let value;
         if (operation === "plus") value = await score.increment();

@@ -155,6 +155,40 @@ function validateFeatureEffects(action, result, context) {
   }
 }
 
+async function enforceModePolicy(action, invocation, context, triggerKind) {
+  if (action.modePolicy === null) return null;
+  if (triggerKind !== "command") {
+    throw new ActionRegistryError("Mode policies support command triggers only.", {
+      status: 500, code: "action_mode_policy_trigger_unsupported"
+    });
+  }
+  for (const { capability, when } of action.modePolicy.rules) {
+    const value = invocation.args[when.argument];
+    const matches = value !== undefined && (when.values
+      ? when.values.includes(value)
+      : !when.exceptValues.includes(value));
+    if (!matches) continue;
+    if (typeof context.authorize !== "function") {
+      throw new ActionRegistryError("Mode policy requires an authorization policy.", {
+        status: 500, code: "action_authorizer_missing"
+      });
+    }
+    const authorized = await context.authorize({ capability, invocation });
+    if (typeof authorized !== "boolean") {
+      throw new ActionRegistryError("Mode policy authorization returned an invalid result.", {
+        status: 500, code: "action_authorizer_result_invalid"
+      });
+    }
+    if (!authorized) {
+      return normalizedResult({
+        output: action.modePolicy.deniedOutput,
+        effects: []
+      }, action.kind);
+    }
+  }
+  return null;
+}
+
 export async function executeAction(registry, input, context = {}) {
   const triggerKind = context.triggerKind ?? "command";
   if (!["command", "event", "schedule"].includes(triggerKind)) {
@@ -215,7 +249,11 @@ export async function executeAction(registry, input, context = {}) {
   }
 
   const featureAction = isBoundFeatureActionDefinition(action);
-  if (featureAction) await enforceFeatureCooldown(action, invocation, context);
+  if (featureAction) {
+    const denial = await enforceModePolicy(action, invocation, context, triggerKind);
+    if (denial !== null) return denial;
+    await enforceFeatureCooldown(action, invocation, context);
+  }
   const value = featureAction
     ? await action.execute(
       createFeatureActionContext(action, invocation, context),

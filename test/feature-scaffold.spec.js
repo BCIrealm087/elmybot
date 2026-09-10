@@ -95,11 +95,13 @@ describe("Feature scaffold templates", () => {
 
     expect(shared.featureSource).toContain('supportedOrigins: ["discord", "twitch"]');
     expect(shared.testSource).toContain('twitch.commandText("!hype")');
-    expect(local.featureSource).toContain('services: ["authorization", "state"]');
+    expect(local.featureSource).toContain('services: ["state"]');
+    expect(local.featureSource).toContain("modePolicy:");
+    expect(local.testSource).toContain("runCapabilityCases");
     expect(local.testSource).toContain("keeps scores local while protecting updates");
     expect(shareable.featureSource).toContain('id: "score"');
     expect(shareable.featureSource).toContain(
-      'services: ["authorization", "shareableState"]'
+      'services: ["shareableState"]'
     );
     expect(shareable.featureSource).not.toContain("adoptLegacyIntegrationState");
     expect(shareable.testSource).toContain("defaultTestLink");

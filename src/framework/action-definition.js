@@ -1,4 +1,5 @@
 import { isRegisteredCapability } from "./access.js";
+import { createActionResult } from "../integrations/contracts.js";
 import {
   schema,
   isSchema,
@@ -117,29 +118,30 @@ function onlyFields(value, allowed, path) {
   if (unknown) throw new TypeError(`Unsupported ${path} field: \`${unknown}\`.`);
 }
 
-function normalizeConditionalAccess(value, input, uses) {
+function normalizeConditionalAccess(value, input, uses, name = "conditionalAccess") {
   if (value === undefined) return Object.freeze([]);
   if (!Array.isArray(value) || value.length > MAX_CONDITIONAL_ACCESS_RULES) {
     throw new TypeError(
-      `Action conditionalAccess must be an array of at most ` +
+      `Action ${name} must be an array of at most ` +
       `${MAX_CONDITIONAL_ACCESS_RULES} rules.`
     );
   }
-  if (value.length > 0 && !uses.services.includes("authorization")) {
+  if (name === "conditionalAccess" && value.length > 0 &&
+      !uses.services.includes("authorization")) {
     throw new TypeError(
       "Action conditionalAccess requires the `authorization` service."
     );
   }
   return Object.freeze(value.map((entry, index) => {
-    const path = `action conditionalAccess[${index}]`;
-    requirePlainObject(entry, `Action conditionalAccess[${index}] must be an object.`);
+    const path = `action ${name}[${index}]`;
+    requirePlainObject(entry, `Action ${name}[${index}] must be an object.`);
     onlyFields(entry, new Set(["capability", "when"]), path);
     if (typeof entry.capability !== "string") {
-      throw new TypeError(`Action conditionalAccess[${index}] capability is invalid.`);
+      throw new TypeError(`Action ${name}[${index}] capability is invalid.`);
     }
     const when = requirePlainObject(
       entry.when,
-      `Action conditionalAccess[${index}].when must be an object.`
+      `Action ${name}[${index}].when must be an object.`
     );
     onlyFields(
       when,
@@ -150,19 +152,19 @@ function normalizeConditionalAccess(value, input, uses) {
       typeof when.argument !== "string" ||
       !/^[a-z][a-z0-9_]{0,63}$/.test(when.argument)
     ) {
-      throw new TypeError(`Action conditionalAccess[${index}] argument is invalid.`);
+      throw new TypeError(`Action ${name}[${index}] argument is invalid.`);
     }
     const field = objectSchemaField(input, when.argument);
     if (!field || !CONDITIONAL_ACCESS_FIELD_KINDS.has(field.kind)) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] argument must name a primitive input field.`
+        `Action ${name}[${index}] argument must name a primitive input field.`
       );
     }
     const hasValues = when.values !== undefined;
     const hasExceptValues = when.exceptValues !== undefined;
     if (hasValues === hasExceptValues) {
       throw new TypeError(
-        `Action conditionalAccess[${index}].when must contain exactly one of ` +
+        `Action ${name}[${index}].when must contain exactly one of ` +
         "values or exceptValues."
       );
     }
@@ -174,7 +176,7 @@ function normalizeConditionalAccess(value, input, uses) {
       candidates.length > MAX_CONDITIONAL_ACCESS_VALUES
     ) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] ${matchField} must contain between 1 and ` +
+        `Action ${name}[${index}] ${matchField} must contain between 1 and ` +
         `${MAX_CONDITIONAL_ACCESS_VALUES} entries.`
       );
     }
@@ -183,18 +185,18 @@ function normalizeConditionalAccess(value, input, uses) {
       !["string", "number", "boolean"].includes(typeof candidate)
     )) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] ${matchField} must be primitive values.`
+        `Action ${name}[${index}] ${matchField} must be primitive values.`
       );
     }
     let values;
     try {
       values = candidates.map((candidate) => field.parse(candidate, {
-        path: `conditionalAccess[${index}].when.${matchField}`
+        path: `${name}[${index}].when.${matchField}`
       }));
     } catch (cause) {
       if (cause instanceof SchemaValidationError) {
         throw new TypeError(
-          `Action conditionalAccess[${index}] contains a value rejected by its ` +
+          `Action ${name}[${index}] contains a value rejected by its ` +
           "input field.",
           { cause }
         );
@@ -203,7 +205,7 @@ function normalizeConditionalAccess(value, input, uses) {
     }
     if (new Set(values.map((candidate) => JSON.stringify(candidate))).size !== values.length) {
       throw new TypeError(
-        `Action conditionalAccess[${index}] ${matchField} must be unique.`
+        `Action ${name}[${index}] ${matchField} must be unique.`
       );
     }
     return Object.freeze({
@@ -216,10 +218,27 @@ function normalizeConditionalAccess(value, input, uses) {
   }));
 }
 
+function normalizeModePolicy(value, input, conditionalAccess) {
+  if (value === null || value === undefined) return null;
+  if (conditionalAccess !== undefined) {
+    throw new TypeError("Use either modePolicy or conditionalAccess, not both.");
+  }
+  requirePlainObject(value, "Action modePolicy must be an object.");
+  onlyFields(value, new Set(["rules", "deniedOutput"]), "action modePolicy");
+  if (!Array.isArray(value.rules) || value.rules.length === 0) {
+    throw new TypeError("Action modePolicy.rules must contain at least one rule.");
+  }
+  const rules = normalizeConditionalAccess(value.rules, input, {}, "modePolicy.rules");
+  requirePlainObject(value.deniedOutput, "Action modePolicy.deniedOutput is required.");
+  const { output } = createActionResult({ output: value.deniedOutput });
+  return Object.freeze({ rules, deniedOutput: output });
+}
+
 export function defineAction({
   kind,
   capability = null,
   conditionalAccess,
+  modePolicy = null,
   supportedOrigins,
   input = schema.object({}),
   uses = {},
@@ -256,10 +275,12 @@ export function defineAction({
   if (typeof execute !== "function") throw new TypeError("Action execute must be a function.");
 
   const normalizedUses = normalizeUses(uses);
+  const normalizedModePolicy = normalizeModePolicy(modePolicy, input, conditionalAccess);
   return markFrameworkDefinition({
     kind,
     capability,
-    conditionalAccess: normalizeConditionalAccess(
+    modePolicy: normalizedModePolicy,
+    conditionalAccess: normalizedModePolicy?.rules ?? normalizeConditionalAccess(
       conditionalAccess,
       input,
       normalizedUses

@@ -291,6 +291,7 @@ defineAction({
   kind: "integration.example.run.v1",
   capability: null,
   conditionalAccess: [],
+  modePolicy: null,
   supportedOrigins: ["discord", "twitch"],
   input: schema.object({}),
   uses: {
@@ -346,7 +347,7 @@ value must pass that field's schema. `values` matches the listed normalized
 values. `exceptValues` matches when the argument is present and its normalized
 value is not listed; an omitted optional argument does not match. A declaration
 contains at most 20 rules and each rule at most 20 unique values; all are
-normalized and frozen. A non-empty declaration requires the `authorization`
+normalized and frozen. An explicit non-empty `conditionalAccess` declaration requires the `authorization`
 service. Registry composition rejects unregistered conditional capabilities.
 
 This metadata documents argument-dependent access; it does not authorize by
@@ -354,6 +355,51 @@ itself. Feature code MUST still call `authorization.allows()` before performing
 the protected mode. Keeping the runtime check explicit preserves custom denial
 responses while making the intended policy visible to review and generated
 documentation.
+
+### Opt-in enforced command modes
+
+For simple argument-based command permissions, `modePolicy` is an optional
+authoritative policy. It is distinct from metadata-only `conditionalAccess`:
+
+```js
+modePolicy: {
+  rules: [{
+    capability: access.moderators,
+    when: { argument: "operation", exceptValues: ["show"] }
+  }],
+  deniedOutput: { message: "Only moderators can change the score." }
+}
+```
+
+- Omission or `null` preserves existing execution. Non-null policies contain
+  one to 20 rules with the same primitive-field validation and normalized
+  matching semantics as `conditionalAccess`. They MUST NOT be combined with
+  an explicit `conditionalAccess` declaration. Their rules supply that catalog
+  metadata automatically and are marked as enforced.
+- `deniedOutput` is a required static JSON object accepted by the normal action
+  result contract; it is copied and deeply frozen. It is not a callback and
+  cannot read state or return effects. Command renderers MUST support it.
+- The runtime first parses action input (including defaults), then checks the
+  baseline capability, then evaluates matching policy rules in declaration
+  order. All matching capabilities are required. An omitted optional argument
+  without a default matches neither rule form; an applied default participates
+  in matching. Invalid input fails before any permission decision.
+- Each matching rule consults the existing platform authorizer. A missing
+  authorizer, thrown error, or non-boolean decision fails closed. A `false`
+  decision returns `{ output: deniedOutput, effects: [] }` immediately, before
+  cooldown claims, context-service use, or feature execution. An ordinary
+  baseline denial still raises `action_forbidden`.
+- Enforcement requires no `authorization` service declaration. Explicit
+  `ctx.authorization.allows()` checks still require that service.
+- This first policy form is command-only. Registry composition rejects event
+  and schedule bindings to a policy action, and execution rejects non-command
+  triggers. Durable grant-at-creation and actorless event semantics are not
+  inferred from command modes. Policy-backed Discord commands must be guild-only.
+- Custom parsing, data-dependent decisions, and privileged side effects inside
+  public modes remain available through metadata-only `conditionalAccess` and
+  explicit `ctx.authorization.allows()`. Existing actions are not converted
+  automatically; in particular, a public `check` may still remember a game only
+  for a moderator.
 
 The action executor receives already normalized `args`. It MUST return a value
 accepted by the existing `createActionResult()` contract:
