@@ -431,6 +431,8 @@ explicit catalog-regeneration action.
 
 - [First-feature quickstart](docs/feature-quickstart.md)
 - [Feature authoring reference and cookbooks](docs/feature-authoring.md)
+- [When to ask for framework help](docs/feature-authoring.md#ask-for-framework-help-when)
+- [Feature operator checklist](docs/feature-operator-checklist.md)
 - [Cross-platform contracts](docs/cross-platform-contracts.md)
 - [Action registry](docs/action-registry.md)
 - [Integration linking and routes](docs/integration-linking.md)

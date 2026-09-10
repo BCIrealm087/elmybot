@@ -16,6 +16,10 @@ assesses how approachable each step felt.
 > contributor-experience record; they do not describe the current storage
 > behavior. See [Shareable-state Step 12](#shareable-state-step-12-migrate-fundeaths)
 > and the [current state-ownership guide](feature-state.md#choose-the-state-boundary-first).
+> The current feature includes a maintainer-owned legacy adoption marker;
+> new contributors should use the [migration-free namespace example](feature-authoring.md#declare-and-resolve-a-shareable-state-namespace)
+> and request [framework help](feature-authoring.md#ask-for-framework-help-when)
+> when preserving already deployed data.
 
 The initially requested behavior was:
 

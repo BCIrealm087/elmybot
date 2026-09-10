@@ -68,6 +68,9 @@ export const feature = defineFeature({
     label: "Per-game death counts",
     schemaVersion: 1,
     collisionSummary: { kind: "entry_count" },
+    // Maintainer-owned migration for previously deployed deaths ledgers.
+    // New features omit this marker; use the shareable-counter scaffold.
+    // See this package's README for the migration handoff and fresh-state example.
     adoptLegacyIntegrationState: true
   }],
   actions: [

@@ -870,6 +870,42 @@ denials, and command behavior remain unchanged. Use `runCapabilityCases()` for
 these cases too, asserting the public reply and the intentionally different
 remembered-state results.
 
+## Ask for framework help when
+
+You can independently build and test commands using the documented schemas,
+native bindings, routes, schedules, permissions, and state services. Routine
+behavior development needs no live Twitch channel, Discord server, OAuth
+credentials, or deployment access.
+
+Ask a maintainer when the behavior needs:
+
+- a permission or capability the public API cannot express;
+- access to a new external service, credential, or platform operation;
+- an addition or change to the supported framework API; or
+- migration of already deployed data, including changes to its ownership or
+  persisted meaning.
+
+Use the [Framework help issue outline](../.github/ISSUE_TEMPLATE/framework-help.md)
+with four details: intended user behavior, the unsupported operation, who owns
+the state (and whether data already exists), and one small example. A command
+invocation, pseudocode, or focused failing test is enough; an architecture
+proposal is not required. You can also put those details in a draft PR and link
+the relevant feature or test.
+
+Keep developing the supported behavior and record the missing operation in the
+handoff. Maintainers can point to an existing helper or coordinate the framework
+change, its compatibility review, and infrastructure tests. Keep those tests
+with the framework change; use the feature runtime for the command's behavior.
+The [API change checklist](framework-api.md#change-checklist) is the maintainer's
+reference for public API work.
+
+For new shareable commands, use the `shareable-counter` scaffold or the
+[migration-free namespace example](#declare-and-resolve-a-shareable-state-namespace).
+`fun.deaths` sets `adoptLegacyIntegrationState: true` solely to preserve its
+previously deployed ledger. Do not copy that marker into a new feature or
+remove it from `deaths` as cleanup; existing-data changes need the migration
+handoff above.
+
 ## Before opening a pull request
 
 - Keep the feature module focused on one coherent capability.
@@ -885,3 +921,12 @@ remembered-state results.
   complete test suite, workspace validation, lint, boundary, and catalog checks.
 - Do not add secrets, raw platform tokens, direct external `fetch` calls, or
   storage-layout knowledge to feature code.
+
+In the PR description, summarize the user-visible behavior, validation results,
+and any unresolved [framework-help request](#ask-for-framework-help-when).
+Identify operational changes by name, such as a new command registration,
+configuration key, OAuth scope, or reviewed migration; include no credential
+values. Link the [feature operator checklist](feature-operator-checklist.md)
+for the person deploying the change. If no operational change is needed beyond
+the normal Worker deployment, say so. Contributors can hand off a locally
+verified feature without deploying it or completing live onboarding.

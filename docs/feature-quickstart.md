@@ -219,6 +219,20 @@ raw platform tokens, direct external `fetch` calls, or knowledge of storage
 layouts. Feature code should express behavior through the framework helpers and
 its declared services.
 
+## 6. Hand off the feature
+
+In your PR, describe the behavior, checks you ran, and any operational changes.
+Link the [operator checklist](feature-operator-checklist.md) for deployment,
+OAuth, secrets, and Discord registration. You can develop, test, and hand off
+ordinary feature behavior without a live Twitch channel or Discord server.
+
+If you need an unsupported capability, a new external service, a public API
+change, or migration of existing data, use
+[Ask for framework help when](feature-authoring.md#ask-for-framework-help-when).
+Its issue outline needs only the intended behavior, unsupported operation,
+state ownership, and a small example. Continue the supported parts while the
+maintainer helps resolve the gap.
+
 ## Read deeper only when necessary
 
 - Use the [feature authoring reference](feature-authoring.md) for complete

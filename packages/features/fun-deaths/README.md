@@ -1,5 +1,13 @@
 # `@elmybot/feature-fun-deaths`
 
+> **Existing-data migration example:** this package's
+> `adoptLegacyIntegrationState: true` preserves previously deployed death
+> counts. New features must omit it. Start with the `shareable-counter`
+> scaffold or the [migration-free namespace example](../../../docs/feature-authoring.md#declare-and-resolve-a-shareable-state-namespace).
+> Changes to this adoption path require a
+> [maintainer migration handoff](../../../docs/feature-authoring.md#ask-for-framework-help-when);
+> keep the existing marker when maintaining `deaths`.
+
 Tracks one non-negative death count per game. An unlinked Discord server or
 Twitch channel uses its own standalone ledger. When a directional default link
 exists, the selected integration owns the ledger and both directions share
