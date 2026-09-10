@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - codex-feature-experiment
+      - master
   pull_request:
   workflow_dispatch:
 
