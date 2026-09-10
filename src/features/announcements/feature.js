@@ -14,6 +14,11 @@ import {
 
 export const ANNOUNCEMENT_ACTION_KIND = "integration.announcement.publish.v1";
 export const ANNOUNCEMENT_CAPABILITY = "integration.announcement.publish";
+const MESSAGE_LIMITS = Object.freeze({ minLength: 1, maxLength: 2_000 });
+export const TWITCH_ANNOUNCEMENT_TEXT_LIMITS = Object.freeze({
+  ...MESSAGE_LIMITS,
+  maxLength: 500
+});
 export const ANNOUNCEMENT_ROUTE_KINDS = Object.freeze({
   DISCORD_TO_TWITCH: "discord.announce-to-twitch.v1",
   TWITCH_TO_DISCORD: "twitch.announce-to-discord.v1"
@@ -55,7 +60,7 @@ export const announcementsFeature = defineFeature({
       capability: ANNOUNCEMENT_CAPABILITY,
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
-        message: schema.string({ minLength: 1, maxLength: 2_000, trim: true })
+        message: schema.string({ ...MESSAGE_LIMITS, trim: true })
       }),
       uses: {
         routes: Object.values(ANNOUNCEMENT_ROUTE_KINDS),
@@ -86,6 +91,7 @@ export const announcementsFeature = defineFeature({
     discord: [
       discordActionCommand({
         name: "integration_announce_twitch",
+        usage: "/integration_announce_twitch message:Hello everyone!",
         description: "Publish an announcement to linked Twitch channels.",
         availability: "guild",
         deferred: true,
@@ -97,8 +103,7 @@ export const announcementsFeature = defineFeature({
             description: "Message to send to linked Twitch chats.",
             type: "string",
             required: true,
-            minLength: 1,
-            maxLength: 500
+            ...TWITCH_ANNOUNCEMENT_TEXT_LIMITS
           })
         ],
         render: discordTextResult
@@ -107,9 +112,10 @@ export const announcementsFeature = defineFeature({
     twitch: [
       twitchActionCommand({
         name: "announce",
+        usage: "!announce Hello everyone!",
         description: "Publishes an announcement to linked Discord channels.",
         actionKind: ANNOUNCEMENT_ACTION_KIND,
-        parse: twitchRestText({ arg: "message", minLength: 1, maxLength: 2_000 }),
+        parse: twitchRestText({ arg: "message", ...MESSAGE_LIMITS }),
         render: twitchTextResult
       })
     ]

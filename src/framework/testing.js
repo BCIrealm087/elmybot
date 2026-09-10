@@ -12,6 +12,7 @@ import {
   SCHEDULED_ACTION_COMMAND_TYPE
 } from "./command-common.js";
 import { createFeatureRegistry } from "./feature-registry.js";
+import { formatCommandInputError } from "./command-input-error.js";
 import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
@@ -931,7 +932,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
 
     const definition = commandDefinition("twitch", parsed.name);
 
-    return command("twitch", parsed.name, {
+    return await command("twitch", parsed.name, {
       ...input,
       args: definition.parse.parse(parsed.argsText)
     });
@@ -1042,6 +1043,9 @@ export function createFeatureTestRuntime(featureOrFeatures, {
 
   return Object.freeze({
     registry,
+    inputError: (platform, name, error) => formatCommandInputError(
+      error, commandDefinition(requirePlatform(platform), name)
+    ),
     discord: Object.freeze({ command: (name, input) => command("discord", name, input) }),
     twitch: Object.freeze({
       command: (name, input) => command("twitch", name, input),

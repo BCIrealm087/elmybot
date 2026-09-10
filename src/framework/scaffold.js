@@ -255,6 +255,7 @@ export const feature = defineFeature({
         name: "${identity.commandName}",
         description: "Show or update the score.",
         availability: "guild",
+        usage: "/${identity.commandName} operation:show",
         actionKind: ${identity.constantName},
         options: [
           discordOption({
@@ -273,11 +274,11 @@ export const feature = defineFeature({
         name: "${identity.commandName}",
         description: "Show or update the score.",
         actionKind: ${identity.constantName},
+        usage: "!${identity.commandName} show",
         parse: twitchTokens([{
           arg: "operation",
           type: "string",
-          optional: true,
-          default: "show"
+          optional: true
         }]),
         render: twitchTextResult
       })
@@ -403,11 +404,15 @@ describe("${identity.featureId}", () => {
   it("rejects unsupported operations from raw Twitch text", async () => {
     const runtime = createFeatureTestRuntime(feature);
 
-    await expect(runtime.twitch.commandText("!${identity.commandName} multiply", {
+    const error = await runtime.twitch.commandText("!${identity.commandName} multiply", {
       actor: twitchTestModerator()
-    })).rejects.toMatchObject({
-      code: "action_arguments_invalid"
-    });
+    }).catch((error) => error);
+    expect(error).toMatchObject({ code: "action_arguments_invalid" });
+    expect(runtime.inputError("twitch", "${identity.commandName}", error)).toBe(
+      "!${identity.commandName}: operation must be one of: show, plus, minus, reset. " +
+      "Example: !${identity.commandName} show"
+    );
+    (await runtime.twitch.commandText("!${identity.commandName} show")).toReply("Score: 0");
   });
 
 ${protectedCounterTest(identity)}
@@ -486,11 +491,15 @@ describe("${identity.featureId}", () => {
   it("rejects unsupported operations from raw Twitch text", async () => {
     const runtime = createFeatureTestRuntime(feature);
 
-    await expect(runtime.twitch.commandText("!${identity.commandName} multiply", {
+    const error = await runtime.twitch.commandText("!${identity.commandName} multiply", {
       actor: twitchTestModerator()
-    })).rejects.toMatchObject({
-      code: "action_arguments_invalid"
-    });
+    }).catch((error) => error);
+    expect(error).toMatchObject({ code: "action_arguments_invalid" });
+    expect(runtime.inputError("twitch", "${identity.commandName}", error)).toBe(
+      "!${identity.commandName}: operation must be one of: show, plus, minus, reset. " +
+      "Example: !${identity.commandName} show"
+    );
+    (await runtime.twitch.commandText("!${identity.commandName} show")).toReply("Score: 0");
   });
 
 ${protectedCounterTest(identity)}

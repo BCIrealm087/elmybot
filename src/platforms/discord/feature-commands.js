@@ -1,5 +1,6 @@
 import { ActionRegistryError } from "../../actions/index.js";
 import { SchemaValidationError } from "../../framework/index.js";
+import { formatCommandInputError } from "../../framework/command-input-error.js";
 import { discordOptionDescriptor } from "../../framework/internal.js";
 import { SCHEDULED_ACTION_COMMAND_TYPE } from "../../framework/command-common.js";
 import { ephemeralData } from "./common.js";
@@ -131,14 +132,13 @@ function nativeContext(interaction, env, definition, runtime) {
   });
 }
 
-function userFacingError(error, commandName) {
+function userFacingError(error, definition) {
+  const inputError = formatCommandInputError(error, definition);
+  if (inputError !== null) return ephemeralData(inputError);
   if (error instanceof DiscordFeatureSchedulingError) {
     return ephemeralData(error.message);
   }
-  if (error instanceof SchemaValidationError) return ephemeralData(error.message);
-  if (error instanceof ActionRegistryError && error.code === "action_arguments_invalid") {
-    return ephemeralData(error.message);
-  }
+  const commandName = definition.name;
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
     return ephemeralData(`You are not authorized to use /${commandName}.`);
   }
@@ -219,7 +219,7 @@ export function compileDiscordFeatureCommands(definitions, actions, schedules = 
             normalized
           );
         } catch (error) {
-          const response = userFacingError(error, definition.name);
+          const response = userFacingError(error, definition);
           if (response) return response;
           throw error;
         }

@@ -173,6 +173,63 @@ helps.
   delivery and retry.
 - Configuration and state keys match `^[a-z][a-z0-9_-]{0,63}$`.
 
+## Input constraints and useful corrections
+
+Keep the action schema authoritative. Reuse small local constants for shared
+constraints, with explicit overrides where a platform or destination differs:
+
+```js
+const MESSAGE_LIMITS = Object.freeze({ minLength: 1, maxLength: 2_000 });
+
+// In the semantic action's input:
+schema.object({ message: schema.string({ ...MESSAGE_LIMITS, trim: true }) });
+
+// Twitch chat supplies the rest of the line for a Discord destination:
+twitchRestText({ arg: "message", ...MESSAGE_LIMITS });
+
+// A Discord option sending to Twitch needs the smaller destination limit:
+discordOption({
+  arg: "message", name: "message", description: "Message to send.",
+  type: "string", required: true, ...MESSAGE_LIMITS, maxLength: 500
+});
+```
+
+The installed [announcements feature](../src/features/announcements/feature.js)
+uses this pattern and shares its Twitch destination limits with the scheduled
+variant. The counter scaffolds declare their operation choices and default only
+in the action schema; their Twitch parser just extracts the optional string.
+
+Add a `usage` example to each command that accepts arguments. Every action,
+native, and scheduled command helper accepts it:
+
+```js
+// On the Discord command:
+usage: "/deaths operation:check game:Dark Souls"
+// On the Twitch command:
+usage: '!deaths check "Dark Souls"'
+```
+
+The example must use that command's platform prefix and name, stay on one line,
+and fit within 160 characters. Test that it works; metadata validation checks
+its shape, not whether its arguments are semantically valid. It defaults to
+`null` and does not change parsing, native options, or permissions. The generated
+catalog includes supplied examples.
+
+Schema and parser failures now name the command, the visible argument, and the
+relevant requirement, then include the example. For example:
+`!score: operation must be one of: show, plus, minus, reset. Example: !score show`.
+Discord uses the option's `name`, even when its semantic `arg` differs; Twitch
+quote and extra-token errors explain how to quote multi-word values. Original
+error codes, messages, and paths such as `arguments.operation` remain available
+for diagnostics. Author-written domain replies should provide the same useful
+correction; they are not inferred from action output.
+
+`deaths` remains the only installed choice-or-integer command. Its numeric
+syntax, game normalization, and remembered-game rules therefore stay local.
+Consider a reusable parser only after another command demonstrates the same
+need. Token quoting, rest-of-line text, Discord role selection, and native
+responses remain explicit platform choices.
+
 ## The feature test kit
 
 Import test helpers from the test-only module:
@@ -207,6 +264,7 @@ facilities:
 | Discord command | `runtime.discord.command(name, input)` |
 | Twitch command | `runtime.twitch.command(name, input)` |
 | Raw Twitch command text | `runtime.twitch.commandText(text, input)` |
+| Input-error reply text | `runtime.inputError(platform, commandName, error)` |
 | Domain event | `runtime.event(kind, input)` |
 | Configuration | `runtime.config.set(group, featureId, key, value)` |
 | State inspection | `runtime.state.get(group, featureId, key)` |
@@ -303,6 +361,27 @@ capabilities; the test runtime uses the explicit capability list.
 `twitchTokens()` accepts ordinary whitespace-delimited tokens and double-quoted
 multi-word strings. For example, a two-field parser can normalize
 `plus "Dark Souls"` into `{ operation: "plus", game: "Dark Souls" }`.
+
+The runtime still rejects schema and parser failures so tests can inspect their
+diagnostics. Use `runtime.inputError()` on the caught error to check the same
+correction text rendered by the live adapters; it returns `null` for unrelated
+errors. For example, the counter recipes test both the invalid input and its
+suggested correction:
+
+```js
+const error = await runtime.twitch.commandText("!score multiply")
+  .catch((error) => error);
+expect(error).toMatchObject({ code: "action_arguments_invalid" });
+expect(runtime.inputError("twitch", "score", error)).toBe(
+  "!score: operation must be one of: show, plus, minus, reset. Example: !score show"
+);
+(await runtime.twitch.commandText("!score show")).toReply("Score: 0");
+```
+
+When invalid input could affect state, seed a nonzero value and read it back
+after the error. Check remembered selections separately where they matter.
+`inputError()` formats an existing error; it does not run Discord option
+extraction or replace adapter integration tests.
 
 ### Choose tests by feature behavior
 

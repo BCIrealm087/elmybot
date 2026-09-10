@@ -26,7 +26,9 @@ describe("Generated feature catalog", () => {
     expect(markdown).toContain("`@elmybot/feature-alive` | `core.alive` | yes");
     expect(markdown).toContain("`core.alive` | `@elmybot/feature-alive`");
     expect(markdown).toContain("`/counter`");
-    expect(markdown).toContain("Command | Type | Access | Description");
+    expect(markdown).toContain("Command | Type | Access | Description | Example");
+    expect(markdown).toContain('`!deaths check "Dark Souls"`');
+    expect(markdown).toContain("`/deaths operation:check game:Dark Souls`");
     expect(markdown).toContain(
       "fun.deaths | `/deaths` | action | public; framework.moderators when " +
       "`operation` is present and is not `check`"

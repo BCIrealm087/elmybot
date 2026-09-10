@@ -6,8 +6,8 @@ import { SCHEDULER_JOB_SCHEMA_VERSION } from "../../message-scheduling/index.js"
 import { formatInterval } from "./common.js";
 
 export class DiscordFeatureSchedulingError extends Error {
-  constructor(message) {
-    super(message);
+  constructor(message, { cause } = {}) {
+    super(message, { cause });
     this.name = "DiscordFeatureSchedulingError";
     this.code = "discord_feature_scheduling_error";
   }
@@ -74,7 +74,8 @@ export async function scheduleDiscordFeatureAction({
     });
   } catch (error) {
     throw new DiscordFeatureSchedulingError(
-      error instanceof Error ? error.message : "Scheduled action arguments are invalid."
+      error instanceof Error ? error.message : "Scheduled action arguments are invalid.",
+      { cause: error }
     );
   }
   const interactionId = String(interaction.id ?? "").trim();

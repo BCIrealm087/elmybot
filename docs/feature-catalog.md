@@ -33,18 +33,18 @@ Framework API: v1.
 
 ## Commands
 
-| Feature | Command | Type | Access | Description |
-| --- | --- | --- | --- | --- |
-| core.alive | `/alive` | action | public | Replies if alive. |
-| fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. |
-| fun.counter | `/counter` | action | public | Increment this server's feature counter. |
-| integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. |
-| discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. |
-| integrations.scheduled-twitch-announcements | `/integration_schedule_twitch` | scheduled action | integration.announcement.publish | Schedule a recurring message in linked Twitch chats. |
-| core.alive | `!alive` | action | public | Replies if alive. |
-| fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. |
-| fun.counter | `!counter` | action | public | Increment this channel's feature counter. |
-| integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. |
+| Feature | Command | Type | Access | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| core.alive | `/alive` | action | public | Replies if alive. | — |
+| fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `/deaths operation:check game:Dark Souls` |
+| fun.counter | `/counter` | action | public | Increment this server's feature counter. | — |
+| integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. | `/integration_announce_twitch message:Hello everyone!` |
+| discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. | `/config_allow_role role:@Moderators` |
+| integrations.scheduled-twitch-announcements | `/integration_schedule_twitch` | scheduled action | integration.announcement.publish | Schedule a recurring message in linked Twitch chats. | `/integration_schedule_twitch message:Hello everyone! min_interval:600 max_interval:900` |
+| core.alive | `!alive` | action | public | Replies if alive. | — |
+| fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `!deaths check "Dark Souls"` |
+| fun.counter | `!counter` | action | public | Increment this channel's feature counter. | — |
+| integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. | `!announce Hello everyone!` |
 
 ## Actions
 

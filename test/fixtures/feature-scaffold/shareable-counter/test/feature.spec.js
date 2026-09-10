@@ -68,11 +68,15 @@ describe("recipe.shareable", () => {
   it("rejects unsupported operations from raw Twitch text", async () => {
     const runtime = createFeatureTestRuntime(feature);
 
-    await expect(runtime.twitch.commandText("!shareable multiply", {
+    const error = await runtime.twitch.commandText("!shareable multiply", {
       actor: twitchTestModerator()
-    })).rejects.toMatchObject({
-      code: "action_arguments_invalid"
-    });
+    }).catch((error) => error);
+    expect(error).toMatchObject({ code: "action_arguments_invalid" });
+    expect(runtime.inputError("twitch", "shareable", error)).toBe(
+      "!shareable: operation must be one of: show, plus, minus, reset. " +
+      "Example: !shareable show"
+    );
+    (await runtime.twitch.commandText("!shareable show")).toReply("Score: 0");
   });
 
   it("checks each protected mode with and without the moderator capability", async () => {

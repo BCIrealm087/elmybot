@@ -37,6 +37,17 @@ export function requireActionKind(value) {
   return value;
 }
 
+export function normalizeCommandUsage(usage, name, platform) {
+  if (usage === undefined || usage === null) return null;
+  const prefix = `${platform === "discord" ? "/" : "!"}${name.toLowerCase()}`;
+  if (typeof usage !== "string" || usage.length > 160 ||
+      /[\r\n\u2028\u2029]/.test(usage) ||
+      !(usage === prefix || usage.startsWith(`${prefix} `))) {
+    throw new TypeError("Command usage must be a single-line example of this command (up to 160 characters).");
+  }
+  return usage.trimEnd();
+}
+
 export function requireCapability(value) {
   if (value !== null && typeof value !== "string") {
     throw new TypeError("Command capability is invalid.");

@@ -160,6 +160,12 @@ const result = await runtime.twitch.commandText(
 result.toReply("Dark Souls deaths: 1");
 ```
 
+For commands with arguments, supply one valid `usage` example per platform.
+Test a useful correction with `runtime.inputError(platform, name, error)` and
+then invoke the suggested input. Keep shared limits in local constants and
+override platform-specific constraints explicitly; see
+[input constraints and useful corrections](feature-authoring.md#input-constraints-and-useful-corrections).
+
 Those tests belong to the command author. Collision selection, stale-snapshot
 retries, revocation forks, CSRF, and legacy adoption remain framework or
 migration evidence unless the contribution changes those behaviors. Platform

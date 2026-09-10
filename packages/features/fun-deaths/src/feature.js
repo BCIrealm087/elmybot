@@ -16,9 +16,21 @@ export const FUN_DEATHS_ACTION_KIND = "fun.deaths.manage.v1";
 
 const OPERATIONS = Object.freeze(["check", "plus", "minus", "reset"]);
 const LAST_GAME_KEY = "last_game";
+const TEXT_LIMITS = Object.freeze({ minLength: 1, maxLength: 80 });
+const OPTIONAL_TEXT = Object.freeze({ ...TEXT_LIMITS, trim: true, optional: true });
+const MAX_COUNT = Number.MAX_SAFE_INTEGER;
+const USAGE = Object.freeze({
+  discord: "/deaths operation:check game:Dark Souls",
+  twitch: '!deaths check "Dark Souls"'
+});
 const OPERATION_HELP =
-  "check, plus, minus, reset, or a non-negative safe integer";
-const OPERATION_ERROR = `Choose ${OPERATION_HELP}.`;
+  `${OPERATIONS.join(", ")}, or a whole number from 0 to ${MAX_COUNT} (digits only)`;
+
+function operationError(platform, { gameWithoutOperation = false } = {}) {
+  const command = platform === "discord" ? "/deaths" : "!deaths";
+  const suffix = gameWithoutOperation ? " before naming a game" : "";
+  return `${command}: operation must be ${OPERATION_HELP}${suffix}. Example: ${USAGE[platform]}`;
+}
 
 function displayName(game) {
   return game.trim().replace(/\s+/g, " ");
@@ -43,7 +55,7 @@ function parseOperation(operation) {
   if (OPERATIONS.includes(operation)) return Object.freeze({ kind: operation });
   if (!/^\d+$/.test(operation)) return null;
   const value = Number(operation);
-  if (!Number.isSafeInteger(value)) return null;
+  if (!Number.isSafeInteger(value) || value > MAX_COUNT) return null;
   return Object.freeze({ kind: "set", value });
 }
 
@@ -73,18 +85,8 @@ export const feature = defineFeature({
       ],
       supportedOrigins: ["discord", "twitch"],
       input: schema.object({
-        operation: schema.string({
-          minLength: 1,
-          maxLength: 80,
-          trim: true,
-          optional: true
-        }),
-        game: schema.string({
-          minLength: 1,
-          maxLength: 80,
-          trim: true,
-          optional: true
-        })
+        operation: schema.string(OPTIONAL_TEXT),
+        game: schema.string(OPTIONAL_TEXT)
       }),
       uses: {
         services: ["authorization", "shareableState", "state"]
@@ -93,7 +95,7 @@ export const feature = defineFeature({
         if (game !== undefined && operation === undefined) {
           return {
             output: {
-              message: `Choose ${OPERATION_HELP} before naming a game.`
+              message: operationError(ctx.origin.group.platform, { gameWithoutOperation: true })
             },
             effects: []
           };
@@ -101,7 +103,7 @@ export const feature = defineFeature({
 
         const selectedOperation = parseOperation(operation);
         if (selectedOperation === null) {
-          return { output: { message: OPERATION_ERROR }, effects: [] };
+          return { output: { message: operationError(ctx.origin.group.platform) }, effects: [] };
         }
         const isModerator = await ctx.authorization.allows(access.moderators);
         if (selectedOperation.kind !== "check" && !isModerator) {
@@ -156,6 +158,7 @@ export const feature = defineFeature({
     discord: [
       discordActionCommand({
         name: "deaths",
+        usage: USAGE.discord,
         description: "Check or update a game's local or shared death count.",
         availability: "guild",
         actionKind: FUN_DEATHS_ACTION_KIND,
@@ -166,8 +169,7 @@ export const feature = defineFeature({
             description: "Check, plus, minus, reset, or set a non-negative count.",
             type: "string",
             required: false,
-            minLength: 1,
-            maxLength: 80
+            ...TEXT_LIMITS
           }),
           discordOption({
             arg: "game",
@@ -175,8 +177,7 @@ export const feature = defineFeature({
             description: "Optional game; requires an operation.",
             type: "string",
             required: false,
-            minLength: 1,
-            maxLength: 80
+            ...TEXT_LIMITS
           })
         ],
         render: discordTextResult
@@ -185,6 +186,7 @@ export const feature = defineFeature({
     twitch: [
       twitchActionCommand({
         name: "deaths",
+        usage: USAGE.twitch,
         description: "Check or update a game's local or shared death count.",
         actionKind: FUN_DEATHS_ACTION_KIND,
         parse: twitchTokens([

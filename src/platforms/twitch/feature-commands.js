@@ -1,5 +1,5 @@
 import { ActionRegistryError } from "../../actions/index.js";
-import { SchemaValidationError } from "../../framework/index.js";
+import { formatCommandInputError } from "../../framework/command-input-error.js";
 import {
   createTwitchActionInvocation,
   executeTwitchAction,
@@ -32,11 +32,10 @@ function nativeContext(event, messageId) {
   });
 }
 
-function userFacingError(error, commandName, capability = null) {
-  if (error instanceof SchemaValidationError) return error.message;
-  if (error instanceof ActionRegistryError && error.code === "action_arguments_invalid") {
-    return error.message;
-  }
+function userFacingError(error, definition, capability = null) {
+  const inputError = formatCommandInputError(error, definition);
+  if (inputError !== null) return inputError;
+  const commandName = definition.name;
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
     if (
       capability === "framework.moderators" ||
@@ -93,7 +92,7 @@ export function compileTwitchFeatureCommands(definitions, actions = {}) {
           const args = definition.input.parse(parsed, { path: "arguments" });
           return await definition.execute(nativeContext(event, messageId), args);
         } catch (error) {
-          const response = userFacingError(error, definition.name, capability);
+          const response = userFacingError(error, definition, capability);
           if (response) return response;
           throw error;
         }

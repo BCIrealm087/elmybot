@@ -6,6 +6,7 @@ import {
   markCommandDefinition,
   markTwitchParser,
   normalizeCommandIdentity,
+  normalizeCommandUsage,
   requireActionKind,
   requireCapability,
   requireObjectSchema
@@ -179,6 +180,7 @@ export function twitchTokens(fields) {
 export function twitchActionCommand({
   name,
   description,
+  usage,
   actionKind,
   parse = twitchNoArgs(),
   render = twitchTextResult,
@@ -194,6 +196,7 @@ export function twitchActionCommand({
     platform: "twitch",
     mode: ACTION_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "twitch"),
     actionKind: requireActionKind(actionKind),
     parse,
     render
@@ -203,6 +206,7 @@ export function twitchActionCommand({
 export function twitchNativeCommand({
   name,
   description,
+  usage,
   capability = null,
   parse = twitchNoArgs(),
   input = schema.object({}),
@@ -219,6 +223,7 @@ export function twitchNativeCommand({
     platform: "twitch",
     mode: NATIVE_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "twitch"),
     capability: requireCapability(capability),
     parse,
     input: requireObjectSchema(input),

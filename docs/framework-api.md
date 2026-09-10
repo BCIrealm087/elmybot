@@ -119,6 +119,16 @@ authorization remains available for custom decisions and privileged side
 effects within public modes. This is a compatible API v1 addition, not a change
 to existing action or persisted-kind semantics.
 
+All command helpers accept additive `usage` metadata: a complete example using
+the platform prefix and command name, on one line and at most 160 characters.
+Its default is `null`; it does not change parsing, authorization, or native
+registration. Adapters include it in bounded input-error corrections, and the
+catalog displays it. `SchemaValidationError.reason` adds the bounded validation
+requirement without a diagnostic path; existing `message`, `code`, and `path`
+remain unchanged. See the
+[command contract](command-feature-framework-contract.md#command-definitions)
+and [authoring examples](feature-authoring.md#input-constraints-and-useful-corrections).
+
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
 
@@ -130,6 +140,11 @@ not a production feature dependency. Workspace tests use the equivalent
 identity without exposing production registry infrastructure. Its Twitch runtime accepts either parsed
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
+
+The additive test-only `runtime.inputError(platform, commandName, error)`
+formats an existing schema or parser failure using the live adapters' correction
+text, or returns `null` for unrelated errors. Command execution still rejects
+invalid input, preserving tests that inspect validation codes and paths.
 
 The test-only `runCapabilityCases({ actor, capability, invoke, readState })`
 helper runs the same invocation without and with one capability, records each

@@ -1,4 +1,4 @@
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createFeatureTestRuntime,
   defaultTestLink,
@@ -329,27 +329,61 @@ describe("fun.deaths", () => {
       actor: discordTestActor(),
       args: { game: "Hades" }
     })).toReply(
-      "Choose check, plus, minus, reset, or a non-negative safe integer before naming a game."
+      "/deaths: operation must be check, plus, minus, reset, or a whole number from 0 to " +
+      "9007199254740991 (digits only) before naming a game. " +
+      "Example: /deaths operation:check game:Dark Souls"
     );
   });
 
-  it("rejects unsupported operations", async () => {
-    const { runtime, discordGroup } = linkedRuntime();
-    for (const operation of [
-      "multiply",
-      "-1",
-      "+1",
-      "1.5",
-      "1e3",
-      "9007199254740992"
+  it("corrects unsupported operations on both platforms without changing counts or selection", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    for (const [platform, actor, example] of [
+      ["discord", discordTestModerator(), "/deaths operation:check game:Dark Souls"],
+      ["twitch", twitchTestModerator(), '!deaths check "Dark Souls"']
     ]) {
-      (await runtime.discord.command("deaths", {
-        group: discordGroup,
-        actor: discordTestModerator(),
-        args: { game: "Hades", operation }
-      })).toReply(
-        "Choose check, plus, minus, reset, or a non-negative safe integer."
-      );
+      await runtime[platform].command("deaths", {
+        actor, args: { operation: "7", game: "Hades" }
+      });
+      for (const operation of ["multiply", "-1", "+1", "1.5", "1e3", "9007199254740992"]) {
+        const result = platform === "twitch"
+          ? await runtime.twitch.commandText(`!deaths ${operation} Sekiro`, { actor })
+          : await runtime.discord.command("deaths", {
+            actor, args: { game: "Sekiro", operation }
+          });
+        result.toReply(
+          `${platform === "discord" ? "/" : "!"}deaths: operation must be ` +
+          "check, plus, minus, reset, or a whole number from 0 to " +
+          `9007199254740991 (digits only). Example: ${example}`
+        );
+        expect(result.effects).toEqual([]);
+        (await runtime[platform].command("deaths", { actor })).toReply("Hades deaths: 7");
+        (await runtime[platform].command("deaths", {
+          args: { operation: "check", game: "Sekiro" }
+        })).toReply("Sekiro deaths: 0");
+      }
+      (await runtime[platform].command("deaths", {
+        args: { operation: "check", game: "Dark Souls" }
+      })).toReply("Dark Souls deaths: 0");
     }
+  });
+
+  it("corrects Twitch quoting and game length while preserving the remembered game", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const actor = twitchTestModerator();
+    await runtime.twitch.commandText('!deaths 7 "Dark Souls"', { actor });
+    for (const [text, correction] of [
+      ["!deaths check Dark Souls", "Too many arguments. Put multi-word values in double quotes."],
+      ['!deaths check "Dark Souls', "Close the double quote around multi-word text."],
+      [`!deaths plus ${"a".repeat(81)}`, "game must contain at most 80 characters."]
+    ]) {
+      const error = await runtime.twitch.commandText(text, { actor }).catch((error) => error);
+      expect(runtime.inputError("twitch", "deaths", error)).toBe(
+        `!deaths: ${correction} Example: !deaths check "Dark Souls"`
+      );
+      (await runtime.twitch.commandText("!deaths", { actor })).toReply("Dark Souls deaths: 7");
+    }
+    (await runtime.twitch.commandText('!deaths check "Dark Souls"')).toReply("Dark Souls deaths: 7");
+    (await runtime.twitch.commandText(`!deaths check ${"a".repeat(80)}`))
+      .toReply(`${"a".repeat(80)} deaths: 0`);
   });
 });

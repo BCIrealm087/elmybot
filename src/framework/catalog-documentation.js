@@ -134,7 +134,8 @@ export function generateFeatureCatalogMarkdown(
       platform === "discord" ? `\`/${command.name}\`` : `\`!${command.name}\``,
       commandType(command.mode),
       commandAccess(registry, command),
-      command.description
+      command.description,
+      command.usage ? `\`${command.usage}\`` : "—"
     ])
   );
   const actionRows = Object.values(registry.actions).map((action) => [
@@ -209,7 +210,7 @@ export function generateFeatureCatalogMarkdown(
     table(["Package", "Feature", "Installed by Worker"], workspaceRows),
     "## Commands",
     "",
-    table(["Feature", "Command", "Type", "Access", "Description"], commandRows),
+    table(["Feature", "Command", "Type", "Access", "Description", "Example"], commandRows),
     "## Actions",
     "",
     table(

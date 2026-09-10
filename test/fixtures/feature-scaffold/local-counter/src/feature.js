@@ -59,6 +59,7 @@ export const feature = defineFeature({
         name: "local",
         description: "Show or update the score.",
         availability: "guild",
+        usage: "/local operation:show",
         actionKind: RECIPE_LOCAL_ACTION_KIND,
         options: [
           discordOption({
@@ -77,11 +78,11 @@ export const feature = defineFeature({
         name: "local",
         description: "Show or update the score.",
         actionKind: RECIPE_LOCAL_ACTION_KIND,
+        usage: "!local show",
         parse: twitchTokens([{
           arg: "operation",
           type: "string",
-          optional: true,
-          default: "show"
+          optional: true
         }]),
         render: twitchTextResult
       })

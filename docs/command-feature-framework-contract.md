@@ -261,6 +261,10 @@ Schemas MUST:
 Custom schema functions are not part of Framework API v1. New reusable schema
 types belong in the public framework after review.
 
+`SchemaValidationError` retains its diagnostic `message`, `code`, and `path`.
+Its additive `reason` field is the validation requirement without the path,
+bounded to 300 characters, for command-specific correction text.
+
 ## Access presets and capabilities
 
 The public `access` helper normalizes contributor-friendly presets to reviewed
@@ -623,6 +627,28 @@ Discord and Twitch command names match
 `^[a-z][a-z0-9_-]{0,31}$`, are normalized to lowercase, and are unique within
 their platform. Descriptions are non-empty strings no longer than 100
 characters.
+
+All command helpers also accept optional `usage`: one complete, valid example
+for that platform, such as `/deaths operation:check game:Dark Souls` or
+`!deaths check "Dark Souls"`. It must start with the command's own name, fit
+within 160 characters, and contain no line breaks. Omission normalizes to
+`null`; examples are presentation metadata and never modify input validation,
+tokenization, authorization, or registration constraints.
+
+The platform adapters format schema and parser errors with the command name,
+the visible Discord option name (or readable Twitch argument name), and the
+validation requirement. If `usage` is present, the reply includes that example.
+Twitch quote and extra-token errors explain how to quote multi-word values.
+Replies remain bounded to 500 characters, keeping the example intact. Original
+error messages, codes, and paths remain available as developer diagnostics.
+The feature test runtime still rejects invalid input; its test-only
+`runtime.inputError(platform, commandName, error)` returns the same formatted
+text, or `null` for errors unrelated to input validation.
+
+Keep common constraints in local constants where useful and spread them into
+schemas and platform bindings, with explicit overrides for platform limits.
+Semantic action validation remains authoritative. Domain parsing and native
+bindings remain explicit; `usage` is not a universal command-description DSL.
 
 ### Discord action command
 

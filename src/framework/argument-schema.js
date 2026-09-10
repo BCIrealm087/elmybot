@@ -14,6 +14,7 @@ export class SchemaValidationError extends TypeError {
     this.name = "SchemaValidationError";
     this.code = "argument_validation_failed";
     this.path = path;
+    this.reason = String(message).slice(0, MAX_ERROR_MESSAGE_LENGTH);
   }
 }
 

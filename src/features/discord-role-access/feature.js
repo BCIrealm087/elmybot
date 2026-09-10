@@ -15,6 +15,7 @@ export const discordRoleAccessFeature = defineFeature({
     discord: [
       discordNativeCommand({
         name: "config_allow_role",
+        usage: "/config_allow_role role:@Moderators",
         description: "Enables a role to use scheduling commands.",
         availability: "guild",
         deferred: true,

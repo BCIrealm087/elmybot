@@ -69,6 +69,7 @@ export const feature = defineFeature({
         name: "shareable",
         description: "Show or update the score.",
         availability: "guild",
+        usage: "/shareable operation:show",
         actionKind: RECIPE_SHAREABLE_ACTION_KIND,
         options: [
           discordOption({
@@ -87,11 +88,11 @@ export const feature = defineFeature({
         name: "shareable",
         description: "Show or update the score.",
         actionKind: RECIPE_SHAREABLE_ACTION_KIND,
+        usage: "!shareable show",
         parse: twitchTokens([{
           arg: "operation",
           type: "string",
-          optional: true,
-          default: "show"
+          optional: true
         }]),
         render: twitchTextResult
       })
