@@ -76,7 +76,8 @@ Relevant code and contracts:
 
 ## Recommended first-release boundaries
 
-These are recommended scope choices, to be finalized in step 1.
+These scope choices were finalized by step 1 in
+[`state-query-contract.md`](state-query-contract.md).
 
 ### Readable state and query composition
 
@@ -181,9 +182,10 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-All implementation steps below are pending. Complete the relevant acceptance
-criteria before marking a step done. Keep these numbers stable for subsequent
-work requests; record implementation commits and checks in the progress log.
+Step 1 is complete; steps 2–12 remain pending. Complete the relevant acceptance
+criteria before marking another step done. Keep these numbers stable for
+subsequent work requests; record implementation commits and checks in the
+progress log.
 
 | Milestone | Steps | Result |
 | --- | --- | --- |
@@ -194,7 +196,12 @@ work requests; record implementation commits and checks in the progress log.
 
 ### 1. Specify the public state-query contract
 
-**Status:** pending. **Depends on:** this roadmap.
+**Status:** completed on 2026-09-11. **Depends on:** this roadmap.
+
+The normative result is
+[`state-query-contract.md`](state-query-contract.md). It closes the version-1
+query, identity, result, revision, authorization, collection, lifecycle, and
+snapshot/subscription semantics while leaving transport placement for step 2.
 
 Write a contract for reference identity, readable export declarations, query
 syntax and typing, normalization, errors, result status, ownership selection,
@@ -552,3 +559,7 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
 
 - 2026-09-11: Roadmap created from the agreed composable-state-query direction.
   Existing branch and contracts reviewed; implementation steps 1–12 are pending.
+- 2026-09-11: Step 1 completed. The public contract selects a bounded JSON query
+  graph, user-composed reads over declared exports, whole-query authorization,
+  explicit value-state semantics, effective-state following, and
+  transport-neutral snapshot/subscription results. Steps 2–12 remain pending.

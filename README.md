@@ -441,6 +441,7 @@ explicit catalog-regeneration action.
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
 - [Composable state queries and live subscriptions roadmap (proposed)](docs/state-querying-roadmap.md)
+- [Public state-query contract](docs/state-query-contract.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)
