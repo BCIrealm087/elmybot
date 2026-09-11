@@ -389,8 +389,8 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-GitHub Actions runs the complete suite for pushes to
-`codex-feature-experiment`, pull requests, and manual dispatches. CI:
+GitHub Actions runs the complete suite for pushes to `master` and
+`codex-state-querying`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -440,6 +440,7 @@ explicit catalog-regeneration action.
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
+- [Composable state queries and live subscriptions roadmap (proposed)](docs/state-querying-roadmap.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)
