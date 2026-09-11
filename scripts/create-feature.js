@@ -44,12 +44,13 @@ async function writeExclusiveFiles(files) {
 export async function scaffoldFeature({
   slug,
   root = process.cwd(),
-  workspace = false
+  workspace = false,
+  template = "minimal"
 }) {
   const projectRoot = path.resolve(root);
   await requireProjectRoot(projectRoot);
   if (workspace) {
-    const templates = workspaceFeatureScaffoldTemplates(slug);
+    const templates = workspaceFeatureScaffoldTemplates(slug, { template });
     const packageRoot = path.join(
       projectRoot,
       "packages",
@@ -65,15 +66,22 @@ export async function scaffoldFeature({
     await writeExclusiveFiles(files);
     return Object.freeze({
       identity: templates.identity,
+      template: templates.template,
       workspace: true,
       packageName: templates.packageName,
+      packageVersion: templates.packageVersion,
       featurePath: files[2].path,
       testPath: files[3].path,
       installImport: `import feature from "${templates.packageName}";`
     });
   }
 
-  const { identity, featureSource, testSource } = featureScaffoldTemplates(slug);
+  const {
+    identity,
+    template: selectedTemplate,
+    featureSource,
+    testSource
+  } = featureScaffoldTemplates(slug, { template });
   const featureDirectory = path.join(projectRoot, "src", "features", identity.slug);
   const testDirectory = path.join(projectRoot, "test", "features");
   const featurePath = path.join(featureDirectory, "feature.js");
@@ -86,6 +94,7 @@ export async function scaffoldFeature({
 
   return Object.freeze({
     identity,
+    template: selectedTemplate,
     workspace: false,
     featurePath,
     testPath,
@@ -97,10 +106,21 @@ function parseArguments(argv) {
   let slug = null;
   let root = process.cwd();
   let workspace = false;
+  let template = "minimal";
+  const optionValue = (index, option) => {
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith("--")) {
+      throw new FeatureScaffoldError(`${option} requires a value.`);
+    }
+    return value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--root") {
-      root = argv[index + 1];
+      root = optionValue(index, "--root");
+      index += 1;
+    } else if (argument === "--template") {
+      template = optionValue(index, "--template");
       index += 1;
     } else if (argument === "--workspace") {
       workspace = true;
@@ -110,7 +130,7 @@ function parseArguments(argv) {
       throw new FeatureScaffoldError(`Unexpected argument: ${argument}`);
     }
   }
-  return { slug, root, workspace };
+  return { slug, root, workspace, template };
 }
 
 async function main() {
@@ -120,12 +140,23 @@ async function main() {
     const relativeTest = path.relative(process.cwd(), result.testPath);
     console.log(`Created ${relativeFeature}`);
     console.log(`Created ${relativeTest}`);
+    console.log(`Template: ${result.template}`);
     if (result.workspace) {
       console.log(`Package: ${result.packageName}`);
-      console.log("Next: run npm install, add the package to root dependencies, then import it in src/features/index.js.");
+      console.log(
+        `Next: add "${result.packageName}": "${result.packageVersion}" to root dependencies.`
+      );
+      console.log(
+        "Then: import it in src/features/index.js, run npm install, and run " +
+        `npm run feature:check -- ${result.identity.slug}.`
+      );
     } else {
-      console.log("Next: import the feature in src/features/index.js and add it to installedFeatures.");
+      console.log(
+        "Next: import the feature in src/features/index.js, add it once to " +
+        `installedFeatures, and run npm run feature:check -- ${result.identity.slug}.`
+      );
     }
+    console.log("Guide: docs/feature-quickstart.md");
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Feature scaffold failed.");
     process.exitCode = 1;

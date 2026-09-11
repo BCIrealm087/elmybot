@@ -6,9 +6,11 @@ import {
 } from "./auth.js";
 import { logError } from "../../common.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
   IntegrationRegistryError,
-  revokeIntegrationsForGroup
+  resumePendingIntegration,
+  revokeIntegrationsForGroup,
+  verifyIntegrationInvitation
 } from "../../integrations/index.js";
 import {
   CHANNEL_AUTH_KEY,
@@ -90,11 +92,11 @@ export class TwitchChannelAuth {
 		}
 	}
 
-	async completePendingIntegration(authorization) {
+	async verifyPendingIntegration(authorization) {
 		const pending = authorization.integrationCompletionPending;
 		if (!pending) return { result: null, error: null };
 		try {
-			const result = await completeIntegrationInvitation(this.env, {
+			let result = await verifyIntegrationInvitation(this.env, {
 				invitationId: pending.invitationId,
 				reservationId: pending.reservationId,
 				group: {
@@ -109,15 +111,51 @@ export class TwitchChannelAuth {
 				},
 				groupLabel: authorization.login
 			});
+			if (
+				result.pendingIntegration?.stateDiscovery &&
+				!result.pendingIntegration.stateDiscovery.requiresResolution
+			) {
+				result = await activatePendingIntegration(this.env, {
+					invitationId: pending.invitationId,
+					reservationId: pending.reservationId
+				});
+			}
 			authorization.integrationCompletionPending = null;
 			return { result, error: null };
 		} catch (error) {
-			logError("twitch.channel_integration_completion_failed", {
+			logError("twitch.channel_integration_verification_failed", {
 				platform: "twitch",
 				correlationId: `twitch-integration-completion:${crypto.randomUUID()}`,
 				groupId: authorization.userId
 			}, error);
-			if (error instanceof IntegrationRegistryError && error.status < 500) {
+			if (
+				error instanceof IntegrationRegistryError &&
+				error.code === "integration_state_rediscovery_required"
+			) {
+				authorization.integrationCompletionPending = null;
+				try {
+					return {
+						result: await resumePendingIntegration(this.env, {
+							reservationId: pending.reservationId
+						}),
+						error: null
+					};
+				} catch {
+					return { result: null, error: null };
+				}
+			}
+			const retryableStateTransition =
+				error instanceof IntegrationRegistryError &&
+				(
+					error.code.startsWith("integration_state_discovery_") ||
+					error.code === "integration_state_finalization_busy" ||
+					error.code === "integration_state_finalization_unavailable"
+				);
+			if (
+				error instanceof IntegrationRegistryError &&
+				error.status < 500 &&
+				!retryableStateTransition
+			) {
 				authorization.integrationCompletionPending = null;
 				return { result: null, error: error.code };
 			}
@@ -191,7 +229,7 @@ export class TwitchChannelAuth {
 			integrationDeactivationPending: false
 		};
 		const configured = await this.configure(authorization);
-		const integrationCompletion = await this.completePendingIntegration(authorization);
+		const integrationVerification = await this.verifyPendingIntegration(authorization);
 		await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
 		await this.state.storage.setAlarm(
 			Date.now() + (
@@ -204,10 +242,15 @@ export class TwitchChannelAuth {
 			authorized: true,
 			configured,
 			authorization: publicAuthorization(authorization),
-			integration: integrationCompletion.result?.integration ?? null,
-			integrationAlreadyLinked: integrationCompletion.result?.alreadyLinked ?? false,
+			integration: integrationVerification.result?.integration ?? null,
+			pendingIntegration:
+				integrationVerification.result?.pendingIntegration ?? null,
+			integrationResumeToken:
+				input.integrationReservation?.reservationId ?? null,
+			integrationAlreadyLinked:
+				integrationVerification.result?.alreadyLinked ?? false,
 			integrationPending: Boolean(authorization.integrationCompletionPending),
-			integrationError: integrationCompletion.error
+			integrationError: integrationVerification.error
 		};
 	}
 
@@ -375,7 +418,7 @@ export class TwitchChannelAuth {
 				await this.configure(authorization);
 			}
 			if (authorization.integrationCompletionPending) {
-				await this.completePendingIntegration(authorization);
+				await this.verifyPendingIntegration(authorization);
 			}
 			await this.state.storage.put(CHANNEL_AUTH_KEY, authorization);
 			await this.state.storage.setAlarm(

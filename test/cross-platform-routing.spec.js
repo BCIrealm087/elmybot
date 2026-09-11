@@ -8,12 +8,13 @@ import {
 } from "cloudflare:test";
 import worker from "../src/index.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
   createIntegrationInvitation,
   defaultDiscordTwitchRoutes,
   getIntegrationExecution,
   integrationCoordinatorStub,
-  reserveIntegrationInvitation
+  reserveIntegrationInvitation,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
 import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
 import { commands as discordCommands } from "../src/platforms/discord/commands.js";
@@ -81,7 +82,7 @@ async function activateRoutedIntegration({
     reservationId,
     reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
   });
-  const result = await completeIntegrationInvitation(integrationEnv, {
+  await verifyIntegrationInvitation(integrationEnv, {
     invitationId: reservation.invitationId,
     reservationId,
     group: { platform: "twitch", kind: "channel", id: broadcasterId },
@@ -91,6 +92,10 @@ async function activateRoutedIntegration({
       claims: ["twitch.broadcaster"]
     },
     groupLabel: "linked_channel"
+  });
+  const result = await activatePendingIntegration(integrationEnv, {
+    invitationId: reservation.invitationId,
+    reservationId
   });
   return {
     broadcasterId,

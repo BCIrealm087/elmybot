@@ -1,5 +1,10 @@
-import { createEffect } from "../integrations/contracts.js";
+import {
+  createEffect,
+  createIntegrationRef,
+  createPlatformGroupRef
+} from "../integrations/contracts.js";
 import { frameworkApiVersion } from "./api-version.js";
+import { isRegisteredCapability } from "./access.js";
 
 export class FeatureContextError extends Error {
   constructor(message, { code = "feature_context_unavailable" } = {}) {
@@ -158,6 +163,103 @@ function requireFeatureKey(key) {
   return key;
 }
 
+function requireCounterSubject(subject) {
+  if (typeof subject !== "string" || subject.length === 0 || subject.length > 300) {
+    throw new FeatureContextError(
+      "Bounded counter subjects must contain between 1 and 300 characters.",
+      { code: "feature_counter_subject_invalid" }
+    );
+  }
+  return subject;
+}
+
+function boundedCounterDescriptor(name, subject, options = {}) {
+  if (
+    typeof options !== "object" ||
+    options === null ||
+    Array.isArray(options)
+  ) {
+    throw new FeatureContextError("Bounded counter options must be an object.", {
+      code: "feature_counter_bounds_invalid"
+    });
+  }
+  const min = options.min ?? 0;
+  const max = options.max ?? Number.MAX_SAFE_INTEGER;
+  const initial = options.initial ?? min;
+  if (
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    !Number.isSafeInteger(initial) ||
+    min > max ||
+    initial < min ||
+    initial > max
+  ) {
+    throw new FeatureContextError(
+      "Bounded counter min, max, and initial values must be safe integers with " +
+      "min <= initial <= max.",
+      { code: "feature_counter_bounds_invalid" }
+    );
+  }
+  return Object.freeze({
+    name: requireFeatureKey(name),
+    subject: requireCounterSubject(subject),
+    min,
+    max,
+    initial
+  });
+}
+
+function requireCounterAmount(amount) {
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1_000_000) {
+    throw new FeatureContextError(
+      "Bounded counter amounts must be integers between 1 and 1000000.",
+      { code: "feature_counter_amount_invalid" }
+    );
+  }
+  return amount;
+}
+
+function requireCounterValue(value, descriptor) {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < descriptor.min ||
+    value > descriptor.max
+  ) {
+    throw new FeatureContextError(
+      "Bounded counter values must be safe integers within the configured bounds.",
+      { code: "feature_counter_value_invalid" }
+    );
+  }
+  return value;
+}
+
+function boundedCounter(
+  action,
+  runtimeContext,
+  service,
+  serviceArguments,
+  name,
+  subject,
+  options
+) {
+  requireDeclaredService(action, service);
+  const descriptor = boundedCounterDescriptor(name, subject, options);
+  const run = (operation, amount) =>
+    serviceMethod(action, runtimeContext, service, "boundedCounter")(
+      ...serviceArguments,
+      descriptor,
+      operation,
+      amount
+    );
+  return Object.freeze({
+    get: () => run("get"),
+    set: (value) => run("set", requireCounterValue(value, descriptor)),
+    increment: (amount = 1) => run("increment", requireCounterAmount(amount)),
+    decrement: (amount = 1) => run("decrement", requireCounterAmount(amount)),
+    reset: () => run("reset")
+  });
+}
+
 function requireDeclaredService(action, service) {
   if (!action.uses.services.includes(service)) {
     throw new FeatureContextError(
@@ -201,6 +303,173 @@ function randomInteger(action, runtimeContext, { min, max } = {}) {
   return value;
 }
 
+async function authorizationAllows(action, invocation, runtimeContext, capability) {
+  requireDeclaredService(action, "authorization");
+  if (!isRegisteredCapability(capability)) {
+    throw new FeatureContextError("Feature authorization capability is invalid.", {
+      code: "feature_authorization_capability_invalid"
+    });
+  }
+  if (typeof runtimeContext.authorize !== "function") {
+    throw new FeatureContextError(
+      "Feature context service is unavailable: `authorization`.",
+      { code: "feature_authorization_unavailable" }
+    );
+  }
+  const allowed = await runtimeContext.authorize({ capability, invocation });
+  if (typeof allowed !== "boolean") {
+    throw new FeatureContextError("Feature authorization returned an invalid result.", {
+      code: "feature_authorization_result_invalid"
+    });
+  }
+  return allowed;
+}
+
+async function defaultLink(
+  action,
+  invocation,
+  runtimeContext,
+  resolvedDefaultLinks,
+  targetPlatform
+) {
+  requireDeclaredService(action, "links");
+  if (
+    !["discord", "twitch"].includes(targetPlatform) ||
+    targetPlatform === invocation.origin.group.platform
+  ) {
+    throw new FeatureContextError(
+      "A default link must target another supported platform.",
+      { code: "feature_link_target_invalid" }
+    );
+  }
+  const implementation = runtimeContext.featureServices?.links?.default;
+  if (typeof implementation !== "function") return unavailable("links")();
+  const value = await implementation(action.featureId, targetPlatform);
+  if (value === null) return null;
+
+  let integration;
+  let sourceGroup;
+  let targetGroup;
+  try {
+    integration = createIntegrationRef(value?.integration);
+    sourceGroup = createPlatformGroupRef(value?.sourceGroup);
+    targetGroup = createPlatformGroupRef(value?.targetGroup);
+  } catch {
+    throw new FeatureContextError(
+      "Feature default-link resolver returned an invalid value.",
+      { code: "feature_link_result_invalid" }
+    );
+  }
+  if (
+    sourceGroup.key !== invocation.origin.group.key ||
+    targetGroup.platform !== targetPlatform
+  ) {
+    throw new FeatureContextError(
+      "Feature default-link resolver returned an invalid value.",
+      { code: "feature_link_result_invalid" }
+    );
+  }
+  const snapshot = Object.freeze({ integration, sourceGroup, targetGroup });
+  resolvedDefaultLinks.add(snapshot);
+  return snapshot;
+}
+
+function requireShareableStateTarget(invocation, targetPlatform) {
+  if (
+    !["discord", "twitch"].includes(targetPlatform) ||
+    targetPlatform === invocation.origin.group.platform
+  ) {
+    throw new FeatureContextError(
+      "Shareable state must target another supported platform.",
+      { code: "feature_shareable_state_target_invalid" }
+    );
+  }
+  return targetPlatform;
+}
+
+async function currentShareableState(
+  action,
+  invocation,
+  runtimeContext,
+  targetPlatform,
+  namespaceId
+) {
+  requireDeclaredService(action, "shareableState");
+  const implementation = runtimeContext.featureServices?.shareableState?.current;
+  if (typeof implementation !== "function") return unavailable("shareableState")();
+  const resolution = await implementation(
+    action.featureId,
+    requireShareableStateTarget(invocation, targetPlatform),
+    requireFeatureKey(namespaceId)
+  );
+  if (typeof resolution !== "object" || resolution === null) {
+    throw new FeatureContextError(
+      "Feature shareable-state resolution returned an invalid value.",
+      { code: "feature_shareable_state_result_invalid" }
+    );
+  }
+  const call = (method, ...args) =>
+    serviceMethod(action, runtimeContext, "shareableState", method)(
+      resolution,
+      ...args
+    );
+  return Object.freeze({
+    get: (key) => call("get", requireFeatureKey(key)),
+    set: (key, value) => call("set", requireFeatureKey(key), value),
+    delete: (key) => call("delete", requireFeatureKey(key)),
+    increment: (key, amount = 1) => call(
+      "increment",
+      requireFeatureKey(key),
+      amount
+    ),
+    boundedCounter: (name, subject, options) => boundedCounter(
+      action,
+      runtimeContext,
+      "shareableState",
+      [resolution],
+      name,
+      subject,
+      options
+    )
+  });
+}
+
+function integrationStateScope(
+  action,
+  runtimeContext,
+  resolvedDefaultLinks,
+  link
+) {
+  requireDeclaredService(action, "integrationState");
+  if (!resolvedDefaultLinks.has(link)) {
+    throw new FeatureContextError(
+      "Integration state requires a default link resolved by this action invocation.",
+      { code: "feature_integration_state_link_invalid" }
+    );
+  }
+  const call = (method, ...args) =>
+    serviceMethod(action, runtimeContext, "integrationState", method)(link, ...args);
+  return Object.freeze({
+    get: (key) => call("get", requireFeatureKey(key)),
+    set: (key, value) => call("set", requireFeatureKey(key), value),
+    delete: (key) => call("delete", requireFeatureKey(key)),
+    increment: (key, amount = 1) => call(
+      "increment",
+      requireFeatureKey(key),
+      amount
+    ),
+    boundedCounter: (name, subject, options) => boundedCounter(
+      action,
+      runtimeContext,
+      "integrationState",
+      [link],
+      name,
+      subject,
+      options
+    )
+  });
+}
+
 function logger(runtimeContext, action, invocation) {
   const write = (level, event, metadata) => {
     if (typeof runtimeContext.log === "function") {
@@ -226,6 +495,7 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
     ? runtimeContext.clock.now.bind(runtimeContext.clock)
     : () => new Date();
   const routed = routedServices(action, invocation, runtimeContext);
+  const resolvedDefaultLinks = new WeakSet();
   return Object.freeze({
     apiVersion: frameworkApiVersion,
     featureId: action.featureId,
@@ -244,6 +514,40 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
     }),
     random: Object.freeze({
       integer: (bounds) => randomInteger(action, runtimeContext, bounds)
+    }),
+    authorization: Object.freeze({
+      allows: (capability) => authorizationAllows(
+        action,
+        invocation,
+        runtimeContext,
+        capability
+      )
+    }),
+    links: Object.freeze({
+      default: (targetPlatform) => defaultLink(
+        action,
+        invocation,
+        runtimeContext,
+        resolvedDefaultLinks,
+        targetPlatform
+      )
+    }),
+    integrationState: Object.freeze({
+      for: (link) => integrationStateScope(
+        action,
+        runtimeContext,
+        resolvedDefaultLinks,
+        link
+      )
+    }),
+    shareableState: Object.freeze({
+      current: (targetPlatform, namespaceId) => currentShareableState(
+        action,
+        invocation,
+        runtimeContext,
+        targetPlatform,
+        namespaceId
+      )
     }),
     routes: routed.routes,
     effects: routed.effects,
@@ -267,7 +571,16 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         serviceMethod(action, runtimeContext, "state", "increment")(
           requireFeatureKey(key),
           amount
-        )
+        ),
+      boundedCounter: (name, subject, options) => boundedCounter(
+        action,
+        runtimeContext,
+        "state",
+        [],
+        name,
+        subject,
+        options
+      )
     }),
     log: logger(runtimeContext, action, invocation)
   });

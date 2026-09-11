@@ -1,5 +1,11 @@
 import { isRegisteredCapability } from "./access.js";
-import { schema, isSchema } from "./argument-schema.js";
+import { createActionResult } from "../integrations/contracts.js";
+import {
+  schema,
+  isSchema,
+  objectSchemaField,
+  SchemaValidationError
+} from "./argument-schema.js";
 import {
   isFrameworkDefinition,
   markFrameworkDefinition
@@ -10,8 +16,25 @@ const BOUND_ACTION_TYPE = "bound-feature-action";
 const VERSIONED_KIND_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
 const SUPPORTED_ORIGINS = new Set(["discord", "twitch"]);
-const SUPPORTED_SERVICES = new Set(["config", "state", "random"]);
+const SUPPORTED_SERVICES = new Set([
+  "authorization",
+  "config",
+  "integrationState",
+  "links",
+  "shareableState",
+  "state",
+  "random"
+]);
 const COOLDOWN_SCOPES = new Set(["actor", "group"]);
+const CONDITIONAL_ACCESS_FIELD_KINDS = new Set([
+  "string",
+  "integer",
+  "number",
+  "boolean",
+  "enum"
+]);
+const MAX_CONDITIONAL_ACCESS_RULES = 20;
+const MAX_CONDITIONAL_ACCESS_VALUES = 20;
 
 function requireVersionedKinds(value, path) {
   if (!Array.isArray(value)) throw new TypeError(`${path} must be an array.`);
@@ -78,9 +101,144 @@ function normalizeCooldown(value) {
   return Object.freeze({ scope: value.scope, seconds: value.seconds });
 }
 
+function requirePlainObject(value, message) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+  ) {
+    throw new TypeError(message);
+  }
+  return value;
+}
+
+function onlyFields(value, allowed, path) {
+  const unknown = Object.keys(value).find((field) => !allowed.has(field));
+  if (unknown) throw new TypeError(`Unsupported ${path} field: \`${unknown}\`.`);
+}
+
+function normalizeConditionalAccess(value, input, uses, name = "conditionalAccess") {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > MAX_CONDITIONAL_ACCESS_RULES) {
+    throw new TypeError(
+      `Action ${name} must be an array of at most ` +
+      `${MAX_CONDITIONAL_ACCESS_RULES} rules.`
+    );
+  }
+  if (name === "conditionalAccess" && value.length > 0 &&
+      !uses.services.includes("authorization")) {
+    throw new TypeError(
+      "Action conditionalAccess requires the `authorization` service."
+    );
+  }
+  return Object.freeze(value.map((entry, index) => {
+    const path = `action ${name}[${index}]`;
+    requirePlainObject(entry, `Action ${name}[${index}] must be an object.`);
+    onlyFields(entry, new Set(["capability", "when"]), path);
+    if (typeof entry.capability !== "string") {
+      throw new TypeError(`Action ${name}[${index}] capability is invalid.`);
+    }
+    const when = requirePlainObject(
+      entry.when,
+      `Action ${name}[${index}].when must be an object.`
+    );
+    onlyFields(
+      when,
+      new Set(["argument", "values", "exceptValues"]),
+      `${path}.when`
+    );
+    if (
+      typeof when.argument !== "string" ||
+      !/^[a-z][a-z0-9_]{0,63}$/.test(when.argument)
+    ) {
+      throw new TypeError(`Action ${name}[${index}] argument is invalid.`);
+    }
+    const field = objectSchemaField(input, when.argument);
+    if (!field || !CONDITIONAL_ACCESS_FIELD_KINDS.has(field.kind)) {
+      throw new TypeError(
+        `Action ${name}[${index}] argument must name a primitive input field.`
+      );
+    }
+    const hasValues = when.values !== undefined;
+    const hasExceptValues = when.exceptValues !== undefined;
+    if (hasValues === hasExceptValues) {
+      throw new TypeError(
+        `Action ${name}[${index}].when must contain exactly one of ` +
+        "values or exceptValues."
+      );
+    }
+    const matchField = hasValues ? "values" : "exceptValues";
+    const candidates = when[matchField];
+    if (
+      !Array.isArray(candidates) ||
+      candidates.length === 0 ||
+      candidates.length > MAX_CONDITIONAL_ACCESS_VALUES
+    ) {
+      throw new TypeError(
+        `Action ${name}[${index}] ${matchField} must contain between 1 and ` +
+        `${MAX_CONDITIONAL_ACCESS_VALUES} entries.`
+      );
+    }
+    if (candidates.some((candidate) =>
+      candidate === null ||
+      !["string", "number", "boolean"].includes(typeof candidate)
+    )) {
+      throw new TypeError(
+        `Action ${name}[${index}] ${matchField} must be primitive values.`
+      );
+    }
+    let values;
+    try {
+      values = candidates.map((candidate) => field.parse(candidate, {
+        path: `${name}[${index}].when.${matchField}`
+      }));
+    } catch (cause) {
+      if (cause instanceof SchemaValidationError) {
+        throw new TypeError(
+          `Action ${name}[${index}] contains a value rejected by its ` +
+          "input field.",
+          { cause }
+        );
+      }
+      throw cause;
+    }
+    if (new Set(values.map((candidate) => JSON.stringify(candidate))).size !== values.length) {
+      throw new TypeError(
+        `Action ${name}[${index}] ${matchField} must be unique.`
+      );
+    }
+    return Object.freeze({
+      capability: entry.capability,
+      when: Object.freeze({
+        argument: when.argument,
+        [matchField]: Object.freeze(values)
+      })
+    });
+  }));
+}
+
+function normalizeModePolicy(value, input, conditionalAccess) {
+  if (value === null || value === undefined) return null;
+  if (conditionalAccess !== undefined) {
+    throw new TypeError("Use either modePolicy or conditionalAccess, not both.");
+  }
+  requirePlainObject(value, "Action modePolicy must be an object.");
+  onlyFields(value, new Set(["rules", "deniedOutput"]), "action modePolicy");
+  if (!Array.isArray(value.rules) || value.rules.length === 0) {
+    throw new TypeError("Action modePolicy.rules must contain at least one rule.");
+  }
+  const rules = normalizeConditionalAccess(value.rules, input, {}, "modePolicy.rules");
+  requirePlainObject(value.deniedOutput, "Action modePolicy.deniedOutput is required.");
+  const { output } = createActionResult({ output: value.deniedOutput });
+  return Object.freeze({ rules, deniedOutput: output });
+}
+
 export function defineAction({
   kind,
   capability = null,
+  conditionalAccess,
+  modePolicy = null,
   supportedOrigins,
   input = schema.object({}),
   uses = {},
@@ -116,12 +274,20 @@ export function defineAction({
   }
   if (typeof execute !== "function") throw new TypeError("Action execute must be a function.");
 
+  const normalizedUses = normalizeUses(uses);
+  const normalizedModePolicy = normalizeModePolicy(modePolicy, input, conditionalAccess);
   return markFrameworkDefinition({
     kind,
     capability,
+    modePolicy: normalizedModePolicy,
+    conditionalAccess: normalizedModePolicy?.rules ?? normalizeConditionalAccess(
+      conditionalAccess,
+      input,
+      normalizedUses
+    ),
     supportedOrigins: Object.freeze([...supportedOrigins].sort()),
     input,
-    uses: normalizeUses(uses),
+    uses: normalizedUses,
     cooldown: normalizeCooldown(cooldown),
     execute
   }, ACTION_TYPE);
@@ -145,5 +311,14 @@ export function bindFeatureActionDefinition(action, featureId) {
 export function validateFeatureActionCapability(action) {
   if (!isRegisteredCapability(action.capability)) {
     throw new TypeError(`Action capability is not registered: \`${action.capability}\`.`);
+  }
+  const unknownConditional = action.conditionalAccess.find(
+    ({ capability }) => !isRegisteredCapability(capability)
+  );
+  if (unknownConditional) {
+    throw new TypeError(
+      `Action conditional capability is not registered: ` +
+      `\`${unknownConditional.capability}\`.`
+    );
   }
 }

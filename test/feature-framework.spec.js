@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  access,
   defineAction,
   defineEventAction,
   defineFeature,
@@ -9,6 +10,7 @@ import {
   discordNativeCommand,
   FeatureDefinitionError,
   frameworkApiVersion,
+  schema,
   twitchActionCommand,
   twitchNativeCommand
 } from "../src/framework/index.js";
@@ -41,6 +43,7 @@ function feature({
   routes = [],
   events = [],
   schedules = [],
+  shareableState = [],
   discord = [],
   twitch = []
 } = {}) {
@@ -52,6 +55,7 @@ function feature({
     routes,
     events,
     schedules,
+    shareableState,
     commands: { discord, twitch }
   });
 }
@@ -85,6 +89,7 @@ describe("Command and feature framework", () => {
       routes: [],
       events: [],
       schedules: [],
+      shareableState: [],
       effectAdapters: { discord: [], twitch: [] }
     });
     expect(Object.isFrozen(definition)).toBe(true);
@@ -93,6 +98,120 @@ describe("Command and feature framework", () => {
     expect(() => {
       definition.commands.discord[0].name = "changed";
     }).toThrow(TypeError);
+  });
+
+  it("normalizes and deeply freezes declarative shareable-state metadata", () => {
+    const definition = defineFeature({
+      apiVersion: frameworkApiVersion,
+      id: "fun.score",
+      description: "Tracks one shareable score.",
+      shareableState: [
+        {
+          id: "score",
+          label: "  Shared score  ",
+          schemaVersion: 2,
+          compatibleVersions: [2, 1],
+          collisionSummary: { kind: "entry_count" },
+          limits: { maxEntries: 4, maxValueBytes: 256 },
+          adoptLegacyIntegrationState: true
+        }
+      ]
+    });
+
+    expect(definition.shareableState).toEqual([
+      {
+        id: "score",
+        label: "Shared score",
+        schemaVersion: 2,
+        compatibleVersions: [1, 2],
+        collisionSummary: { kind: "entry_count" },
+        limits: { maxEntries: 4, maxValueBytes: 256 },
+        adoptLegacyIntegrationState: true
+      }
+    ]);
+    expect(Object.isFrozen(definition.shareableState)).toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0])).toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].compatibleVersions))
+      .toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].collisionSummary))
+      .toBe(true);
+    expect(Object.isFrozen(definition.shareableState[0].limits)).toBe(true);
+
+    const defaults = defineFeature({
+      apiVersion: frameworkApiVersion,
+      id: "fun.default-score",
+      description: "Uses safe shareable-state defaults.",
+      shareableState: [{
+        id: "score",
+        label: "Shared score",
+        schemaVersion: 1
+      }]
+    });
+    expect(defaults.shareableState[0]).toEqual({
+      id: "score",
+      label: "Shared score",
+      schemaVersion: 1,
+      compatibleVersions: [1],
+      collisionSummary: { kind: "presence" },
+      limits: { maxEntries: 100, maxValueBytes: 16_384 }
+    });
+  });
+
+  it("rejects invalid or ambiguous shareable-state metadata", () => {
+    const base = {
+      apiVersion: frameworkApiVersion,
+      id: "fun.score",
+      description: "Tracks one shareable score."
+    };
+    const invalidDeclarations = [
+      { shareableState: {} },
+      { shareableState: [{ id: "Score", label: "Score", schemaVersion: 1 }] },
+      { shareableState: [{ id: "score", label: "", schemaVersion: 1 }] },
+      { shareableState: [{ id: "score", label: "Score", schemaVersion: 0 }] },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 2,
+          compatibleVersions: [1]
+        }]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          collisionSummary: { kind: "raw_values" }
+        }]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          limits: { maxEntries: 101 }
+        }]
+      },
+      {
+        shareableState: [
+          { id: "score", label: "Score", schemaVersion: 1 },
+          { id: "score", label: "Other score", schemaVersion: 1 }
+        ]
+      },
+      {
+        shareableState: [{
+          id: "score",
+          label: "Score",
+          schemaVersion: 1,
+          adoptLegacyIntegrationState: false
+        }]
+      }
+    ];
+
+    for (const declaration of invalidDeclarations) {
+      expect(() => defineFeature({ ...base, ...declaration }))
+        .toThrow(FeatureDefinitionError);
+    }
   });
 
   it("rejects unsupported versions, invalid IDs, unknown fields, and bad collections", () => {
@@ -372,10 +491,16 @@ describe("Command and feature framework", () => {
         const label = await ctx.config.get("label");
         await ctx.state.set("last_roll", 4);
         const total = await ctx.state.increment("total", 2);
+        const streak = ctx.state.boundedCounter("streak", "Dark Souls", {
+          max: 10
+        });
+        const boundedTotal = await streak.increment(2);
         return {
           output: {
             label,
             total,
+            boundedTotal,
+            counterFrozen: Object.isFrozen(streak),
             roll: ctx.random.integer({ min: 4, max: 4 })
           },
           effects: []
@@ -388,6 +513,7 @@ describe("Command and feature framework", () => {
     const configGet = vi.fn(async () => "Score");
     const stateSet = vi.fn(async () => undefined);
     const stateIncrement = vi.fn(async () => 2);
+    const stateBoundedCounter = vi.fn(async () => 2);
     const claimFeatureCooldown = vi.fn(async () => ({
       allowed: true,
       retryAfterSeconds: 0
@@ -408,7 +534,8 @@ describe("Command and feature framework", () => {
           get: vi.fn(),
           set: stateSet,
           delete: vi.fn(),
-          increment: stateIncrement
+          increment: stateIncrement,
+          boundedCounter: stateBoundedCounter
         }
       },
       random: { integer: ({ min }) => min },
@@ -420,11 +547,29 @@ describe("Command and feature framework", () => {
       input,
       runtime
     )).resolves.toMatchObject({
-      output: { label: "Score", total: 2, roll: 4 }
+      output: {
+        label: "Score",
+        total: 2,
+        boundedTotal: 2,
+        counterFrozen: true,
+        roll: 4
+      }
     });
     expect(configGet).toHaveBeenCalledWith("test.feature", "label");
     expect(stateSet).toHaveBeenCalledWith("test.feature", "last_roll", 4);
     expect(stateIncrement).toHaveBeenCalledWith("test.feature", "total", 2);
+    expect(stateBoundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      {
+        name: "streak",
+        subject: "Dark Souls",
+        min: 0,
+        max: 10,
+        initial: 0
+      },
+      "increment",
+      2
+    );
     expect(claimFeatureCooldown).toHaveBeenCalledWith({
       featureId: "test.feature",
       actionKind: statefulAction.kind,
@@ -445,6 +590,524 @@ describe("Command and feature framework", () => {
       status: 429,
       retryAfterSeconds: 12
     });
+  });
+
+  it("resolves only the invocation group's declared default link", async () => {
+    const linkedAction = defineAction({
+      kind: "test.links.default.v1",
+      supportedOrigins: ["discord", "twitch"],
+      input: schema.object({ target: schema.enum(["discord", "twitch"]) }),
+      uses: { services: ["links"] },
+      async execute(ctx, { target }) {
+        const link = await ctx.links.default(target);
+        return {
+          output: {
+            link,
+            frozen: link === null || (
+              Object.isFrozen(link) &&
+              Object.isFrozen(link.integration) &&
+              Object.isFrozen(link.sourceGroup) &&
+              Object.isFrozen(link.targetGroup)
+            )
+          },
+          effects: []
+        };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [linkedAction] })
+    ], { availableServices: ["links"] });
+    const input = createCommandInvocation({
+      kind: linkedAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      args: { target: "twitch" },
+      sourceEventId: "discord:interaction:default-link"
+    });
+    const resolveDefault = vi.fn(async () => ({
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "guild-1" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" },
+      updatedAtMs: 123
+    }));
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).resolves.toMatchObject({
+      output: {
+        link: {
+          integration: {
+            id: "integration-1",
+            key: "integration:integration-1"
+          },
+          sourceGroup: {
+            platform: "discord",
+            kind: "guild",
+            id: "guild-1",
+            key: "discord:guild:guild-1"
+          },
+          targetGroup: {
+            platform: "twitch",
+            kind: "channel",
+            id: "channel-1",
+            key: "twitch:channel:channel-1"
+          }
+        },
+        frozen: true
+      },
+      effects: []
+    });
+    expect(resolveDefault).toHaveBeenCalledWith("test.feature", "twitch");
+
+    const samePlatformInput = createCommandInvocation({
+      ...input,
+      args: { target: "discord" },
+      sourceEventId: "discord:interaction:same-platform-link"
+    });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      samePlatformInput,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).rejects.toMatchObject({ code: "feature_link_target_invalid" });
+
+    resolveDefault.mockResolvedValueOnce({
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "other-guild" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" }
+    });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { featureServices: { links: { default: resolveDefault } } }
+    )).rejects.toMatchObject({ code: "feature_link_result_invalid" });
+  });
+
+  it("scopes integration state to a default link resolved by the invocation", async () => {
+    const scopedAction = defineAction({
+      kind: "test.integration-state.use.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["integrationState", "links"] },
+      async execute(ctx) {
+        const link = await ctx.links.default("twitch");
+        const count = await ctx.integrationState
+          .for(link)
+          .boundedCounter("score", "game", { min: 0, max: 10 })
+          .increment(2);
+        return { output: { count }, effects: [] };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [scopedAction] })
+    ], { availableServices: ["integrationState", "links"] });
+    const invocation = createCommandInvocation({
+      kind: scopedAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:integration-state"
+    });
+    const link = {
+      integration: { id: "integration-1" },
+      sourceGroup: { platform: "discord", kind: "guild", id: "guild-1" },
+      targetGroup: { platform: "twitch", kind: "channel", id: "channel-1" }
+    };
+    const boundedCounter = vi.fn(async () => 2);
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      {
+        featureServices: {
+          links: { default: vi.fn(async () => link) },
+          integrationState: { boundedCounter }
+        }
+      }
+    )).resolves.toMatchObject({ output: { count: 2 } });
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      expect.objectContaining({
+        integration: { id: "integration-1", key: "integration:integration-1" }
+      }),
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "increment",
+      2
+    );
+
+    const forgedAction = defineAction({
+      kind: "test.integration-state.forged.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["integrationState", "links"] },
+      async execute(ctx) {
+        const resolved = await ctx.links.default("twitch");
+        await ctx.integrationState.for({ ...resolved }).get("value");
+        return { output: {}, effects: [] };
+      }
+    });
+    const forgedCatalog = createFeatureRegistry([
+      feature({ actions: [forgedAction] })
+    ], { availableServices: ["integrationState", "links"] });
+    await expect(executeAction(
+      createActionRegistry(forgedCatalog.actions),
+      createCommandInvocation({
+        ...invocation,
+        kind: forgedAction.kind,
+        sourceEventId: "discord:interaction:forged-integration-state"
+      }),
+      {
+        featureServices: {
+          links: { default: vi.fn(async () => link) },
+          integrationState: { get: vi.fn() }
+        }
+      }
+    )).rejects.toMatchObject({
+      code: "feature_integration_state_link_invalid"
+    });
+  });
+
+  it("pins declared shareable state through an opaque resolved scope", async () => {
+    const action = defineAction({
+      kind: "test.shareable-state.use.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["shareableState"] },
+      async execute(ctx) {
+        const state = await ctx.shareableState.current("twitch", "score");
+        expect(Object.isFrozen(state)).toBe(true);
+        expect(Object.keys(state).sort()).toEqual([
+          "boundedCounter",
+          "delete",
+          "get",
+          "increment",
+          "set"
+        ]);
+        const count = await state
+          .boundedCounter("score", "game", { min: 0, max: 10 })
+          .increment(2);
+        return { output: { count }, effects: [] };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({
+        actions: [action],
+        shareableState: [{
+          id: "score",
+          label: "Shared score",
+          schemaVersion: 1
+        }]
+      })
+    ], { availableServices: ["shareableState"] });
+    const invocation = createCommandInvocation({
+      kind: action.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:shareable-state"
+    });
+    const resolution = Object.freeze({ token: "opaque" });
+    const current = vi.fn(async () => resolution);
+    const boundedCounter = vi.fn(async () => 2);
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      { featureServices: { shareableState: { current, boundedCounter } } }
+    )).resolves.toMatchObject({ output: { count: 2 } });
+    expect(current).toHaveBeenCalledWith("test.feature", "twitch", "score");
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      resolution,
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "increment",
+      2
+    );
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      invocation,
+      { featureServices: { shareableState: { current: vi.fn(async () => null) } } }
+    )).rejects.toMatchObject({ code: "feature_shareable_state_result_invalid" });
+  });
+
+  it("rejects invalid shareable-state targets and missing declarations", async () => {
+    const action = defineAction({
+      kind: "test.shareable-state.invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["shareableState"] },
+      async execute(ctx) {
+        await ctx.shareableState.current("discord", "score");
+        return { output: {}, effects: [] };
+      }
+    });
+    expect(() => createFeatureRegistry([
+      feature({ actions: [action] })
+    ], { availableServices: ["shareableState"] })).toThrow(
+      "declares no shareable namespaces"
+    );
+
+    const catalog = createFeatureRegistry([
+      feature({
+        actions: [action],
+        shareableState: [{
+          id: "score",
+          label: "Shared score",
+          schemaVersion: 1
+        }]
+      })
+    ], { availableServices: ["shareableState"] });
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      createCommandInvocation({
+        kind: action.kind,
+        origin: {
+          group: { platform: "discord", kind: "guild", id: "guild-1" },
+          actor: { platform: "discord", id: "user-1", claims: [] }
+        },
+        sourceEventId: "discord:interaction:invalid-shareable-state"
+      }),
+      { featureServices: { shareableState: { current: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_shareable_state_target_invalid" });
+  });
+
+  it("rejects invalid bounded-counter bounds at the author API", async () => {
+    const invalidCounterAction = defineAction({
+      kind: "test.counter.invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        await ctx.state.boundedCounter("score", "game", { min: 1, max: 0 }).get();
+        return { output: {}, effects: [] };
+      }
+    });
+    const registry = createFeatureRegistry([
+      feature({ actions: [invalidCounterAction] })
+    ], { availableServices: ["state"] });
+    const invocation = createCommandInvocation({
+      kind: invalidCounterAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:invalid-counter"
+    });
+
+    await expect(executeAction(
+      createActionRegistry(registry.actions),
+      invocation,
+      { featureServices: { state: { boundedCounter: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_counter_bounds_invalid" });
+  });
+
+  it("validates bounded-counter assignments at the author API", async () => {
+    const setCounterAction = defineAction({
+      kind: "test.counter.set.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        const counter = ctx.state.boundedCounter("score", "game", { max: 10 });
+        return { output: { value: await counter.set(7) }, effects: [] };
+      }
+    });
+    const registry = createFeatureRegistry([
+      feature({ actions: [setCounterAction] })
+    ], { availableServices: ["state"] });
+    const invocation = createCommandInvocation({
+      kind: setCounterAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:set-counter"
+    });
+    const boundedCounter = vi.fn(async () => 7);
+
+    await expect(executeAction(
+      createActionRegistry(registry.actions),
+      invocation,
+      { featureServices: { state: { boundedCounter } } }
+    )).resolves.toMatchObject({ output: { value: 7 } });
+    expect(boundedCounter).toHaveBeenCalledWith(
+      "test.feature",
+      { name: "score", subject: "game", min: 0, max: 10, initial: 0 },
+      "set",
+      7
+    );
+
+    const invalidAction = defineAction({
+      kind: "test.counter.set-invalid.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        await ctx.state.boundedCounter("score", "game", { max: 10 }).set(11);
+        return { output: {}, effects: [] };
+      }
+    });
+    const invalidRegistry = createFeatureRegistry([
+      feature({ actions: [invalidAction] })
+    ], { availableServices: ["state"] });
+    await expect(executeAction(
+      createActionRegistry(invalidRegistry.actions),
+      createCommandInvocation({
+        ...invocation,
+        kind: invalidAction.kind,
+        sourceEventId: "discord:interaction:set-counter-invalid"
+      }),
+      { featureServices: { state: { boundedCounter } } }
+    )).rejects.toMatchObject({ code: "feature_counter_value_invalid" });
+  });
+
+  it("delegates declared conditional authorization to the platform policy", async () => {
+    const conditionalAction = defineAction({
+      kind: "test.authorization.run.v1",
+      supportedOrigins: ["discord"],
+      input: schema.object({
+        operation: schema.enum(["show", "plus"], {
+          optional: true,
+          default: "show"
+        })
+      }),
+      uses: { services: ["authorization"] },
+      conditionalAccess: [
+        {
+          capability: access.moderators,
+          when: { argument: "operation", values: ["plus"] }
+        }
+      ],
+      async execute(ctx) {
+        return {
+          output: {
+            allowed: await ctx.authorization.allows(access.moderators)
+          },
+          effects: []
+        };
+      }
+    });
+    const catalog = createFeatureRegistry([
+      feature({ actions: [conditionalAction] })
+    ], { availableServices: ["authorization"] });
+    expect(conditionalAction.conditionalAccess).toEqual([
+      {
+        capability: access.moderators,
+        when: { argument: "operation", values: ["plus"] }
+      }
+    ]);
+    expect(Object.isFrozen(conditionalAction.conditionalAccess)).toBe(true);
+    expect(Object.isFrozen(conditionalAction.conditionalAccess[0].when.values))
+      .toBe(true);
+
+    const exceptAction = defineAction({
+      kind: "test.authorization.except.v1",
+      supportedOrigins: ["discord"],
+      input: schema.object({
+        operation: schema.string({ optional: true })
+      }),
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", exceptValues: ["show"] }
+      }],
+      execute: () => ({ output: {}, effects: [] })
+    });
+    expect(exceptAction.conditionalAccess).toEqual([{
+      capability: access.moderators,
+      when: { argument: "operation", exceptValues: ["show"] }
+    }]);
+    expect(Object.isFrozen(exceptAction.conditionalAccess[0].when.exceptValues))
+      .toBe(true);
+    const input = createCommandInvocation({
+      kind: conditionalAction.kind,
+      origin: {
+        group: { platform: "discord", kind: "guild", id: "guild-1" },
+        actor: { platform: "discord", id: "user-1", claims: [] }
+      },
+      sourceEventId: "discord:interaction:authorization"
+    });
+    const authorize = vi.fn(async ({ capability }) =>
+      capability === access.moderators
+    );
+
+    await expect(executeAction(
+      createActionRegistry(catalog.actions),
+      input,
+      { authorize }
+    )).resolves.toMatchObject({ output: { allowed: true } });
+    expect(authorize).toHaveBeenCalledWith({
+      capability: access.moderators,
+      invocation: expect.objectContaining({ kind: conditionalAction.kind })
+    });
+  });
+
+  it("rejects conditional-access metadata that can drift from the action schema", () => {
+    const input = schema.object({
+      operation: schema.enum(["show", "plus"])
+    });
+    const base = {
+      kind: "test.authorization.invalid.v1",
+      supportedOrigins: ["discord"],
+      input,
+      execute: () => ({ output: {}, effects: [] })
+    };
+
+    expect(() => defineAction({
+      ...base,
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", values: ["plus"] }
+      }]
+    })).toThrow("requires the `authorization` service");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "missing", values: ["plus"] }
+      }]
+    })).toThrow("argument must name a primitive input field");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation", values: ["reset"] }
+      }]
+    })).toThrow("value rejected by its input field");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: {
+          argument: "operation",
+          values: ["plus"],
+          exceptValues: ["show"]
+        }
+      }]
+    })).toThrow("exactly one of values or exceptValues");
+    expect(() => defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: access.moderators,
+        when: { argument: "operation" }
+      }]
+    })).toThrow("exactly one of values or exceptValues");
+
+    const unregistered = defineAction({
+      ...base,
+      uses: { services: ["authorization"] },
+      conditionalAccess: [{
+        capability: "unregistered.conditional",
+        when: { argument: "operation", values: ["plus"] }
+      }]
+    });
+    expect(() => createFeatureRegistry([
+      feature({ actions: [unregistered] })
+    ], { availableServices: ["authorization"] }))
+      .toThrow("conditional capability is not registered");
   });
 
   it("fails composition for unavailable services and blocks undeclared service access", async () => {
@@ -480,6 +1143,30 @@ describe("Command and feature framework", () => {
         sourceEventId: "discord:interaction:undeclared"
       }),
       { featureServices: { state: { get: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_service_undeclared" });
+
+    const undeclaredLinksAction = defineAction({
+      kind: "test.links.undeclared.v1",
+      supportedOrigins: ["discord"],
+      execute: async (ctx) => {
+        await ctx.links.default("twitch");
+        return { output: {}, effects: [] };
+      }
+    });
+    const linksCatalog = createFeatureRegistry([
+      feature({ actions: [undeclaredLinksAction] })
+    ]);
+    await expect(executeAction(
+      createActionRegistry(linksCatalog.actions),
+      createCommandInvocation({
+        kind: undeclaredLinksAction.kind,
+        origin: {
+          group: { platform: "discord", kind: "guild", id: "guild-1" },
+          actor: { platform: "discord", id: "user-1", claims: [] }
+        },
+        sourceEventId: "discord:interaction:undeclared-links"
+      }),
+      { featureServices: { links: { default: vi.fn() } } }
     )).rejects.toMatchObject({ code: "feature_service_undeclared" });
   });
 

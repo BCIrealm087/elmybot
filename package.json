@@ -10,6 +10,7 @@
 	"scripts": {
 		"discord-register": "node src/platforms/discord/register-commands.js",
 		"feature:docs": "node scripts/generate-feature-docs.js",
+		"feature:check": "node scripts/check-feature.js",
 		"feature:new": "node scripts/create-feature.js",
 		"feature:workspaces": "node scripts/check-workspace-features.js",
 		"deploy": "wrangler deploy",
@@ -20,6 +21,7 @@
 	},
 	"dependencies": {
 		"@elmybot/feature-alive": "1.0.0",
+		"@elmybot/feature-fun-deaths": "0.1.0",
 		"@elmybot/framework": "1.0.0"
 	},
 	"devDependencies": {

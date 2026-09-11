@@ -1,0 +1,17 @@
+{
+  "name": "@elmybot/feature-fun-deaths",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/feature.js"
+  },
+  "peerDependencies": {
+    "@elmybot/framework": "^1.0.0"
+  },
+  "elmybot": {
+    "kind": "feature",
+    "frameworkApiVersion": 1,
+    "featureId": "fun.deaths"
+  }
+}

@@ -5,6 +5,7 @@ import {
   SCHEDULED_ACTION_COMMAND_TYPE,
   markCommandDefinition,
   normalizeCommandIdentity,
+  normalizeCommandUsage,
   requireActionKind,
   requireCapability,
   requireObjectSchema
@@ -128,6 +129,7 @@ function normalizeOptions(options) {
 export function discordActionCommand({
   name,
   description,
+  usage,
   availability,
   deferred = false,
   actionKind,
@@ -145,6 +147,7 @@ export function discordActionCommand({
     platform: "discord",
     mode: ACTION_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "discord"),
     availability: requireAvailability(availability),
     deferred,
     actionKind: requireActionKind(actionKind),
@@ -156,6 +159,7 @@ export function discordActionCommand({
 export function discordNativeCommand({
   name,
   description,
+  usage,
   availability,
   deferred = false,
   capability = null,
@@ -174,6 +178,7 @@ export function discordNativeCommand({
     platform: "discord",
     mode: NATIVE_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "discord"),
     availability: requireAvailability(availability),
     deferred,
     capability: requireCapability(capability),
@@ -186,6 +191,7 @@ export function discordNativeCommand({
 export function discordScheduledActionCommand({
   name,
   description,
+  usage,
   availability,
   deferred = true,
   scheduleKind,
@@ -207,6 +213,7 @@ export function discordScheduledActionCommand({
     platform: "discord",
     mode: SCHEDULED_ACTION_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "discord"),
     availability: requireAvailability(availability),
     deferred,
     scheduleKind: requireActionKind(scheduleKind),

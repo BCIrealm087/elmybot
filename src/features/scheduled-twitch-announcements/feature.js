@@ -5,7 +5,12 @@ import {
   discordScheduledActionCommand,
   frameworkApiVersion
 } from "../../framework/index.js";
-import { ANNOUNCEMENT_ACTION_KIND } from "../announcements/feature.js";
+import {
+  ANNOUNCEMENT_ACTION_KIND,
+  TWITCH_ANNOUNCEMENT_TEXT_LIMITS
+} from "../announcements/feature.js";
+
+const INTERVAL_LIMITS = Object.freeze({ min: 600, max: 86_400 });
 
 export const SCHEDULED_TWITCH_ANNOUNCEMENT_KIND =
   "discord.integration.announce-twitch-random.v1";
@@ -27,6 +32,7 @@ export const scheduledTwitchAnnouncementsFeature = defineFeature({
     discord: [
       discordScheduledActionCommand({
         name: "integration_schedule_twitch",
+        usage: "/integration_schedule_twitch message:Hello everyone! min_interval:600 max_interval:900",
         description: "Schedule a recurring message in linked Twitch chats.",
         availability: "guild",
         deferred: true,
@@ -38,8 +44,7 @@ export const scheduledTwitchAnnouncementsFeature = defineFeature({
             description: "Message to send.",
             type: "string",
             required: true,
-            minLength: 1,
-            maxLength: 500
+            ...TWITCH_ANNOUNCEMENT_TEXT_LIMITS
           }),
           discordOption({
             arg: "min_interval",
@@ -47,8 +52,7 @@ export const scheduledTwitchAnnouncementsFeature = defineFeature({
             description: "Minimum interval in seconds.",
             type: "integer",
             required: false,
-            min: 600,
-            max: 86_400
+            ...INTERVAL_LIMITS
           }),
           discordOption({
             arg: "max_interval",
@@ -56,8 +60,7 @@ export const scheduledTwitchAnnouncementsFeature = defineFeature({
             description: "Maximum interval in seconds.",
             type: "integer",
             required: false,
-            min: 600,
-            max: 86_400
+            ...INTERVAL_LIMITS
           })
         ],
         mapSchedule(args) {

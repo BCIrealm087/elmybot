@@ -6,6 +6,7 @@ import {
   markCommandDefinition,
   markTwitchParser,
   normalizeCommandIdentity,
+  normalizeCommandUsage,
   requireActionKind,
   requireCapability,
   requireObjectSchema
@@ -30,6 +31,42 @@ function parseToken(value, type, path) {
     throw new SchemaValidationError(path, "must be `true` or `false`.");
   }
   throw new TypeError(`Unsupported Twitch token type: \`${type}\`.`);
+}
+
+function tokenizeArgs(argsText) {
+  const tokens = [];
+  let token = "";
+  let tokenStarted = false;
+  let quoted = false;
+  let escaped = false;
+
+  for (const character of argsText.trim()) {
+    if (escaped) {
+      token += character;
+      tokenStarted = true;
+      escaped = false;
+    } else if (character === "\\" && quoted) {
+      escaped = true;
+    } else if (character === "\"") {
+      quoted = !quoted;
+      tokenStarted = true;
+    } else if (/\s/.test(character) && !quoted) {
+      if (tokenStarted) {
+        tokens.push(token);
+        token = "";
+        tokenStarted = false;
+      }
+    } else {
+      token += character;
+      tokenStarted = true;
+    }
+  }
+  if (quoted) {
+    throw new SchemaValidationError("arguments", "contains an unterminated quote.");
+  }
+  if (escaped) token += "\\";
+  if (tokenStarted) tokens.push(token);
+  return tokens;
 }
 
 export function twitchNoArgs() {
@@ -121,7 +158,7 @@ export function twitchTokens(fields) {
   return markTwitchParser({
     kind: "tokens",
     parse(argsText) {
-      const tokens = argsText.trim().length === 0 ? [] : argsText.trim().split(/\s+/);
+      const tokens = tokenizeArgs(argsText);
       if (tokens.length > definitions.length) {
         throw new SchemaValidationError("arguments", "contains too many values.");
       }
@@ -143,6 +180,7 @@ export function twitchTokens(fields) {
 export function twitchActionCommand({
   name,
   description,
+  usage,
   actionKind,
   parse = twitchNoArgs(),
   render = twitchTextResult,
@@ -158,6 +196,7 @@ export function twitchActionCommand({
     platform: "twitch",
     mode: ACTION_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "twitch"),
     actionKind: requireActionKind(actionKind),
     parse,
     render
@@ -167,6 +206,7 @@ export function twitchActionCommand({
 export function twitchNativeCommand({
   name,
   description,
+  usage,
   capability = null,
   parse = twitchNoArgs(),
   input = schema.object({}),
@@ -183,6 +223,7 @@ export function twitchNativeCommand({
     platform: "twitch",
     mode: NATIVE_COMMAND_TYPE,
     ...normalizeCommandIdentity({ name, description }),
+    usage: normalizeCommandUsage(usage, name, "twitch"),
     capability: requireCapability(capability),
     parse,
     input: requireObjectSchema(input),

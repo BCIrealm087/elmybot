@@ -11,15 +11,32 @@ import {
   checkPermissions
 } from "../src/platforms/discord/discord-permissions.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
+  cancelPendingIntegration,
+  createCommandInvocation,
   createIntegrationInvitation,
+  getIntegrationDefaultLink,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
+  INTEGRATION_PENDING_TTL_MS,
+  integrationCoordinatorStub,
   integrationRegistryStub,
   listIntegrationsForGroup,
-  reserveIntegrationInvitation
+  reserveIntegrationInvitation,
+  resolvePendingIntegrationState,
+  resumePendingIntegration,
+  revokeIntegration,
+  revokeIntegrationsForGroup,
+  setIntegrationDefaultLink,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
+import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
+import { initializeRegistryTables } from "../src/integrations/registry-schema.js";
 import { twitchChannelAuthObjectName } from "../src/platforms/twitch/channel-auth.js";
+import {
+  createIntegrationRealmIdentity,
+  shareableStateRealmStub
+} from "../src/shareable-state/index.js";
 
 const integrationEnv = {
   ...env,
@@ -58,7 +75,7 @@ function invitationToken(invitation) {
   return new URL(invitation.invitationUrl).hash.slice("#invite=".length);
 }
 
-async function activateIntegration({
+async function prepareIntegration({
   group = discordGroup(),
   actor = discordActor(),
   channel = twitchGroup(),
@@ -75,14 +92,26 @@ async function activateIntegration({
     reservationId,
     reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
   });
-  const completion = await completeIntegrationInvitation(integrationEnv, {
-    invitationId: reservation.invitationId,
-    reservationId,
-    group: channel,
-    actor: twitchActor(channel.id),
-    groupLabel: login
+  return { group, actor, channel, invitation, reservation, login };
+}
+
+async function completePreparedIntegration(prepared) {
+  const verification = await verifyIntegrationInvitation(integrationEnv, {
+    invitationId: prepared.reservation.invitationId,
+    reservationId: prepared.reservation.reservationId,
+    group: prepared.channel,
+    actor: twitchActor(prepared.channel.id),
+    groupLabel: prepared.login
   });
-  return { group, actor, channel, invitation, reservation, completion };
+  const completion = await activatePendingIntegration(integrationEnv, {
+    invitationId: prepared.reservation.invitationId,
+    reservationId: prepared.reservation.reservationId
+  });
+  return { ...prepared, verification, completion };
+}
+
+async function activateIntegration(options = {}) {
+  return await completePreparedIntegration(await prepareIntegration(options));
 }
 
 async function beginIntegrationOAuth(token) {
@@ -95,10 +124,12 @@ async function beginIntegrationOAuth(token) {
     integrationEnv,
     createExecutionContext()
   );
-  const location = response.headers.get("location");
+  const html = await response.clone().text();
+  const href = html.match(/id="oauth-continue" href="([^"]+)"/)?.[1]
+    .replaceAll("&amp;", "&");
   return {
     response,
-    authorizationUrl: location ? new URL(location) : null
+    authorizationUrl: href ? new URL(href) : null
   };
 }
 
@@ -112,6 +143,8 @@ describe("Cross-platform integration linking", () => {
     expect(commands.integration_link_twitch.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_list.guild.capability)
+      .toBe(CAPABILITIES.INTEGRATION_MANAGE);
+    expect(commands.integration_default_set.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
     expect(commands.integration_unlink.guild.capability)
       .toBe(CAPABILITIES.INTEGRATION_MANAGE);
@@ -188,7 +221,7 @@ describe("Cross-platform integration linking", () => {
           "SELECT token_hash, status, expires_at_ms FROM integration_invitations"
         ).toArray();
         expect(rows).toHaveLength(1);
-        expect(rows[0].status).toBe("pending");
+        expect(rows[0].status).toBe("invited");
         expect(rows[0].token_hash).not.toBe(token);
         expect(JSON.stringify(rows)).not.toContain(token);
         expect(rows[0].expires_at_ms).toBeGreaterThan(
@@ -229,10 +262,12 @@ describe("Cross-platform integration linking", () => {
     const html = await page.text();
     expect(page.status).toBe(200);
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("content-security-policy")).toContain("form-action 'self'");
     expect(html).toContain("Link Twitch to Discord");
 
     const { response, authorizationUrl } = await beginIntegrationOAuth(token);
-    expect(response.status).toBe(303);
+    expect(response.status).toBe(200);
+    expect(await response.clone().text()).toContain("window.location.replace");
     expect(authorizationUrl.origin).toBe("https://id.twitch.tv");
     expect(authorizationUrl.searchParams.get("scope")).toBe("channel:bot");
 
@@ -241,7 +276,7 @@ describe("Cross-platform integration linking", () => {
     expect(await replay.response.text()).toContain("already been used");
   });
 
-  it("derives the broadcaster through OAuth and activates a discoverable link", async () => {
+  it("derives the broadcaster, persists a resumable pending link, then activates it", async () => {
     const group = discordGroup();
     const actor = discordActor();
     const invitation = await createIntegrationInvitation(integrationEnv, {
@@ -281,11 +316,56 @@ describe("Cross-platform integration linking", () => {
       integrationEnv,
       createExecutionContext()
     );
-    const html = await response.text();
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toBe("/twitch/integrations/pending");
+    const resumeCookie = response.headers.get("set-cookie")?.split(";")[0];
+    expect(resumeCookie).toMatch(/^elmybot_integration_resume=.+/);
 
-    expect(response.status).toBe(200);
-    expect(html).toContain("Twitch and Discord are linked");
-    expect(html).toContain("linked_channel");
+    const pendingRequest = () => worker.fetch(
+      new Request("https://example.com/twitch/integrations/pending", {
+        headers: { cookie: resumeCookie }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    const pendingPage = await pendingRequest();
+    const pendingHtml = await pendingPage.text();
+    expect(pendingPage.status).toBe(200);
+    expect(pendingHtml).toContain("Twitch and Discord are linked");
+    expect(pendingHtml).toContain("linked_channel");
+
+    const refreshedPage = await pendingRequest();
+    expect(refreshedPage.status).toBe(200);
+    expect(await refreshedPage.text()).toContain("Twitch and Discord are linked");
+    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(1);
+
+    const resumed = await resumePendingIntegration(integrationEnv, {
+      reservationId: state
+    });
+    expect(resumed.pendingIntegration).toMatchObject({
+      invitationId: invitation.invitationId,
+      status: "active",
+      twitchLabel: "linked_channel",
+      stateDiscovery: {
+        version: 1,
+        requiresResolution: false,
+        namespaces: [{
+          featureId: "fun.deaths",
+          namespaceId: "game_deaths",
+          outcome: "both_empty",
+          automaticSelection: "reset"
+        }]
+      }
+    });
+    const activated = await activatePendingIntegration(integrationEnv, {
+      invitationId: invitation.invitationId,
+      reservationId: state
+    });
+    expect(activated).toMatchObject({ replayed: true });
+
+    const completedPage = await pendingRequest();
+    expect(completedPage.status).toBe(200);
+    expect(await completedPage.text()).toContain("Twitch and Discord are linked");
 
     const listed = await listIntegrationsForGroup(integrationEnv, group);
     expect(listed.total).toBe(1);
@@ -339,7 +419,7 @@ describe("Cross-platform integration linking", () => {
     });
     const channel = twitchGroup();
 
-    await expect(completeIntegrationInvitation(integrationEnv, {
+    await expect(verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
@@ -349,22 +429,117 @@ describe("Cross-platform integration linking", () => {
       code: "integration_twitch_broadcaster_required"
     });
 
-    const completion = await completeIntegrationInvitation(integrationEnv, {
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
       actor: twitchActor(channel.id)
     });
-    expect(completion.integration.status).toBe("active");
+    expect(verification.pendingIntegration.status)
+      .toBe("awaiting_state_resolution");
+    expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
 
-    const replayed = await completeIntegrationInvitation(integrationEnv, {
+    const replayed = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: reservation.invitationId,
       reservationId,
       group: channel,
       actor: twitchActor(channel.id)
     });
     expect(replayed.replayed).toBe(true);
-    expect(replayed.integration.id).toBe(completion.integration.id);
+    expect(replayed.pendingIntegration.integrationId)
+      .toBe(verification.pendingIntegration.integrationId);
+
+    const completion = await activatePendingIntegration(integrationEnv, {
+      invitationId: reservation.invitationId,
+      reservationId
+    });
+    expect(completion.integration.status).toBe("active");
+    const activationReplay = await activatePendingIntegration(integrationEnv, {
+      invitationId: reservation.invitationId,
+      reservationId
+    });
+    expect(activationReplay.replayed).toBe(true);
+    expect(activationReplay.integration.id).toBe(completion.integration.id);
+  });
+
+  it("cancels a verified pending link idempotently without creating an integration", async () => {
+    const prepared = await prepareIntegration();
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId,
+      group: prepared.channel,
+      actor: twitchActor(prepared.channel.id),
+      groupLabel: prepared.login
+    });
+    const cookie = `elmybot_integration_resume=${prepared.reservation.reservationId}`;
+
+    const crossOrigin = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/cancel", {
+        method: "POST",
+        headers: { cookie, origin: "https://attacker.example" }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(crossOrigin.status).toBe(403);
+
+    const cancelledPage = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/cancel", {
+        method: "POST",
+        headers: { cookie, origin: "https://example.com" }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(cancelledPage.status).toBe(200);
+    expect(await cancelledPage.text()).toContain("No integration was created");
+
+    const cancelled = await cancelPendingIntegration(integrationEnv, {
+      reservationId: prepared.reservation.reservationId
+    });
+    expect(cancelled.pendingIntegration.status).toBe("cancelled");
+    expect(cancelled.pendingIntegration.integrationId)
+      .toBe(verification.pendingIntegration.integrationId);
+    expect((await listIntegrationsForGroup(integrationEnv, prepared.group)).total)
+      .toBe(0);
+
+    const refreshed = await worker.fetch(
+      new Request("https://example.com/twitch/integrations/pending", {
+        headers: { cookie }
+      }),
+      integrationEnv,
+      createExecutionContext()
+    );
+    expect(refreshed.status).toBe(200);
+    expect(await refreshed.text()).toContain("No integration was created");
+  });
+
+  it("expires verified pending links after the resolution window", async () => {
+    const prepared = await prepareIntegration();
+    const verification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId,
+      group: prepared.channel,
+      actor: twitchActor(prepared.channel.id)
+    });
+    expect(verification.pendingIntegration.expiresAtMs).toBeGreaterThanOrEqual(
+      Date.now() + INTEGRATION_PENDING_TTL_MS - 1_000
+    );
+    vi.spyOn(Date, "now").mockReturnValue(
+      verification.pendingIntegration.expiresAtMs + 1
+    );
+
+    const resumed = await resumePendingIntegration(integrationEnv, {
+      reservationId: prepared.reservation.reservationId
+    });
+    expect(resumed.pendingIntegration.status).toBe("expired");
+    await expect(activatePendingIntegration(integrationEnv, {
+      invitationId: prepared.reservation.invitationId,
+      reservationId: prepared.reservation.reservationId
+    })).rejects.toMatchObject({
+      status: 410,
+      code: "integration_pending_expired"
+    });
   });
 
   it("rejects invitations after their short-lived expiry", async () => {
@@ -393,6 +568,1028 @@ describe("Cross-platform integration linking", () => {
     expect(second.completion.alreadyLinked).toBe(true);
     expect(second.completion.integration.id).toBe(first.completion.integration.id);
     expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(1);
+  });
+
+  it("automatically assigns the first active link in both directions", async () => {
+    const linked = await activateIntegration();
+    const integrationId = linked.completion.integration.id;
+    const discordDefault = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: linked.group,
+      targetPlatform: "twitch"
+    });
+    const twitchDefault = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: linked.channel,
+      targetPlatform: "discord"
+    });
+
+    expect(discordDefault.defaultLink).toMatchObject({
+      sourceGroup: linked.group,
+      targetPlatform: "twitch",
+      integration: { id: integrationId },
+      targetGroup: linked.channel
+    });
+    expect(twitchDefault.defaultLink).toMatchObject({
+      sourceGroup: linked.channel,
+      targetPlatform: "discord",
+      integration: { id: integrationId },
+      targetGroup: linked.group
+    });
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT source_group_key, target_platform, integration_id,
+                  target_group_key
+           FROM integration_default_links
+           WHERE integration_id = ?
+           ORDER BY source_group_key`,
+          integrationId
+        ).toArray()).toEqual([
+          {
+            source_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`,
+            target_platform: "twitch",
+            integration_id: integrationId,
+            target_group_key: linked.channel.key ?? `twitch:channel:${linked.channel.id}`
+          },
+          {
+            source_group_key: linked.channel.key ?? `twitch:channel:${linked.channel.id}`,
+            target_platform: "discord",
+            integration_id: integrationId,
+            target_group_key: linked.group.key ?? `discord:guild:${linked.group.id}`
+          }
+        ]);
+      }
+    );
+  });
+
+  it("discovers from each group's current effective realm", async () => {
+    const linked = await activateIntegration();
+    const integrationId = linked.completion.integration.id;
+    const nextChannel = twitchGroup();
+    const fromDiscordDefault = await prepareIntegration({
+      group: linked.group,
+      channel: nextChannel
+    });
+    await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: fromDiscordDefault.reservation.invitationId,
+      reservationId: fromDiscordDefault.reservation.reservationId,
+      group: nextChannel,
+      actor: twitchActor(nextChannel.id)
+    });
+
+    const nextGuild = discordGroup();
+    const fromTwitchDefault = await prepareIntegration({
+      group: nextGuild,
+      channel: linked.channel
+    });
+    await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: fromTwitchDefault.reservation.invitationId,
+      reservationId: fromTwitchDefault.reservation.reservationId,
+      group: linked.channel,
+      actor: twitchActor(linked.channel.id)
+    });
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        const discoveries = state.storage.sql.exec(
+          `SELECT invitation_id, discord_realm_json, twitch_realm_json
+           FROM integration_pending_discoveries
+           WHERE invitation_id IN (?, ?)
+           ORDER BY invitation_id`,
+          fromDiscordDefault.invitation.invitationId,
+          fromTwitchDefault.invitation.invitationId
+        ).toArray();
+        const byInvitation = Object.fromEntries(discoveries.map((row) => [
+          row.invitation_id,
+          {
+            discord: JSON.parse(row.discord_realm_json),
+            twitch: JSON.parse(row.twitch_realm_json)
+          }
+        ]));
+        expect(byInvitation[fromDiscordDefault.invitation.invitationId])
+          .toMatchObject({
+            discord: {
+              kind: "integration",
+              ownerIntegration: { id: integrationId }
+            },
+            twitch: {
+              kind: "standalone",
+              ownerGroup: { id: nextChannel.id }
+            }
+          });
+        expect(byInvitation[fromTwitchDefault.invitation.invitationId])
+          .toMatchObject({
+            discord: {
+              kind: "standalone",
+              ownerGroup: { id: nextGuild.id }
+            },
+            twitch: {
+              kind: "integration",
+              ownerIntegration: { id: integrationId }
+            }
+          });
+      }
+    );
+  });
+
+  it("exposes the invocation group's default through the feature service runtime", async () => {
+    const linked = await activateIntegration();
+    const invocation = createCommandInvocation({
+      kind: "test.default-link.read.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:feature-default-link"
+    });
+    const runtime = createFeatureServiceRuntime(integrationEnv, invocation);
+
+    await expect(runtime.featureServices.links.default(
+      "test.default-link",
+      "twitch"
+    )).resolves.toMatchObject({
+      sourceGroup: linked.group,
+      targetPlatform: "twitch",
+      integration: { id: linked.completion.integration.id },
+      targetGroup: linked.channel
+    });
+  });
+
+  it("shares feature state through an active integration and blocks it after revocation", async () => {
+    const linked = await activateIntegration();
+    const discordInvocation = createCommandInvocation({
+      kind: "test.integration-state.read.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:integration-state"
+    });
+    const discordRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      discordInvocation
+    );
+    const discordLink = await discordRuntime.featureServices.links.default(
+      "test.integration-state",
+      "twitch"
+    );
+    const descriptor = {
+      name: "score",
+      subject: "shared-game",
+      min: 0,
+      max: 100,
+      initial: 0
+    };
+
+    await expect(discordRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      discordLink,
+      descriptor,
+      "set",
+      37
+    )).resolves.toBe(37);
+
+    const twitchInvocation = createCommandInvocation({
+      kind: "test.integration-state.read.v1",
+      origin: {
+        group: linked.channel,
+        actor: twitchActor(linked.channel.id)
+      },
+      sourceEventId: "twitch:chat:integration-state"
+    });
+    const twitchRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      twitchInvocation
+    );
+    const twitchLink = await twitchRuntime.featureServices.links.default(
+      "test.integration-state",
+      "discord"
+    );
+    await expect(twitchRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      twitchLink,
+      descriptor,
+      "get"
+    )).resolves.toBe(37);
+
+    await expect(discordRuntime.featureServices.integrationState.get(
+      "test.integration-state",
+      {
+        ...discordLink,
+        sourceGroup: discordGroup("outside-guild")
+      },
+      "value"
+    )).rejects.toMatchObject({
+      status: 403,
+      code: "integration_feature_state_member_invalid"
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: linked.completion.integration.id,
+      group: linked.group,
+      actor: linked.actor,
+      reason: "test_revocation"
+    });
+    await expect(discordRuntime.featureServices.integrationState.boundedCounter(
+      "test.integration-state",
+      discordLink,
+      descriptor,
+      "get"
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "integration_inactive"
+    });
+  });
+
+  it("adopts and seals an existing linked deaths ledger on first shareable access", async () => {
+    const linked = await activateIntegration();
+    const invocation = createCommandInvocation({
+      kind: "fun.deaths.manage.v1",
+      origin: { group: linked.group, actor: linked.actor },
+      sourceEventId: "discord:interaction:legacy-deaths-adoption"
+    });
+    const runtime = createFeatureServiceRuntime(integrationEnv, invocation);
+    const link = await runtime.featureServices.links.default(
+      "fun.deaths",
+      "twitch"
+    );
+    const descriptor = {
+      name: "game",
+      subject: "hades",
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+      initial: 0
+    };
+    const realm = createIntegrationRealmIdentity(linked.completion.integration, {
+      generation: linked.completion.integration.shareableStateGeneration
+    });
+    await runInDurableObject(
+      shareableStateRealmStub(integrationEnv, realm),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_legacy_adoptions
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_materializations
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+        state.storage.sql.exec(
+          `DELETE FROM shareable_state_realm_namespaces
+           WHERE feature_id = 'fun.deaths' AND namespace_id = 'game_deaths'`
+        );
+      }
+    );
+
+    await expect(runtime.featureServices.integrationState.boundedCounter(
+      "fun.deaths",
+      link,
+      descriptor,
+      "set",
+      37
+    )).resolves.toBe(37);
+    await runInDurableObject(
+      integrationCoordinatorStub(integrationEnv, linked.completion.integration.id),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT value_json FROM framework_feature_values
+           WHERE feature_id = 'fun.deaths' AND value_kind = 'state'`
+        ).toArray()).toEqual([{ value_json: "37" }]);
+      }
+    );
+    const shared = await runtime.featureServices.shareableState.current(
+      "fun.deaths",
+      "twitch",
+      "game_deaths"
+    );
+    const adoptedCount = await runtime.featureServices.shareableState.boundedCounter(
+      "fun.deaths",
+      shared,
+      descriptor,
+      "get"
+    );
+    let adoptionRows;
+    await runInDurableObject(
+      shareableStateRealmStub(integrationEnv, realm),
+      async (_instance, state) => {
+        adoptionRows = {
+          adoptions: state.storage.sql.exec(
+            "SELECT * FROM shareable_state_realm_legacy_adoptions"
+          ).toArray(),
+          values: state.storage.sql.exec(
+            "SELECT * FROM shareable_state_realm_values"
+          ).toArray()
+        };
+      }
+    );
+    expect({ adoptedCount, adoptionRows }).toMatchObject({
+      adoptedCount: 37,
+      adoptionRows: {
+        adoptions: [{ outcome: "adopted", entry_count: 1 }]
+      }
+    });
+    await expect(runtime.featureServices.integrationState.boundedCounter(
+      "fun.deaths",
+      link,
+      descriptor,
+      "increment",
+      1
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "integration_feature_state_migrated"
+    });
+    await expect(runtime.featureServices.shareableState.boundedCounter(
+      "fun.deaths",
+      shared,
+      descriptor,
+      "get"
+    )).resolves.toBe(37);
+  });
+
+  it("carries deaths through standalone collision, linking, revocation, and relinking", async () => {
+    const group = discordGroup();
+    const channel = twitchGroup();
+    let invocationSequence = 0;
+    const deathsState = async (originGroup, targetPlatform) => {
+      invocationSequence += 1;
+      const runtime = createFeatureServiceRuntime(
+        integrationEnv,
+        createCommandInvocation({
+          kind: "fun.deaths.manage.v1",
+          origin: {
+            group: originGroup,
+            actor: originGroup.platform === "discord"
+              ? discordActor()
+              : twitchActor(originGroup.id)
+          },
+          sourceEventId:
+            `${originGroup.platform}:test:deaths-lifecycle:${invocationSequence}`
+        })
+      );
+      const scope = await runtime.featureServices.shareableState.current(
+        "fun.deaths",
+        targetPlatform,
+        "game_deaths"
+      );
+      const descriptor = {
+        name: "game",
+        subject: "hades",
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+        initial: 0
+      };
+      return {
+        get: async () => await runtime.featureServices.shareableState.boundedCounter(
+          "fun.deaths", scope, descriptor, "get"
+        ),
+        set: async (value) => await runtime.featureServices.shareableState.boundedCounter(
+          "fun.deaths", scope, descriptor, "set", value
+        )
+      };
+    };
+
+    await (await deathsState(group, "twitch")).set(3);
+    await (await deathsState(channel, "discord")).set(5);
+
+    const first = await prepareIntegration({ group, channel });
+    const firstVerification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: first.reservation.invitationId,
+      reservationId: first.reservation.reservationId,
+      group: channel,
+      actor: twitchActor(channel.id),
+      groupLabel: first.login
+    });
+    expect(firstVerification.pendingIntegration.stateDiscovery).toMatchObject({
+      requiresResolution: true,
+      namespaces: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        outcome: "collision"
+      }]
+    });
+    await resolvePendingIntegrationState(integrationEnv, {
+      reservationId: first.reservation.reservationId,
+      discoveryVersion: firstVerification.pendingIntegration.stateDiscovery.version,
+      selections: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        selection: "discord"
+      }]
+    });
+    const firstCompletion = await activatePendingIntegration(integrationEnv, {
+      invitationId: first.reservation.invitationId,
+      reservationId: first.reservation.reservationId
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(3);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(3);
+    await (await deathsState(group, "twitch")).set(4);
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: firstCompletion.integration.id,
+      group,
+      actor: first.actor,
+      reason: "test_deaths_standalone_continuation"
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(4);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    await (await deathsState(group, "twitch")).set(6);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+
+    const second = await prepareIntegration({ group, channel });
+    const secondVerification = await verifyIntegrationInvitation(integrationEnv, {
+      invitationId: second.reservation.invitationId,
+      reservationId: second.reservation.reservationId,
+      group: channel,
+      actor: twitchActor(channel.id),
+      groupLabel: second.login
+    });
+    expect(secondVerification.pendingIntegration.stateDiscovery).toMatchObject({
+      requiresResolution: true,
+      namespaces: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        outcome: "collision"
+      }]
+    });
+    await resolvePendingIntegrationState(integrationEnv, {
+      reservationId: second.reservation.reservationId,
+      discoveryVersion: secondVerification.pendingIntegration.stateDiscovery.version,
+      selections: [{
+        featureId: "fun.deaths",
+        namespaceId: "game_deaths",
+        selection: "twitch"
+      }]
+    });
+    await activatePendingIntegration(integrationEnv, {
+      invitationId: second.reservation.invitationId,
+      reservationId: second.reservation.reservationId
+    });
+    expect(await (await deathsState(group, "twitch")).get()).toBe(4);
+    expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+  });
+
+  it("resolves and pins standalone or active integration shareable-state realms", async () => {
+    const unlinkedGroup = discordGroup();
+    const standaloneRuntime = createFeatureServiceRuntime(
+      integrationEnv,
+      createCommandInvocation({
+        kind: "test.shareable-state.read.v1",
+        origin: { group: unlinkedGroup, actor: discordActor() },
+        sourceEventId: "discord:interaction:standalone-shareable-state"
+      })
+    );
+    const standalone = await standaloneRuntime.featureServices.shareableState.current(
+      "test.shareable-state",
+      "twitch",
+      "score"
+    );
+    expect(standalone).toMatchObject({
+      featureId: "test.shareable-state",
+      namespaceId: "score",
+      realm: {
+        kind: "standalone",
+        ownerGroup: { key: `discord:guild:${unlinkedGroup.id}` },
+        generation: 1
+      }
+    });
+
+    const linked = await activateIntegration();
+    const runtime = createFeatureServiceRuntime(
+      integrationEnv,
+      createCommandInvocation({
+        kind: "test.shareable-state.read.v1",
+        origin: { group: linked.group, actor: linked.actor },
+        sourceEventId: "discord:interaction:integration-shareable-state"
+      })
+    );
+    const shared = await runtime.featureServices.shareableState.current(
+      "test.shareable-state",
+      "twitch",
+      "score"
+    );
+    expect(shared).toMatchObject({
+      realm: {
+        kind: "integration",
+        ownerIntegration: { id: linked.completion.integration.id },
+        generation: 1
+      },
+      link: {
+        sourceGroup: linked.group,
+        targetGroup: linked.channel
+      }
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      { ...shared },
+      "value"
+    )).rejects.toMatchObject({
+      status: 403,
+      code: "shareable_state_scope_invalid"
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      shared,
+      "value"
+    )).rejects.toMatchObject({
+      status: 404,
+      code: "shareable_state_namespace_not_declared"
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: linked.completion.integration.id,
+      group: linked.group,
+      actor: linked.actor,
+      reason: "test_shareable_state_revocation"
+    });
+    await expect(runtime.featureServices.shareableState.get(
+      "test.shareable-state",
+      shared,
+      "value"
+    )).rejects.toMatchObject({
+      status: 409,
+      code: "shareable_state_transition"
+    });
+  });
+
+  it("backfills defaults for active links created before the default table", async () => {
+    const linked = await activateIntegration();
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        state.storage.sql.exec(
+          "DELETE FROM integration_default_links WHERE integration_id = ?",
+          linked.completion.integration.id
+        );
+        initializeRegistryTables(state);
+        expect(state.storage.sql.exec(
+          `SELECT source_group_key, target_platform, integration_id
+           FROM integration_default_links
+           WHERE integration_id = ?
+           ORDER BY source_group_key`,
+          linked.completion.integration.id
+        ).toArray()).toEqual([
+          {
+            source_group_key: `discord:guild:${linked.group.id}`,
+            target_platform: "twitch",
+            integration_id: linked.completion.integration.id
+          },
+          {
+            source_group_key: `twitch:channel:${linked.channel.id}`,
+            target_platform: "discord",
+            integration_id: linked.completion.integration.id
+          }
+        ]);
+      }
+    );
+  });
+
+  it("does not replace a directional default when a later link is assigned", async () => {
+    const group = discordGroup();
+    const first = await activateIntegration({ group, channel: twitchGroup() });
+    const second = await activateIntegration({ group, channel: twitchGroup() });
+    const unchanged = await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetPlatform: "twitch"
+    });
+
+    expect(unchanged.defaultLink.integration.id)
+      .toBe(first.completion.integration.id);
+    expect(unchanged.defaultLink.targetGroup).toMatchObject(first.channel);
+    expect(unchanged.defaultLink.integration.id)
+      .not.toBe(second.completion.integration.id);
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_default_links
+           WHERE source_group_key = ?`,
+          `discord:guild:${group.id}`
+        ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("keeps four many-to-many defaults independent in both directions", async () => {
+    const firstGuild = discordGroup();
+    const secondGuild = discordGroup();
+    const firstChannel = twitchGroup();
+    const secondChannel = twitchGroup();
+    const firstActor = discordActor();
+    const secondActor = discordActor();
+    const firstToFirst = await activateIntegration({
+      group: firstGuild,
+      actor: firstActor,
+      channel: firstChannel
+    });
+    const firstToSecond = await activateIntegration({
+      group: firstGuild,
+      actor: firstActor,
+      channel: secondChannel
+    });
+    const secondToFirst = await activateIntegration({
+      group: secondGuild,
+      actor: secondActor,
+      channel: firstChannel
+    });
+    await activateIntegration({
+      group: secondGuild,
+      actor: secondActor,
+      channel: secondChannel
+    });
+
+    await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetGroup: secondChannel,
+      integrationId: firstToSecond.completion.integration.id,
+      actor: firstActor
+    });
+    await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstChannel,
+      targetGroup: secondGuild,
+      integrationId: secondToFirst.completion.integration.id,
+      actor: twitchActor(firstChannel.id)
+    });
+
+    const defaults = await Promise.all([
+      getIntegrationDefaultLink(integrationEnv, {
+        sourceGroup: firstGuild,
+        targetPlatform: "twitch"
+      }),
+      getIntegrationDefaultLink(integrationEnv, {
+        sourceGroup: secondGuild,
+        targetPlatform: "twitch"
+      }),
+      getIntegrationDefaultLink(integrationEnv, {
+        sourceGroup: firstChannel,
+        targetPlatform: "discord"
+      }),
+      getIntegrationDefaultLink(integrationEnv, {
+        sourceGroup: secondChannel,
+        targetPlatform: "discord"
+      })
+    ]);
+    expect(defaults.map(({ defaultLink }) => defaultLink.targetGroup.id)).toEqual([
+      secondChannel.id,
+      firstChannel.id,
+      secondGuild.id,
+      firstGuild.id
+    ]);
+    expect(defaults[1].defaultLink.integration.id)
+      .toBe(secondToFirst.completion.integration.id);
+    expect(defaults[3].defaultLink.integration.id)
+      .toBe(firstToSecond.completion.integration.id);
+    expect(defaults[0].defaultLink.integration.id)
+      .not.toBe(firstToFirst.completion.integration.id);
+  });
+
+  it("serializes concurrent first-link completion to one directional winner", async () => {
+    const group = discordGroup();
+    const actor = discordActor();
+    const prepared = await Promise.all([
+      prepareIntegration({ group, actor, channel: twitchGroup() }),
+      prepareIntegration({ group, actor, channel: twitchGroup() })
+    ]);
+    const attempts = await Promise.all(prepared.map((candidate) =>
+      completePreparedIntegration(candidate).catch((error) => error)
+    ));
+    const completed = [];
+    for (const [index, attempt] of attempts.entries()) {
+      if (attempt instanceof Error) {
+        expect(attempt).toMatchObject({ status: 409 });
+        let resumed;
+        let completion;
+        for (let retry = 0; retry < 3 && completion === undefined; retry += 1) {
+          resumed = await resumePendingIntegration(integrationEnv, {
+            reservationId: prepared[index].reservation.reservationId
+          });
+          try {
+            completion = await activatePendingIntegration(integrationEnv, {
+              invitationId: prepared[index].reservation.invitationId,
+              reservationId: prepared[index].reservation.reservationId
+            });
+          } catch (error) {
+            if (error.code !== "integration_state_rediscovery_required") throw error;
+          }
+        }
+        expect(completion).toBeDefined();
+        completed.push({ ...prepared[index], verification: resumed, completion });
+      } else {
+        completed.push(attempt);
+      }
+    }
+    const [first, second] = completed;
+    const candidates = new Set([
+      first.completion.integration.id,
+      second.completion.integration.id
+    ]);
+    const selected = (await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetPlatform: "twitch"
+    })).defaultLink;
+
+    expect(candidates.has(selected.integration.id)).toBe(true);
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_default_links
+           WHERE source_group_key = ? AND target_platform = 'twitch'`,
+          `discord:guild:${group.id}`
+        ).one().total).toBe(1);
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_audit
+           WHERE group_key = ? AND event = 'integration.default.assigned.v1'`,
+          `discord:guild:${group.id}`
+        ).one().total).toBe(1);
+      }
+    );
+  });
+
+  it("allows an owning platform actor to switch but not unset its default", async () => {
+    const group = discordGroup();
+    const actor = discordActor();
+    const first = await activateIntegration({ group, actor, channel: twitchGroup() });
+    const second = await activateIntegration({ group, actor, channel: twitchGroup() });
+    const switchedAtMs = Date.now() + 1_000;
+    vi.spyOn(Date, "now").mockReturnValue(switchedAtMs);
+
+    const switched = await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor
+    });
+    expect(switched).toMatchObject({
+      changed: true,
+      defaultLink: {
+        sourceGroup: group,
+        targetPlatform: "twitch",
+        integration: { id: second.completion.integration.id },
+        targetGroup: second.channel,
+        updatedAtMs: switchedAtMs
+      }
+    });
+    expect(switched.defaultLink.createdAtMs).toBeLessThan(switchedAtMs);
+
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor: twitchActor(second.channel.id)
+    })).rejects.toMatchObject({
+      status: 403,
+      code: "integration_actor_platform_mismatch"
+    });
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: null,
+      integrationId: first.completion.integration.id,
+      actor
+    })).rejects.toMatchObject({ code: "integration_identity_invalid" });
+
+    const unchanged = await setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetGroup: second.channel,
+      integrationId: second.completion.integration.id,
+      actor
+    });
+    expect(unchanged.changed).toBe(false);
+    expect(unchanged.defaultLink.updatedAtMs).toBe(switchedAtMs);
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT event, actor_platform, actor_id, group_key
+           FROM integration_audit
+           WHERE integration_id = ? AND event = 'integration.default.updated.v1'`,
+          second.completion.integration.id
+        ).toArray()).toEqual([{
+          event: "integration.default.updated.v1",
+          actor_platform: "discord",
+          actor_id: actor.id,
+          group_key: `discord:guild:${group.id}`
+        }]);
+      }
+    );
+  });
+
+  it("rejects invalid directional default-link ownership", async () => {
+    const linked = await activateIntegration();
+
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance) => {
+        expect(() => instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.group,
+          targetGroup: discordGroup(),
+          integrationId: linked.completion.integration.id
+        })).toThrow(expect.objectContaining({
+          code: "integration_default_platform_invalid"
+        }));
+        expect(() => instance.assignDefaultLinkIfAbsent({
+          sourceGroup: linked.group,
+          targetGroup: twitchGroup(),
+          integrationId: linked.completion.integration.id
+        })).toThrow(expect.objectContaining({
+          code: "integration_default_target_not_member"
+        }));
+      }
+    );
+  });
+
+  it("prevents a source manager from selecting another group's integration", async () => {
+    const owned = await activateIntegration();
+    const foreign = await activateIntegration();
+
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: owned.group,
+      targetGroup: foreign.channel,
+      integrationId: foreign.completion.integration.id,
+      actor: owned.actor
+    })).rejects.toMatchObject({
+      status: 403,
+      code: "integration_group_not_member"
+    });
+    await expect(setIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: owned.group,
+      targetGroup: foreign.channel,
+      integrationId: owned.completion.integration.id,
+      actor: owned.actor
+    })).rejects.toMatchObject({
+      status: 422,
+      code: "integration_default_target_not_member"
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: owned.group,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: owned.completion.integration.id },
+      targetGroup: owned.channel
+    });
+  });
+
+  it("falls back independently in each direction and clears only the last link", async () => {
+    const firstGuild = discordGroup();
+    const secondGuild = discordGroup();
+    const firstChannel = twitchGroup();
+    const secondChannel = twitchGroup();
+    const first = await activateIntegration({
+      group: firstGuild,
+      channel: firstChannel
+    });
+    const discordFallback = await activateIntegration({
+      group: firstGuild,
+      channel: secondChannel
+    });
+    const twitchFallback = await activateIntegration({
+      group: secondGuild,
+      channel: firstChannel
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: first.completion.integration.id,
+      group: firstGuild,
+      actor: first.actor,
+      reason: "test_default_fallback"
+    });
+
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: discordFallback.completion.integration.id },
+      targetGroup: secondChannel
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstChannel,
+      targetPlatform: "discord"
+    })).defaultLink).toMatchObject({
+      integration: { id: twitchFallback.completion.integration.id },
+      targetGroup: secondGuild
+    });
+
+    await revokeIntegration(integrationEnv, {
+      integrationId: discordFallback.completion.integration.id,
+      group: firstGuild,
+      actor: discordFallback.actor,
+      reason: "test_last_link"
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toBeNull();
+
+    const replacement = await activateIntegration({
+      group: firstGuild,
+      channel: twitchGroup()
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: replacement.completion.integration.id },
+      targetGroup: replacement.channel
+    });
+  });
+
+  it("repairs counterpart defaults during a group-wide revocation", async () => {
+    const firstGuild = discordGroup();
+    const secondGuild = discordGroup();
+    const sharedChannel = twitchGroup();
+    const otherChannel = twitchGroup();
+    const first = await activateIntegration({
+      group: firstGuild,
+      channel: sharedChannel
+    });
+    const fallback = await activateIntegration({
+      group: secondGuild,
+      channel: sharedChannel
+    });
+    await activateIntegration({
+      group: firstGuild,
+      actor: first.actor,
+      channel: otherChannel
+    });
+
+    await expect(revokeIntegrationsForGroup(integrationEnv, {
+      group: firstGuild,
+      actor: first.actor,
+      reason: "test_group_default_repair"
+    })).resolves.toEqual({ revoked: 2, pending: false });
+
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: firstGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toBeNull();
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: sharedChannel,
+      targetPlatform: "discord"
+    })).defaultLink).toMatchObject({
+      integration: { id: fallback.completion.integration.id },
+      targetGroup: secondGuild
+    });
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: otherChannel,
+      targetPlatform: "discord"
+    })).defaultLink).toBeNull();
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: secondGuild,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: fallback.completion.integration.id },
+      targetGroup: sharedChannel
+    });
+  });
+
+  it("converges when revocation races replacement-link completion", async () => {
+    const group = discordGroup();
+    const actor = discordActor();
+    const original = await activateIntegration({
+      group,
+      actor,
+      channel: twitchGroup()
+    });
+    const replacement = await prepareIntegration({
+      group,
+      actor,
+      channel: twitchGroup()
+    });
+
+    const [revoked, concurrentCompletion] = await Promise.all([
+      revokeIntegration(integrationEnv, {
+        integrationId: original.completion.integration.id,
+        group,
+        actor,
+        reason: "test_concurrent_replacement"
+      }),
+      completePreparedIntegration(replacement).catch((error) => error)
+    ]);
+    let completed = concurrentCompletion;
+    if (concurrentCompletion instanceof Error) {
+      expect(concurrentCompletion.status).toBe(409);
+      expect([
+        "shareable_state_transition",
+        "integration_state_rediscovery_required"
+      ]).toContain(concurrentCompletion.code);
+      completed = await completePreparedIntegration(replacement);
+    }
+
+    expect(revoked.revoked).toBe(true);
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: group,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: completed.completion.integration.id },
+      targetGroup: replacement.channel
+    });
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (_instance, state) => {
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integration_default_links
+           WHERE integration_id = ?`,
+          original.completion.integration.id
+        ).one().total).toBe(0);
+      }
+    );
   });
 
   it("revokes active links when the Twitch channel authorization disconnects", async () => {
@@ -429,6 +1626,14 @@ describe("Cross-platform integration linking", () => {
     });
 
     expect((await listIntegrationsForGroup(integrationEnv, active.group)).total).toBe(0);
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: active.group,
+      targetPlatform: "twitch"
+    })).defaultLink).toBeNull();
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: active.channel,
+      targetPlatform: "discord"
+    })).defaultLink).toBeNull();
   });
 
   it("expires and continues large maintenance batches through alarms", async () => {

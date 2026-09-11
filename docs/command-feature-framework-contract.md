@@ -4,6 +4,10 @@
 
 **Framework API v1 stable on 2026-08-30; implementation steps 1–10 complete.**
 
+Ordinary command contributors should start with
+[`feature-quickstart.md`](feature-quickstart.md). This contract is the detailed
+reference for framework maintainers and API reviewers.
+
 This document is the normative contract approved in step 1 of
 `docs/command-feature-framework.md`. It fixes the intended public shapes and
 semantics. Examples use the stable public API. The compatibility and
@@ -111,6 +115,7 @@ defineFeature({
   routes: [],
   events: [],
   schedules: [],
+  shareableState: [],
   effectAdapters: {
     discord: [],
     twitch: []
@@ -128,6 +133,57 @@ functions are retained by reference and are never serialized.
 
 `effectAdapters` is an advanced, platform-owned extension point. Ordinary
 command features SHOULD use already registered effect factories.
+
+### Shareable-state declarations
+
+`shareableState` is optional and defaults to a frozen empty array. It declares
+state that the realm and linking infrastructure may enumerate. A declaration
+does not reclassify an existing `ctx.state` or `integrationState` value; an
+action must explicitly request the `shareableState` service and resolve the
+declared namespace.
+
+```js
+shareableState: [{
+  id: "game_deaths",
+  label: "Per-game death counts",
+  schemaVersion: 2,
+  compatibleVersions: [1, 2],
+  collisionSummary: { kind: "entry_count" },
+  limits: {
+    maxEntries: 100,
+    maxValueBytes: 16_384
+  }
+}]
+```
+
+Requirements:
+
+- A feature declares at most 20 namespaces. IDs are unique within the feature
+  and match `^[a-z][a-z0-9_-]{0,63}$`.
+- `label` is trimmed, contains no control characters, and has 1–80 characters.
+- `schemaVersion` is a positive integer no greater than 1,000,000.
+- `compatibleVersions` contains 1–20 unique positive versions no newer than
+  `schemaVersion`, must include the current version, and normalizes into
+  ascending order. Omission means only the current version is compatible.
+- Compatibility means an older canonical representation can be consumed and
+  identity-upgraded without a feature-specific transformation. Nonidentity
+  migration declarations remain deferred; the implemented snapshot
+  infrastructure rejects representations requiring feature-specific code.
+- `collisionSummary.kind` is `presence` or `entry_count`; omission defaults to
+  `presence`. Arbitrary summary callbacks and raw-value rendering are rejected.
+- `limits.maxEntries` is 1–100 and defaults to 100.
+  `limits.maxValueBytes` is 1–16,384 and defaults to 16,384.
+- `adoptLegacyIntegrationState: true` is reserved for a reviewed migration of
+  an installed feature whose complete legacy integration-state namespace maps
+  to this declaration. It is omitted for every new feature and may not be
+  `false`.
+- Unknown fields are rejected, and all normalized declarations and nested
+  objects are frozen.
+
+The generated feature catalog exposes only this bounded metadata. It never
+contains stored values. See the staged
+[`shareable feature-state lifecycle contract`](shareable-state-lifecycle.md)
+for the ownership and collision semantics these declarations will support.
 
 ## Installation and composition
 
@@ -205,6 +261,10 @@ Schemas MUST:
 Custom schema functions are not part of Framework API v1. New reusable schema
 types belong in the public framework after review.
 
+`SchemaValidationError` retains its diagnostic `message`, `code`, and `path`.
+Its additive `reason` field is the validation requirement without the path,
+bounded to 300 characters, for command-specific correction text.
+
 ## Access presets and capabilities
 
 The public `access` helper normalizes contributor-friendly presets to reviewed
@@ -234,6 +294,8 @@ capability and cannot declare a different preset.
 defineAction({
   kind: "integration.example.run.v1",
   capability: null,
+  conditionalAccess: [],
+  modePolicy: null,
   supportedOrigins: ["discord", "twitch"],
   input: schema.object({}),
   uses: {
@@ -249,6 +311,10 @@ Requirements:
 
 - `kind` is a versioned semantic kind.
 - `capability` is either `null` or a registered namespaced capability.
+- `conditionalAccess` defaults to an empty array. Each rule names a registered
+  capability and one primitive input argument plus either the values for which
+  feature code requires that capability or the values excluded from that
+  requirement.
 - `supportedOrigins` contains at least one unique platform.
 - `input` defaults to `schema.object({})`.
 - `uses` defaults to empty arrays.
@@ -257,12 +323,87 @@ Requirements:
 
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
-requires, chosen from `config`, `state`, and `random` in API v1.
+requires, chosen from `authorization`, `config`, `integrationState`, `links`,
+`shareableState`, `state`, and `random` in API v1.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
 tests. An action may declare several possible routes and effects without using
 all of them during every invocation.
+
+Conditional-access rules have this shape:
+
+```js
+conditionalAccess: [
+  {
+    capability: access.moderators,
+    when: {
+      argument: "operation",
+      values: ["plus", "minus", "reset"]
+    }
+  }
+]
+```
+
+The argument must name a primitive field in the action's object schema, and
+each rule must contain exactly one of `values` or `exceptValues`. Every listed
+value must pass that field's schema. `values` matches the listed normalized
+values. `exceptValues` matches when the argument is present and its normalized
+value is not listed; an omitted optional argument does not match. A declaration
+contains at most 20 rules and each rule at most 20 unique values; all are
+normalized and frozen. An explicit non-empty `conditionalAccess` declaration requires the `authorization`
+service. Registry composition rejects unregistered conditional capabilities.
+
+This metadata documents argument-dependent access; it does not authorize by
+itself. Feature code MUST still call `authorization.allows()` before performing
+the protected mode. Keeping the runtime check explicit preserves custom denial
+responses while making the intended policy visible to review and generated
+documentation.
+
+### Opt-in enforced command modes
+
+For simple argument-based command permissions, `modePolicy` is an optional
+authoritative policy. It is distinct from metadata-only `conditionalAccess`:
+
+```js
+modePolicy: {
+  rules: [{
+    capability: access.moderators,
+    when: { argument: "operation", exceptValues: ["show"] }
+  }],
+  deniedOutput: { message: "Only moderators can change the score." }
+}
+```
+
+- Omission or `null` preserves existing execution. Non-null policies contain
+  one to 20 rules with the same primitive-field validation and normalized
+  matching semantics as `conditionalAccess`. They MUST NOT be combined with
+  an explicit `conditionalAccess` declaration. Their rules supply that catalog
+  metadata automatically and are marked as enforced.
+- `deniedOutput` is a required static JSON object accepted by the normal action
+  result contract; it is copied and deeply frozen. It is not a callback and
+  cannot read state or return effects. Command renderers MUST support it.
+- The runtime first parses action input (including defaults), then checks the
+  baseline capability, then evaluates matching policy rules in declaration
+  order. All matching capabilities are required. An omitted optional argument
+  without a default matches neither rule form; an applied default participates
+  in matching. Invalid input fails before any permission decision.
+- Each matching rule consults the existing platform authorizer. A missing
+  authorizer, thrown error, or non-boolean decision fails closed. A `false`
+  decision returns `{ output: deniedOutput, effects: [] }` immediately, before
+  cooldown claims, context-service use, or feature execution. An ordinary
+  baseline denial still raises `action_forbidden`.
+- Enforcement requires no `authorization` service declaration. Explicit
+  `ctx.authorization.allows()` checks still require that service.
+- This first policy form is command-only. Registry composition rejects event
+  and schedule bindings to a policy action, and execution rejects non-command
+  triggers. Durable grant-at-creation and actorless event semantics are not
+  inferred from command modes. Policy-backed Discord commands must be guild-only.
+- Custom parsing, data-dependent decisions, and privileged side effects inside
+  public modes remain available through metadata-only `conditionalAccess` and
+  explicit `ctx.authorization.allows()`. Existing actions are not converted
+  automatically; in particular, a public `check` may still remember a game only
+  for a moderator.
 
 The action executor receives already normalized `args`. It MUST return a value
 accepted by the existing `createActionResult()` contract:
@@ -301,6 +442,50 @@ The action context has this exact API v1 surface:
   random: {
     integer({ min, max }): number
   },
+  authorization: {
+    allows(capability): Promise<boolean>
+  },
+  links: {
+    default(targetPlatform): Promise<DefaultLinkSnapshot | null>
+  },
+  integrationState: {
+    for(link: DefaultLinkSnapshot): {
+      get(key): Promise<JSONValue | null>,
+      set(key, value): Promise<void>,
+      delete(key): Promise<boolean>,
+      increment(key, amount = 1): Promise<number>,
+      boundedCounter(name, subject, {
+        min = 0,
+        max = Number.MAX_SAFE_INTEGER,
+        initial = min
+      } = {}): {
+        get(): Promise<number>,
+        set(value): Promise<number>,
+        increment(amount = 1): Promise<number>,
+        decrement(amount = 1): Promise<number>,
+        reset(): Promise<number>
+      }
+    }
+  },
+  shareableState: {
+    current(targetPlatform, namespaceId): Promise<{
+      get(key): Promise<JSONValue | null>,
+      set(key, value): Promise<void>,
+      delete(key): Promise<boolean>,
+      increment(key, amount = 1): Promise<number>,
+      boundedCounter(name, subject, {
+        min = 0,
+        max = Number.MAX_SAFE_INTEGER,
+        initial = min
+      } = {}): {
+        get(): Promise<number>,
+        set(value): Promise<number>,
+        increment(amount = 1): Promise<number>,
+        decrement(amount = 1): Promise<number>,
+        reset(): Promise<number>
+      }
+    }>
+  },
   routes: {
     resolve(routeKind): Promise<readonly RouteSnapshot[]>
   },
@@ -320,7 +505,18 @@ The action context has this exact API v1 surface:
     get(key): Promise<JSONValue | null>,
     set(key, value): Promise<void>,
     delete(key): Promise<boolean>,
-    increment(key, amount = 1): Promise<number>
+    increment(key, amount = 1): Promise<number>,
+    boundedCounter(name, subject, {
+      min = 0,
+      max = Number.MAX_SAFE_INTEGER,
+      initial = min
+    } = {}): {
+      get(): Promise<number>,
+      set(value): Promise<number>,
+      increment(amount = 1): Promise<number>,
+      decrement(amount = 1): Promise<number>,
+      reset(): Promise<number>
+    }
   },
   log: {
     debug(event, metadata = {}): void,
@@ -331,8 +527,8 @@ The action context has this exact API v1 surface:
 ```
 
 Context and service objects are frozen. Service methods enforce the current
-feature ID and origin group; callers cannot select another feature namespace or
-arbitrary storage object.
+feature ID and either the origin group or an accepted integration snapshot;
+callers cannot select another feature namespace or arbitrary storage object.
 
 Rules:
 
@@ -346,27 +542,80 @@ Rules:
   stable idempotency metadata from the current invocation.
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
-- `config`, `state`, and `random` may be used only when declared in
-  `uses.services`. Undeclared access is a framework error. The namespace shape
-  remains stable so feature code does not branch on service presence.
+- `authorization`, `config`, `integrationState`, `links`, `shareableState`,
+  `state`, and `random`
+  may be used only when declared in `uses.services`. Undeclared access is a framework error. The
+  namespace shape remains stable so feature code does not branch on service
+  presence.
+- `authorization.allows()` accepts only a reviewed registered capability and
+  delegates to the current platform policy. It exposes no claims, roles,
+  badges, or replacement authorizer and is intended for validated command
+  modes with different access requirements.
+- `links.default()` accepts the other supported platform and always resolves
+  from `origin.group`; feature code cannot select a different source group. It
+  returns `null` when that direction has no active default, or a frozen snapshot
+  containing only normalized `integration`, `sourceGroup`, and `targetGroup`
+  references. A same-platform or unsupported target is an error.
+- The links service is read-only. It exposes no default mutation, candidate
+  listing, audit/history, timestamps, registry handle, route configuration, or
+  storage access.
 - Keys match `^[a-z][a-z0-9_-]{0,63}$`; the runtime automatically namespaces
-  them by feature ID and origin group.
+  `ctx.state` by feature ID and origin group.
+- A shared action and an active integration do not merge group namespaces.
+  `integrationState.for()` requires the exact frozen link returned by
+  `links.default()` during the same invocation; copied objects, arbitrary
+  integration IDs, and snapshots from another invocation are errors.
+- Integration-state storage verifies that the selected relationship remains
+  active and that both source and target groups remain members. Its namespace
+  is integration ID plus feature ID. Switching a directional default selects a
+  different ledger without copying data. Revocation blocks access without
+  erasing data, and a later relink receives a new integration ID and ledger.
+- `shareableState.current()` accepts the other supported platform and one
+  namespace declared by the current feature. It pins a frozen scope to the
+  origin group's standalone realm when no active default exists, or to that
+  default integration's realm otherwise. Features cannot see or forge the
+  underlying realm identity, generation, link, or integration ID.
+- A shareable integration scope verifies before every operation that the pinned
+  relationship remains active and contains both groups. Revocation or another
+  transition fails closed and never redirects the operation to standalone
+  state. A default switch affects later resolutions but does not redirect an
+  already pinned scope while its integration remains active.
+- `state.boundedCounter()` accepts a normal feature key as its name and an
+  arbitrary non-empty subject of at most 300 characters. Storage maps the pair
+  to a collision-resistant internal key; subject normalization remains an
+  explicit feature-domain decision.
+- Bounded-counter bounds and the initial value are safe inclusive integers with
+  `min <= initial <= max`. `set(value)` accepts a safe integer within those
+  bounds. Positive increment and decrement amounts are at most 1,000,000.
+  Updates saturate at the selected bound, `reset()` returns to the initial
+  value, and the returned counter handle is frozen.
 - Each state operation is atomic by itself. API v1 does not promise a
-  multi-operation transaction.
+  multi-operation or cross-owner transaction. One bounded-counter mutation,
+  including its floor or ceiling check, is one atomic operation.
 - Log metadata is bounded, JSON-safe, and automatically receives feature,
   action, platform, group, and correlation fields. Secrets and complete raw
   payloads MUST NOT be logged.
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `config`, `state`, and `random` are part of the approved v1 surface,
+Although `authorization`, `config`, `integrationState`, `links`,
+`shareableState`, `state`, and `random` are part of
+the approved v1 surface,
 the composition runtime MAY initially implement only the services required by
 installed features. A feature declaring an unavailable service MUST fail at
 composition rather than later during execution.
 
-Implementation status: all three API v1 services are available in the installed
-composition. Config and state are scoped through `GroupConfig`; declarative
-cooldowns use the same per-group boundary and are enforced before action code.
+Implementation status: all seven API v1 services are available in the installed
+composition. Authorization delegates to the platform policy. Links resolves
+the origin group's selected cross-platform relationship through the integration
+registry. Config and state are scoped through `GroupConfig`; integration state
+is scoped through the per-integration coordinator. Shareable state resolves to
+the dedicated realm Durable Object but is unused by installed features while
+feature migration remains staged. Its snapshot, fingerprint, comparison,
+sealing, cloning, finalization, permanent archive, and successor operations are
+protected infrastructure capabilities and never appear in an action context.
+Declarative cooldowns use the per-group boundary and are enforced before action
+code.
 
 ## Command definitions
 
@@ -378,6 +627,28 @@ Discord and Twitch command names match
 `^[a-z][a-z0-9_-]{0,31}$`, are normalized to lowercase, and are unique within
 their platform. Descriptions are non-empty strings no longer than 100
 characters.
+
+All command helpers also accept optional `usage`: one complete, valid example
+for that platform, such as `/deaths operation:check game:Dark Souls` or
+`!deaths check "Dark Souls"`. It must start with the command's own name, fit
+within 160 characters, and contain no line breaks. Omission normalizes to
+`null`; examples are presentation metadata and never modify input validation,
+tokenization, authorization, or registration constraints.
+
+The platform adapters format schema and parser errors with the command name,
+the visible Discord option name (or readable Twitch argument name), and the
+validation requirement. If `usage` is present, the reply includes that example.
+Twitch quote and extra-token errors explain how to quote multi-word values.
+Replies remain bounded to 500 characters, keeping the example intact. Original
+error messages, codes, and paths remain available as developer diagnostics.
+The feature test runtime still rejects invalid input; its test-only
+`runtime.inputError(platform, commandName, error)` returns the same formatted
+text, or `null` for errors unrelated to input validation.
+
+Keep common constraints in local constants where useful and spread them into
+schemas and platform bindings, with explicit overrides for platform limits.
+Semantic action validation remains authoritative. Domain parsing and native
+bindings remain explicit; `usage` is not a universal command-description DSL.
 
 ### Discord action command
 
@@ -411,8 +682,9 @@ Framework API v1 option types are `string`, `integer`, `number`, `boolean`,
 types and registration payload. `user`, `role`, and `channel` normalize to
 their opaque ID strings.
 
-The installed action owns capability authorization. A command cannot weaken or
-override it. `availability: "guild"` rejects DM use before action execution.
+The installed action owns baseline capability authorization and conditional
+access metadata. A command cannot weaken or override either. `availability:
+"guild"` rejects DM use before action execution.
 
 `render` receives the normalized `ActionResult` and a controlled Discord
 rendering context. It defaults to `discordTextResult`, which requires a
@@ -437,13 +709,18 @@ API v1 provides:
 - `twitchTokens([{ arg, type, optional, default }])`, where type is `string`,
   `integer`, `number`, or `boolean`.
 
+`twitchTokens()` recognizes double-quoted multi-word tokens and removes the
+delimiting quotes. Inside a quoted token, a backslash escapes the following
+character. Unterminated quotes are validation errors. Existing unquoted token
+syntax is unchanged.
+
 The parser produces semantic arguments which are then validated by the action
 input schema. Command names are case-insensitive and stored lowercase.
 
-The installed action owns capability authorization. Twitch platform policy
-maps authenticated EventSub actor claims to that capability. The default
-renderer requires a non-empty `output.message` no longer than the Twitch chat
-limit.
+The installed action owns baseline capability authorization and conditional
+access metadata. Twitch platform policy maps authenticated EventSub actor
+claims to those capabilities. The default renderer requires a non-empty
+`output.message` no longer than the Twitch chat limit.
 
 ### Native commands
 

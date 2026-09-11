@@ -10,8 +10,9 @@ Feature packages use these exports instead of reaching into Worker internals:
 
 The package major matches `frameworkApiVersion`; version `1.0.0` therefore
 represents Framework API v1. Compatibility and deprecation rules are defined in
-[`docs/framework-api.md`](../../docs/framework-api.md), and practical examples
-live in [`docs/feature-authoring.md`](../../docs/feature-authoring.md).
+[`docs/framework-api.md`](../../docs/framework-api.md). New contributors start
+with [`docs/feature-quickstart.md`](../../docs/feature-quickstart.md); complete
+patterns live in [`docs/feature-authoring.md`](../../docs/feature-authoring.md).
 
 This first form delegates to the reviewed source in `src/framework/` and is
 private, build-time-only repository infrastructure. It is not independently

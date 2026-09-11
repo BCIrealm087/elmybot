@@ -7,10 +7,15 @@ const MAX_FEATURE_VALUE_BYTES = 16 * 1024;
 const MAX_FEATURE_VALUE_DEPTH = 20;
 const MAX_VALUES_PER_NAMESPACE = 100;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
+const MAX_COUNTER_SUBJECT_LENGTH = 300;
 const MAX_COOLDOWN_ROWS = 10_000;
 const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 
 export const FEATURE_STORAGE_PATH_PREFIX = "/internal/framework/";
+export const INTEGRATION_FEATURE_STATE_PATH_PREFIX =
+  "/internal/framework/integration-state/";
+export const INTEGRATION_FEATURE_STATE_MIGRATION_PATH =
+  "/internal/framework/integration-state-migration/snapshot";
 
 export class FeatureStorageUserFacingError extends Error {
   constructor(message, status = 422) {
@@ -112,7 +117,73 @@ export function initializeFeatureStorageTables(state) {
 
     CREATE INDEX IF NOT EXISTS framework_feature_cooldowns_expiry
       ON framework_feature_cooldowns(expires_at_ms);
+
+    CREATE TABLE IF NOT EXISTS framework_feature_state_migrations (
+      feature_id TEXT PRIMARY KEY,
+      target_namespace_id TEXT NOT NULL,
+      sealed_at_ms INTEGER NOT NULL
+    );
   `);
+}
+
+function requireNamespaceId(value) {
+  return requireString(value, KEY_PATTERN, "The shareable namespace ID is invalid.", 64);
+}
+
+export function legacyFeatureStateMigration(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const targetNamespaceId = requireNamespaceId(input?.targetNamespaceId);
+  return state.storage.transactionSync(() => {
+    const existing = state.storage.sql.exec(
+      `SELECT target_namespace_id, sealed_at_ms
+       FROM framework_feature_state_migrations WHERE feature_id = ?`,
+      featureId
+    ).toArray()[0];
+    if (existing && existing.target_namespace_id !== targetNamespaceId) {
+      throw new FeatureStorageUserFacingError(
+        "Legacy feature state was already assigned to another shareable namespace.",
+        409
+      );
+    }
+    const sealedAtMs = existing?.sealed_at_ms ?? Date.now();
+    if (!existing) {
+      state.storage.sql.exec(
+        `INSERT INTO framework_feature_state_migrations
+          (feature_id, target_namespace_id, sealed_at_ms)
+         VALUES (?, ?, ?)`,
+        featureId,
+        targetNamespaceId,
+        sealedAtMs
+      );
+    }
+    const entries = state.storage.sql.exec(
+      `SELECT value_key, value_json
+       FROM framework_feature_values
+       WHERE value_kind = 'state' AND feature_id = ?
+       ORDER BY value_key ASC`,
+      featureId
+    ).toArray().map((entry) => ({
+      key: entry.value_key,
+      value: JSON.parse(entry.value_json)
+    }));
+    return { featureId, targetNamespaceId, sealedAtMs, entries };
+  });
+}
+
+export function legacyFeatureStateIsSealed(state, featureId) {
+  const normalized = requireFeatureId(featureId);
+  return Boolean(state.storage.sql.exec(
+    `SELECT 1 AS sealed FROM framework_feature_state_migrations
+     WHERE feature_id = ?`,
+    normalized
+  ).toArray()[0]);
+}
+
+export function featureStateOperationMutates(operation, input) {
+  if (["state/set", "state/delete", "state/increment"].includes(operation)) {
+    return true;
+  }
+  return operation === "state/bounded-counter" && input?.operation !== "get";
 }
 
 function valueRow(sql, valueKind, featureId, key) {
@@ -232,6 +303,138 @@ function incrementState(state, input) {
   });
 }
 
+function requireBoundedCounterInput(input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const name = requireKey(input?.name);
+  const subject = input?.subject;
+  if (
+    typeof subject !== "string" ||
+    subject.length === 0 ||
+    subject.length > MAX_COUNTER_SUBJECT_LENGTH
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter subjects must contain between 1 and ` +
+      `${MAX_COUNTER_SUBJECT_LENGTH} characters.`
+    );
+  }
+  const min = input?.min ?? 0;
+  const max = input?.max ?? Number.MAX_SAFE_INTEGER;
+  const initial = input?.initial ?? min;
+  if (
+    !Number.isSafeInteger(min) ||
+    !Number.isSafeInteger(max) ||
+    !Number.isSafeInteger(initial) ||
+    min > max ||
+    initial < min ||
+    initial > max
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "Bounded counter min, max, and initial values must be safe integers with " +
+      "min <= initial <= max."
+    );
+  }
+  const operation = input?.operation;
+  if (!["get", "set", "increment", "decrement", "reset"].includes(operation)) {
+    throw new FeatureStorageUserFacingError("The bounded counter operation is invalid.");
+  }
+  const amount = input?.amount;
+  if (
+    ["increment", "decrement"].includes(operation) &&
+    (!Number.isSafeInteger(amount) || amount < 1 || amount > MAX_INCREMENT_AMOUNT)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter amounts must be integers between 1 and ` +
+      `${MAX_INCREMENT_AMOUNT}.`
+    );
+  }
+  const value = input?.value;
+  if (
+    operation === "set" &&
+    (!Number.isSafeInteger(value) || value < min || value > max)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "Bounded counter values must be safe integers within the configured bounds."
+    );
+  }
+  return { featureId, name, subject, min, max, initial, operation, amount, value };
+}
+
+async function boundedCounterKey(name, subject) {
+  const payload = new TextEncoder().encode(JSON.stringify([name, subject]));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", payload));
+  const hexadecimal = Array.from(
+    digest,
+    (value) => value.toString(16).padStart(2, "0")
+  ).join("");
+  return `bc_${hexadecimal.slice(0, 60)}`;
+}
+
+async function boundedCounterState(state, input) {
+  const descriptor = requireBoundedCounterInput(input);
+  const key = await boundedCounterKey(descriptor.name, descriptor.subject);
+  return state.storage.transactionSync(() => {
+    const existing = valueRow(
+      state.storage.sql,
+      "state",
+      descriptor.featureId,
+      key
+    );
+    const current = existing
+      ? JSON.parse(existing.value_json)
+      : descriptor.initial;
+    if (
+      !Number.isSafeInteger(current) ||
+      current < descriptor.min ||
+      current > descriptor.max
+    ) {
+      throw new FeatureStorageUserFacingError(
+        "The selected state value is not a valid bounded counter.",
+        409
+      );
+    }
+    if (descriptor.operation === "get") return { value: current };
+
+    let value = descriptor.operation === "set"
+      ? descriptor.value
+      : descriptor.initial;
+    if (!["reset", "set"].includes(descriptor.operation)) {
+      const direction = descriptor.operation === "increment" ? 1n : -1n;
+      const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
+      value = Number(
+        candidate < BigInt(descriptor.min)
+          ? BigInt(descriptor.min)
+          : candidate > BigInt(descriptor.max)
+            ? BigInt(descriptor.max)
+            : candidate
+      );
+    }
+    if (!existing && value === descriptor.initial) return { value };
+    if (!existing && namespaceAtCapacity(
+      state.storage.sql,
+      "state",
+      descriptor.featureId
+    )) {
+      throw new FeatureStorageUserFacingError(
+        `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} state values.`,
+        409
+      );
+    }
+    state.storage.sql.exec(
+      `INSERT INTO framework_feature_values
+        (value_kind, feature_id, value_key, value_json, updated_at_ms)
+       VALUES ('state', ?, ?, ?, ?)
+       ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
+         value_json = excluded.value_json,
+         updated_at_ms = excluded.updated_at_ms`,
+      descriptor.featureId,
+      key,
+      JSON.stringify(value),
+      Date.now()
+    );
+    return { value };
+  });
+}
+
 function pruneExpiredCooldowns(sql, nowMs) {
   sql.exec(
     `DELETE FROM framework_feature_cooldowns
@@ -299,6 +502,23 @@ function claimCooldown(state, input) {
   });
 }
 
+export async function handleFeatureStateStorageOperation(state, operation, input) {
+  switch (operation) {
+    case "state/get":
+      return getValue(state.storage.sql, "state", input);
+    case "state/set":
+      return setValue(state, "state", input);
+    case "state/delete":
+      return deleteValue(state, "state", input);
+    case "state/increment":
+      return incrementState(state, input);
+    case "state/bounded-counter":
+      return await boundedCounterState(state, input);
+    default:
+      return null;
+  }
+}
+
 export async function handleFeatureStorageRequest(state, request, pathname) {
   if (request.method !== "POST" || !pathname.startsWith(FEATURE_STORAGE_PATH_PREFIX)) {
     return null;
@@ -312,18 +532,10 @@ export async function handleFeatureStorageRequest(state, request, pathname) {
       return setValue(state, "config", input);
     case "config/delete":
       return deleteValue(state, "config", input);
-    case "state/get":
-      return getValue(state.storage.sql, "state", input);
-    case "state/set":
-      return setValue(state, "state", input);
-    case "state/delete":
-      return deleteValue(state, "state", input);
-    case "state/increment":
-      return incrementState(state, input);
     case "cooldown/claim":
       return claimCooldown(state, input);
     default:
-      return null;
+      return await handleFeatureStateStorageOperation(state, operation, input);
   }
 }
 

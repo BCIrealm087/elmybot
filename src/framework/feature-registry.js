@@ -275,6 +275,16 @@ export function createFeatureRegistry(features, {
         { code: "feature_action_dependency_unavailable" }
       );
     }
+    if (
+      action.uses.services.includes("shareableState") &&
+      featuresById[featureId].shareableState.length === 0
+    ) {
+      throw new FeatureRegistryError(
+        `Feature action \`${kind}\` requests shareable state but feature ` +
+        `\`${featureId}\` declares no shareable namespaces.`,
+        { code: "feature_action_shareable_state_undeclared" }
+      );
+    }
     const routeTargetPlatforms = new Set();
     for (const usedRouteKind of action.uses.routes) {
       const route = routes[usedRouteKind];
@@ -331,7 +341,7 @@ export function createFeatureRegistry(features, {
         { code: "feature_event_action_origin_unsupported" }
       );
     }
-    if (action.capability !== null) {
+    if (action.capability !== null || action.modePolicy !== null) {
       throw new FeatureRegistryError(
         `Feature event \`${event.eventKind}\` cannot invoke a protected action ` +
         "without a trusted event authorization policy.",
@@ -353,6 +363,12 @@ export function createFeatureRegistry(features, {
         `Feature schedule \`${schedule.kind}\` refers to an uninstalled action ` +
         `\`${schedule.actionKind}\`.`,
         { code: "feature_schedule_action_unknown" }
+      );
+    }
+    if (action.modePolicy !== null) {
+      throw new FeatureRegistryError(
+        "Scheduled actions cannot use command-only mode policies.",
+        { code: "feature_schedule_mode_policy_unsupported" }
       );
     }
     if (!action.supportedOrigins.includes(schedule.sourcePlatform)) {
@@ -384,7 +400,7 @@ export function createFeatureRegistry(features, {
         }
         if (
           platform === "discord" &&
-          action.capability !== null &&
+          (action.capability !== null || action.modePolicy !== null) &&
           command.availability !== "guild"
         ) {
           throw new FeatureRegistryError(

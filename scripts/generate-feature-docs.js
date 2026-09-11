@@ -9,11 +9,13 @@ export const FEATURE_CATALOG_PATH = "docs/feature-catalog.md";
 
 export async function generateFeatureDocs({
   root = process.cwd(),
-  check = false
+  check = false,
+  workspacePackages = null
 } = {}) {
-  const workspacePackages = await checkWorkspaceFeatures({ root });
+  const checkedWorkspacePackages = workspacePackages ??
+    await checkWorkspaceFeatures({ root });
   const output = generateFeatureCatalogMarkdown(featureRegistry, {
-    workspacePackages
+    workspacePackages: checkedWorkspacePackages
   });
   const destination = path.resolve(root, FEATURE_CATALOG_PATH);
   if (check) {

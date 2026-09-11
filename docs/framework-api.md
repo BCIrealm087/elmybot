@@ -4,6 +4,10 @@
 
 **Framework API v1 is stable as of 2026-08-30.**
 
+If you are adding a feature without changing the framework API, start with
+[`feature-quickstart.md`](feature-quickstart.md). Return here only when you need
+the supported-export, compatibility, or deprecation rules.
+
 This policy covers the JavaScript API used by reviewed feature modules bundled
 with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
@@ -49,13 +53,106 @@ surface consists of:
 - Twitch authoring helpers: `twitchActionCommand`, `twitchNativeCommand`,
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
+`defineFeature()` accepts optional, declarative `shareableState` namespace
+metadata. Omission normalizes to a frozen empty array, preserving every existing
+v1 definition. Declarations contain stable IDs, labels, schema compatibility,
+safe collision-summary policy, and bounded limits. This is the compatible
+addition of an optional manifest field with a stable default.
+
+Actions may explicitly request the controlled `authorization`, `config`,
+`integrationState`, `links`, `shareableState`, `state`, and `random` context
+services.
+`authorization` delegates conditional
+checks to the same platform-owned capability policy used for whole actions; it
+does not expose platform roles, badges, or authorizer functions.
+The read-only `links` service provides
+`await ctx.links.default(targetPlatform)`. It resolves only from the current
+origin group and returns either `null` or a frozen relationship snapshot with
+`integration`, `sourceGroup`, and `targetGroup` references. It cannot list
+candidate links, change a default, inspect lifecycle history, or expose the
+registry.
+
+The `state` service includes the additive `boundedCounter(name, subject,
+options)` API. It safely derives storage keys for arbitrary subjects and makes
+each read, assignment, saturating increment or decrement, or reset one atomic
+operation. All configuration and `ctx.state` remain scoped to the action's origin group,
+including when that group is linked to another platform.
+
+The additive `integrationState` service deliberately exposes mutable state
+owned by one active integration. The action must first resolve the current
+directional default and pass that exact invocation-local snapshot to
+`ctx.integrationState.for(link)`. The resulting scope mirrors the state
+operations, but its namespace is keyed by integration ID and feature ID.
+Changing a default selects another ledger; revocation blocks access without
+deleting data; and relinking creates a new ledger. See
+[`feature-state.md`](feature-state.md) for the full ownership contract.
+
+The `shareableState` service is available only to features declaring at
+least one shareable namespace. `await ctx.shareableState.current(
+otherPlatform, namespaceId)` pins one frozen state scope: the origin group's
+standalone realm when no directional default exists, or that default
+integration's realm otherwise. The scope mirrors the state operations. It does
+not expose links, realm IDs, generations, snapshots, or storage enumeration.
+`integrationState` remains available for compatibility.
+
+Protected snapshot, fingerprint, comparison, sealing, cloning, collision
+discovery, finalization, and revocation-successor infrastructure is implemented
+but intentionally absent from the feature-facing scope. An existing feature
+may adopt its known legacy integration-state layout only through an explicit,
+reviewed `adoptLegacyIntegrationState` declaration; new features do not use it.
+
+Actions with argument-dependent protected modes may add validated
+`conditionalAccess` metadata. It identifies the capability, input argument, and
+either matching normalized values or normalized exceptions for catalog and
+review purposes; the action still performs the runtime check through
+`ctx.authorization.allows()`.
+
+The additive `defineAction({ modePolicy })` option provides explicitly enforced
+command-mode rules and derives their catalog metadata from the same declaration.
+Its default is `null`, and existing `conditionalAccess` remains metadata-only.
+The two declarations cannot be combined. Input validation and baseline access
+precede mode checks; denial returns static JSON output with no effects before
+cooldowns or feature code. See the
+[mode-policy contract](command-feature-framework-contract.md#opt-in-enforced-command-modes)
+for defaults, limits, authorizer failures, and command-only scope. Explicit
+authorization remains available for custom decisions and privileged side
+effects within public modes. This is a compatible API v1 addition, not a change
+to existing action or persisted-kind semantics.
+
+All command helpers accept additive `usage` metadata: a complete example using
+the platform prefix and command name, on one line and at most 160 characters.
+Its default is `null`; it does not change parsing, authorization, or native
+registration. Adapters include it in bounded input-error corrections, and the
+catalog displays it. `SchemaValidationError.reason` adds the bounded validation
+requirement without a diagnostic path; existing `message`, `code`, and `path`
+remain unchanged. See the
+[command contract](command-feature-framework-contract.md#command-definitions)
+and [authoring examples](feature-authoring.md#input-constraints-and-useful-corrections).
+
 `FEATURE_FRAMEWORK_API_VERSION` remains as a deprecated compatibility alias for
 `frameworkApiVersion`. It is not used by new examples or generated features.
 
 Feature tests may additionally import the documented test kit from
 `src/framework/testing.js`. The test kit follows the v1 feature contract but is
 not a production feature dependency. Workspace tests use the equivalent
-`@elmybot/framework/testing` export.
+`@elmybot/framework/testing` export. `defaultTestLink()` and the runtime's
+`defaultLinks` option model directional selections and integration-ledger
+identity without exposing production registry infrastructure. Its Twitch runtime accepts either parsed
+semantic arguments through `twitch.command()` or bang-prefixed raw command text
+through `twitch.commandText()` when parser behavior is under test.
+
+The additive test-only `runtime.inputError(platform, commandName, error)`
+formats an existing schema or parser failure using the live adapters' correction
+text, or returns `null` for unrelated errors. Command execution still rejects
+invalid input, preserving tests that inspect validation codes and paths.
+
+The test-only `runCapabilityCases({ actor, capability, invoke, readState })`
+helper runs the same invocation without and with one capability, records each
+result or error, and copies state before and after each case. It does not assert
+policy outcomes or simulate platform authentication. It is exported by both
+test entry points, not the production API. See the
+[test-kit reference](feature-authoring.md#the-feature-test-kit) for explicit
+denial and no-mutation assertions.
 
 All other modules below `src/framework/` are implementation details. In
 particular, `internal.js`, registry composition, service runtimes, storage
@@ -98,6 +195,8 @@ The following are backward-compatible within v1:
 - adding an optional manifest or helper option with a stable default;
 - adding a new explicitly requested context service, schema helper, platform
   adapter, or effect factory;
+- adding a method to an existing frozen context service without changing its
+  existing methods;
 - accepting additional input that existing definitions previously rejected;
   and
 - improving error text while preserving documented error codes and fields.

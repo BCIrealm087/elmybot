@@ -285,6 +285,16 @@ describe("Twitch command helpers", () => {
       { arg: "count", type: "integer" },
       { arg: "loud", type: "boolean", optional: true, default: false }
     ]).parse("3 true")).toEqual({ count: 3, loud: true });
+    expect(twitchTokens([
+      { arg: "game", type: "string" },
+      { arg: "operation", type: "string", optional: true }
+    ]).parse('"Dark Souls" plus')).toEqual({
+      game: "Dark Souls",
+      operation: "plus"
+    });
+    expect(() => twitchTokens([
+      { arg: "game", type: "string" }
+    ]).parse('"Dark Souls')).toThrow("unterminated quote");
     expect(twitchTextResult({ output: { message: "hello" } })).toBe("hello");
   });
 

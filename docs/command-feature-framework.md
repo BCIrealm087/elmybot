@@ -211,8 +211,10 @@ ctx.reply
 ctx.routes
 ctx.effects
 ctx.schedule
+ctx.links
 ctx.config
 ctx.state
+ctx.integrationState
 ctx.log
 ctx.correlationId
 ```
@@ -239,6 +241,19 @@ Discord permissions and configured roles or Twitch broadcaster and moderator
 claims. A feature cannot create an arbitrary authorization function that grants
 itself authority. Genuinely new sensitive capabilities require an explicit
 central policy addition and review.
+
+When one validated command mode is public and another is protected, an action
+may explicitly request `ctx.authorization` and ask whether the current actor
+has a reviewed capability. Platform policy still owns the decision; the
+feature receives no raw Discord roles, Twitch badges, or custom authorizer.
+
+For simple validated command modes, the opt-in `modePolicy` addition supplies
+both enforced rules and their catalog metadata. It checks after input and
+baseline access, before cooldowns or feature execution. Existing metadata-only
+`conditionalAccess` and explicit service checks remain supported, especially
+for privileged side effects inside public operations. The
+[normative policy contract](command-feature-framework-contract.md#opt-in-enforced-command-modes)
+defines this first command-only form and its compatibility limits.
 
 ### Route catalog
 
@@ -308,12 +323,20 @@ await ctx.schedule.action({
 Fun commands commonly need counters, quotes, scores, cooldowns, and per-group
 settings. Provide distinct facilities:
 
-- `ctx.config` for operator-controlled settings; and
-- `ctx.state` for feature-owned durable state.
+- `ctx.config` for operator-controlled settings;
+- `ctx.state` for feature-owned durable state local to the origin group; and
+- `ctx.integrationState.for(link)` for feature-owned durable state shared by
+  the active integration selected through an invocation-local default link.
 
 Both are automatically scoped by feature and platform group. Storage size and
 operation limits prevent one feature from becoming an unbounded shared-state
 consumer or reading another feature's data.
+
+Shared action code does not imply shared storage, and linking groups does not
+merge their namespaces. Intentionally shared mutable data belongs to an
+integration identity. The integration-state service keeps that choice explicit:
+the current directional default selects the ledger, switches do not copy data,
+and revocation blocks access without erasing the old integration's namespace.
 
 Cooldowns should be declarative where possible:
 
@@ -404,21 +427,29 @@ so those representations cannot silently drift.
    installed `/integration_schedule_twitch` proof repeatedly invokes the same
    announcement action at bounded-random intervals.
 7. **Add namespaced configuration, state, and cooldowns — completed.** Actions
-   opt into frozen `config`, `state`, and `random` services; per-group SQLite
-   namespaces enforce key, value-size, and entry-count bounds; and declarative
+   opt into frozen `authorization`, `config`, `integrationState`, `links`,
+   `state`, and `random`
+   services;
+   conditional authorization delegates to platform policy, while per-group
+   SQLite namespaces enforce key, value-size, and entry-count bounds; and declarative
    actor or group cooldowns are claimed atomically before execution. Protected
    Discord commands manage installed-feature configuration. The shared
    `/counter` and `!counter` proof uses a configurable label, atomic increment,
    and actor cooldown without accessing Worker bindings or storage layouts.
+   The additive bounded-counter API maps arbitrary subjects to safe internal
+   keys and applies each floor/ceiling check in the same atomic mutation.
+   Validated conditional-access metadata lets generated catalogs distinguish a
+   public baseline from argument modes protected by a reviewed capability.
 8. **Complete the test kit, scaffold, and contributor guide — completed.** The
    deployment-free test runtime composes real feature contracts while modeling
    actors, authorization, routes, effects, events, schedules, stored-plan
    replay, configuration, state, cooldowns, clock, randomness, and logs. The
    non-overwriting `npm run feature:new -- <name>` scaffold creates one local
-   feature module and one test skeleton. The authoring guide provides native, shared,
-   routed, scheduled, event-driven, and stateful cookbooks, while the generated
-   installed-feature catalog and lint freshness check keep contributor
-   documentation tied to registry metadata.
+   feature module and one test skeleton. A short first-feature quickstart owns
+   the scaffold-to-test path and routes authors by need; the authoring reference
+   provides native, shared, routed, scheduled, event-driven, and stateful
+   cookbooks. The generated installed-feature catalog and lint freshness check
+   keep contributor documentation tied to registry metadata.
 9. **Stabilize and version the framework API — completed.** Feature manifests
    bind to exported `frameworkApiVersion`; unsupported versions fail with a
    machine-readable compatibility error. `src/framework/index.js` now exposes
@@ -436,6 +467,92 @@ so those representations cannot silently drift.
     names, exports, framework peer versions, metadata, and feature definitions;
     and ESLint prevents package source from escaping into Worker internals.
     Runtime-loaded code and external package publication remain out of scope.
+11. **Expose directional default-link identity — completed.** Actions explicitly
+    opt into the read-only `links` service and call
+    `ctx.links.default(targetPlatform)`. The runtime fixes the source to the
+    invocation group and returns only a frozen integration/source/target
+    snapshot or `null`; mutation, candidate listing, audit history, and registry
+    storage remain platform-owned. The test kit models each direction with
+    `defaultTestLink()`. Resolving identity does not merge the two groups'
+    `ctx.state` namespaces.
+12. **Expose controlled integration-owned feature state — completed.** Actions
+    resolve a default-link snapshot and pass that exact invocation-local
+    capability to `ctx.integrationState.for(link)`. The per-integration
+    coordinator verifies active membership and stores a feature namespace with
+    the same bounded operations as group state. This compatibility API first
+    supported `fun.deaths`; the feature has since moved its counters to
+    `shareableState` while retaining group-local remembered games.
+
+## Shareable-state follow-up sequence
+
+The next initiative lets declared feature state work standalone and reconcile
+when groups link. Each step is intended to land and pass CI independently:
+
+1. **Define the shareable-state lifecycle contract — completed.** The
+   [lifecycle contract](shareable-state-lifecycle.md) fixes realm ownership,
+   discovery, collision outcomes, concurrency seals, directional defaults,
+   cancellation, revocation successors, relinking, recovery, privacy, and
+   compatibility before adding storage APIs.
+2. **Add declarative shareable-state metadata — completed.** Features may now
+   declare frozen namespace IDs, labels, schema compatibility, safe collision
+   summaries, and bounded limits. The metadata appears in the generated catalog
+   and gates the later realm and resolution stages.
+3. **Implement standalone shareable-state realms — completed.** The internal
+   [`ShareableStateRealm`](shareable-state-realms.md) Durable Object now gives
+   each platform group an isolated, declaration-gated realm with canonical
+   values, namespace limits, schema identity, and atomic mutation versions.
+   Effective selection is provided by the next completed step.
+4. **Add effective-state resolution — completed.** Actions belonging to a
+   feature with declared namespaces may request `shareableState` and pin one
+   namespace through `current(otherPlatform, namespaceId)`. No default selects
+   the origin group's standalone realm; an active default selects that
+   integration's realm. Existing `integrationState` remains available as a
+   compatibility service for features that have not explicitly migrated.
+5. **Add snapshot, fingerprint, and cloning primitives — completed.** Internal
+   realm infrastructure can capture one declared namespace as an immutable,
+   versioned snapshot, derive a deterministic content fingerprint and bounded
+   feature-approved summary, compare compatible snapshots, and clone verified
+   content into a fresh realm. These capabilities are deliberately absent from
+   feature action contexts.
+6. **Introduce the pending-integration lifecycle — completed.** Twitch
+   verification creates a resumable `awaiting_state_resolution` record;
+   pending links can expire or be cancelled and become active only through the
+   idempotent protected activation operation.
+7. **Implement generic collision discovery — completed.** Pending links inspect
+   the declared namespaces in each member's current effective realm and persist
+   safe summaries, fingerprints, versions, automatic selections, and genuine
+   collisions. Feature keys and values never enter registry or browser data.
+8. **Add the collision-resolution page — completed.** The OAuth-verified
+   broadcaster sees only genuinely colliding namespaces and declaration-safe
+   summaries, can choose Discord, Twitch, or reset per namespace, can apply one
+   choice to all, and can cancel without modifying either candidate realm.
+   Submitted choices are bound immutably to the discovery revision for the
+   Step 9 finalizer.
+9. **Make finalization concurrency-safe and idempotent — completed.** Candidate
+   namespaces receive bounded write seals before their discovery versions and
+   fingerprints are rechecked. Stale candidates create a new discovery
+   revision; current selections are cloned or reset into a generation-bound
+   fresh integration realm with per-namespace idempotency keys. Only a complete
+   realm can cross the registry's activation barrier, and replay returns the
+   existing integration without duplicate defaults or audit events.
+10. **Implement revocation and standalone continuation — completed.** Active
+    integrations enter a resumable `revoking` transition, permanently freeze
+    their declared namespaces, repair defaults, and record metadata-only
+    recovery manifests. Directions without a fallback lazily materialize an
+    independent standalone successor from the final shared snapshot; partial
+    copies and retries cannot expose stale or incomplete state. See
+    [shareable-state revocation](shareable-state-revocation.md).
+11. **Add lifecycle, security, concurrency, and many-link tests — completed.**
+    The layered [verification matrix](shareable-state-lifecycle-verification.md)
+    covers standalone and linked ownership, every collision outcome,
+    cancellation and expiry, command/finalizer races, browser replay, CSRF and
+    continuation authorization, revocation divergence, relinking, and
+    independently selected many-link realms.
+12. **Migrate `fun.deaths` to shareable state — completed.** Only per-game
+    counters moved to `game_deaths`; remembered games remain group-local. The
+    command now works without a link, reconciles standalone ledgers through the
+    generic link flow, continues independently after revocation, and adopts
+    existing integration-owned counters through a sealed, idempotent migration.
 
 ## Success criteria
 

@@ -54,7 +54,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch` | Twitch health check, EventSub challenges, notifications, and revocations |
 | `/twitch/oauth/*` | Twitch bot-account OAuth |
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
-| `/twitch/integrations/connect` | Public page for redeeming a Discord integration invitation |
+| `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
@@ -92,6 +92,7 @@ script. All commands except `/alive` are guild-only.
 |---|---|---|
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
+| `/deaths` | optional `operation` (`check`, `plus`, `minus`, `reset`), optional `game` | Check or update shared deaths on the server's default Twitch link |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -108,6 +109,7 @@ script. All commands except `/alive` are guild-only.
 | `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
+| `/integration_default_set` | `integration_id` | Select the server's default Twitch link |
 | `/integration_status` | `integration_id` | Show membership, routes, and delivery aggregates |
 | `/integration_route_set` | `integration_id`, `route`, `enabled`, optional `channel` | Enable, disable, or retarget a route |
 | `/integration_audit` | `integration_id` | Show recent lifecycle and route history |
@@ -135,11 +137,17 @@ characters and are resolved at delivery time.
 |---|---|---|
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
+| `!deaths [check|plus|minus|reset] [<game>]` | Any chatter checks; broadcaster or moderator updates | Check or update shared deaths on the channel's default Discord link |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
-Command names are case-insensitive. `!announce` accepts at most 2,000
-characters. Ordinary chat and unknown commands are acknowledged after HMAC
-verification without creating a durable inbox row.
+Command names are case-insensitive. `!deaths` and `!deaths check` use the last
+game selected on Twitch by a broadcaster or moderator. Name a game only after
+an operation and quote multi-word names, for example
+`!deaths plus "Dark Souls"`. Discord remembers its own selected game, while
+death counts are shared when both directional defaults select the same active
+integration. `!announce` accepts at most 2,000 characters. Ordinary chat and
+unknown commands are acknowledged after HMAC verification without creating a
+durable inbox row.
 
 `/counter` and `!counter` demonstrate the contributor state API. Each platform
 group has an independent count, and each actor has a five-second atomic
@@ -154,8 +162,22 @@ one-use invitation that expires after 15 minutes. The Twitch broadcaster opens
 the link, signs in to Twitch, and grants `channel:bot`; they do not need to make
 the bot a moderator.
 
-Successful authorization creates an integration containing the authenticated
-Discord guild and Twitch channel, with three enabled routes:
+Successful authorization verifies Twitch and creates a durable pending link.
+The browser is redirected to a safely refreshable pending page while the link
+discovers shareable state. Empty, one-sided, and identical namespaces receive
+automatic decisions; different nonempty namespaces wait for explicit
+resolution. Only final activation creates an integration containing the
+authenticated Discord guild and Twitch channel. Finalization briefly seals and
+rechecks candidate namespaces, then either materializes a fresh shared realm or
+returns to discovery if state changed. Its copy/reset operations and activation
+transaction are replay-safe, so interrupted retries do not create duplicates.
+See
+[`docs/shareable-state-finalization.md`](docs/shareable-state-finalization.md).
+Revoking the last selected link freezes its final shared realm and gives each
+affected group a lazy, independent standalone successor; an eligible active
+fallback continues on its own existing realm instead. See
+[`docs/shareable-state-revocation.md`](docs/shareable-state-revocation.md).
+The integration has three enabled routes:
 
 | Route | Outcome |
 |---|---|
@@ -163,9 +185,22 @@ Discord guild and Twitch channel, with three enabled routes:
 | `twitch.announce-to-discord.v1` | `!announce` sends to Discord |
 | `twitch.stream-online-to-discord.v1` | `stream.online` invokes a feature action that publishes a Discord notice |
 
+The first link becomes the directional default for both groups. Later links do
+not replace an existing choice. Discord managers can identify the current link
+in `/integration_list` and change the guild's choice with
+`/integration_default_set`; unlinking a selected relationship falls back to the
+oldest remaining active link. Discord-to-Twitch and Twitch-to-Discord choices
+are independent, and there is no explicit unset while an eligible link remains.
+Twitch currently follows automatic assignment and fallback but has no native
+default-management command.
+
 Routes can be disabled or retargeted independently. A Twitch channel may link
 to multiple Discord guilds. Revoking a link preserves its audit history and
-does not remove the broadcaster's platform-local authorization.
+does not remove the broadcaster's platform-local authorization. Default
+selection is independent from routes and origin-group state, but it selects
+the ledger for features that explicitly use integration-owned state; see the
+[management reference](docs/integration-management.md#default-link-model-and-invariants)
+for the lifecycle, many-link, authorization, and concurrency guarantees.
 
 ## Twitch EventSub and delivery
 
@@ -354,8 +389,8 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-The complete suite currently contains 210 tests across 20 files. GitHub Actions
-runs for pushes to `codex-ironing`, pull requests, and manual dispatches. CI:
+GitHub Actions runs the complete suite for pushes to
+`codex-feature-experiment`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -367,10 +402,12 @@ The CI Wrangler dry run is the authoritative clean build/configuration check.
 
 ## Writing features
 
-Start with the [feature authoring guide](docs/feature-authoring.md). It includes
-the repository-local and recommended workspace-package scaffolds, deployment-free
-test runtime, and cookbooks for native, shared, routed, scheduled, event-driven,
-and stateful features. The
+For a first command, start with [Your first Elmybot feature](docs/feature-quickstart.md).
+It covers the shortest scaffold, install, test, and verification path, then
+links to extra material by feature need. Use the longer
+[feature authoring reference](docs/feature-authoring.md) for deployment-free
+test-runtime details and complete native, shared, routed, scheduled,
+event-driven, stateful, and conditionally authorized cookbooks. The
 [installed feature catalog](docs/feature-catalog.md) is generated from registry
 metadata with `npm run feature:docs`; `npm run lint` rejects a stale catalog.
 The [Framework API v1 stability policy](docs/framework-api.md) defines the
@@ -380,19 +417,34 @@ Create and validate the recommended private workspace package with:
 
 ```sh
 npm run feature:new -- fun-hype --workspace
-npm run feature:workspaces
+npm run feature:check -- fun-hype
 ```
+
+The scaffold also offers optional `shared-command`, `local-counter`, and
+`shareable-counter` recipes. They generate ordinary editable JavaScript and
+focused tests; the minimal recipe remains the default. Add `--ready` to the
+feature check before review to run the complete suite and every local
+contributor gate. Checks are read-only; `npm run feature:docs` remains the
+explicit catalog-regeneration action.
 
 ## Detailed documentation
 
+- [First-feature quickstart](docs/feature-quickstart.md)
+- [Feature authoring reference and cookbooks](docs/feature-authoring.md)
+- [When to ask for framework help](docs/feature-authoring.md#ask-for-framework-help-when)
+- [Feature operator checklist](docs/feature-operator-checklist.md)
 - [Cross-platform contracts](docs/cross-platform-contracts.md)
 - [Action registry](docs/action-registry.md)
 - [Integration linking and routes](docs/integration-linking.md)
 - [Durable integration execution](docs/integration-execution.md)
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
-- [Feature configuration, state, and cooldowns](docs/feature-state.md)
-- [Feature authoring guide and cookbooks](docs/feature-authoring.md)
+- [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
+- [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
+- [Shareable-state collision discovery](docs/shareable-state-discovery.md)
+- [Pending integration state resolution](docs/shareable-state-resolution.md)
+- [Shareable-state revocation and standalone continuation](docs/shareable-state-revocation.md)
+- [Shareable-state lifecycle verification](docs/shareable-state-lifecycle-verification.md)
 - [Framework API v1 stability and deprecations](docs/framework-api.md)
 - [Generated installed feature catalog](docs/feature-catalog.md)
 

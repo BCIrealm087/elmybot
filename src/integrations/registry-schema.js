@@ -29,6 +29,95 @@ export function initializeRegistryTables(state) {
     CREATE INDEX IF NOT EXISTS integration_invitations_completed
       ON integration_invitations(status, completed_at_ms);
 
+    CREATE UNIQUE INDEX IF NOT EXISTS integration_invitations_reservation
+      ON integration_invitations(reservation_id)
+      WHERE reservation_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS integration_pending_links (
+      invitation_id TEXT PRIMARY KEY,
+      integration_id TEXT UNIQUE NOT NULL,
+      reservation_id TEXT UNIQUE NOT NULL,
+      status TEXT NOT NULL,
+      twitch_group_key TEXT NOT NULL,
+      twitch_group_id TEXT NOT NULL,
+      twitch_group_label TEXT,
+      twitch_actor_id TEXT NOT NULL,
+      verified_at_ms INTEGER NOT NULL,
+      awaiting_resolution_at_ms INTEGER,
+      expires_at_ms INTEGER NOT NULL,
+      cancelled_at_ms INTEGER,
+      activated_at_ms INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_links_expiry
+      ON integration_pending_links(status, expires_at_ms);
+
+    CREATE TABLE IF NOT EXISTS integration_pending_discoveries (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      requires_resolution INTEGER NOT NULL,
+      discord_realm_json TEXT NOT NULL,
+      twitch_realm_json TEXT NOT NULL,
+      discovered_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (invitation_id, discovery_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS integration_pending_namespace_discoveries (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      feature_id TEXT NOT NULL,
+      feature_label TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      namespace_label TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      discord_mutation_version INTEGER NOT NULL,
+      discord_fingerprint TEXT NOT NULL,
+      discord_meaningful INTEGER NOT NULL,
+      discord_summary_json TEXT NOT NULL,
+      twitch_mutation_version INTEGER NOT NULL,
+      twitch_fingerprint TEXT NOT NULL,
+      twitch_meaningful INTEGER NOT NULL,
+      twitch_summary_json TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      automatic_selection TEXT,
+      PRIMARY KEY (
+        invitation_id,
+        discovery_version,
+        feature_id,
+        namespace_id
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_discoveries_latest
+      ON integration_pending_discoveries(invitation_id, discovery_version DESC);
+
+    CREATE TABLE IF NOT EXISTS integration_pending_resolutions (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      resolved_by_platform TEXT NOT NULL,
+      resolved_by_actor_id TEXT NOT NULL,
+      resolved_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (invitation_id, discovery_version)
+    );
+
+    CREATE TABLE IF NOT EXISTS integration_pending_namespace_resolutions (
+      invitation_id TEXT NOT NULL,
+      discovery_version INTEGER NOT NULL,
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      selection TEXT NOT NULL,
+      selection_source TEXT NOT NULL,
+      PRIMARY KEY (
+        invitation_id,
+        discovery_version,
+        feature_id,
+        namespace_id
+      )
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_pending_resolutions_latest
+      ON integration_pending_resolutions(invitation_id, discovery_version DESC);
+
     CREATE TABLE IF NOT EXISTS integration_invitation_routes (
       invitation_id TEXT NOT NULL,
       route_kind TEXT NOT NULL,
@@ -49,7 +138,8 @@ export function initializeRegistryTables(state) {
       created_by_platform TEXT NOT NULL,
       created_by_actor_id TEXT NOT NULL,
       completed_by_platform TEXT NOT NULL,
-      completed_by_actor_id TEXT NOT NULL
+      completed_by_actor_id TEXT NOT NULL,
+      shareable_state_generation INTEGER NOT NULL DEFAULT 1
     );
 
     CREATE TABLE IF NOT EXISTS integration_members (
@@ -65,6 +155,19 @@ export function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS integration_members_group
       ON integration_members(group_key, integration_id);
+
+    CREATE TABLE IF NOT EXISTS integration_default_links (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      integration_id TEXT NOT NULL,
+      target_group_key TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform)
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_default_links_integration
+      ON integration_default_links(integration_id, source_group_key, target_platform);
 
     CREATE INDEX IF NOT EXISTS integrations_status_created
       ON integrations(status, created_at_ms, integration_id);
@@ -108,5 +211,106 @@ export function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS integration_group_revocations_requested
       ON integration_group_revocations(requested_at_ms, group_key);
+
+    CREATE TABLE IF NOT EXISTS integration_revocation_jobs (
+      integration_id TEXT PRIMARY KEY,
+      actor_platform TEXT,
+      actor_id TEXT,
+      group_key TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      requested_at_ms INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS integration_revocation_jobs_requested
+      ON integration_revocation_jobs(requested_at_ms, integration_id);
+
+    CREATE TABLE IF NOT EXISTS integration_revocation_namespaces (
+      integration_id TEXT NOT NULL,
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      schema_version INTEGER NOT NULL,
+      mutation_version INTEGER NOT NULL,
+      fingerprint TEXT NOT NULL,
+      meaningful INTEGER NOT NULL,
+      PRIMARY KEY (integration_id, feature_id, namespace_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shareable_state_standalone_successors (
+      group_key TEXT PRIMARY KEY,
+      generation INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      source_integration_id TEXT NOT NULL,
+      source_generation INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      ready_at_ms INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS shareable_state_successors_pending
+      ON shareable_state_standalone_successors(status, created_at_ms, group_key);
   `);
+
+  // `pending` was the pre-lifecycle name for an invitation that had not yet
+  // entered OAuth. Preserve those rows while adopting the explicit state name.
+  state.storage.sql.exec(
+    "UPDATE integration_invitations SET status = 'invited' WHERE status = 'pending'"
+  );
+
+  // Stepwise deployments may already contain active integrations created
+  // before directional defaults existed. Remove only invalid/stale selections,
+  // then deterministically choose the oldest active edge for each missing
+  // source-group/target-platform pair. Existing valid choices are preserved.
+  state.storage.sql.exec(`
+    DELETE FROM integration_default_links AS default_link
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM integrations integration
+      JOIN integration_members source_member
+        ON source_member.integration_id = integration.integration_id
+       AND source_member.group_key = default_link.source_group_key
+      JOIN integration_members target_member
+        ON target_member.integration_id = integration.integration_id
+       AND target_member.group_key = default_link.target_group_key
+       AND target_member.platform = default_link.target_platform
+      WHERE integration.integration_id = default_link.integration_id
+        AND integration.status = 'active'
+    );
+
+    INSERT INTO integration_default_links
+      (source_group_key, target_platform, integration_id, target_group_key,
+       created_at_ms, updated_at_ms)
+    SELECT source_group_key, target_platform, integration_id, target_group_key,
+           created_at_ms, created_at_ms
+    FROM (
+      SELECT source_member.group_key AS source_group_key,
+             target_member.platform AS target_platform,
+             integration.integration_id,
+             target_member.group_key AS target_group_key,
+             integration.created_at_ms,
+             ROW_NUMBER() OVER (
+               PARTITION BY source_member.group_key, target_member.platform
+               ORDER BY integration.created_at_ms, integration.integration_id,
+                        target_member.group_key
+             ) AS preference
+      FROM integrations integration
+      JOIN integration_members source_member
+        ON source_member.integration_id = integration.integration_id
+      JOIN integration_members target_member
+        ON target_member.integration_id = integration.integration_id
+       AND target_member.platform <> source_member.platform
+      WHERE integration.status = 'active'
+    ) candidates
+    WHERE preference = 1
+    ON CONFLICT(source_group_key, target_platform) DO NOTHING;
+  `);
+  const integrationColumns = new Set(
+    state.storage.sql.exec("PRAGMA table_info(integrations)")
+      .toArray()
+      .map((column) => column.name)
+  );
+  if (!integrationColumns.has("shareable_state_generation")) {
+    state.storage.sql.exec(
+      `ALTER TABLE integrations
+       ADD COLUMN shareable_state_generation INTEGER NOT NULL DEFAULT 1`
+    );
+  }
 }

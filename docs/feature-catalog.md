@@ -11,36 +11,47 @@ Framework API: v1.
 | Feature | Source | Description | Actions | Discord commands | Twitch commands |
 | --- | --- | --- | --- | --- | --- |
 | `core.alive` | `@elmybot/feature-alive` | A shared responsiveness check. | 1 | 1 | 1 |
+| `fun.deaths` | `@elmybot/feature-fun-deaths` | Tracks per-game deaths locally or across linked Discord and Twitch groups. | 1 | 1 | 1 |
 | `fun.counter` | repository-local | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 1 | 1 |
 | `integrations.announcements` | repository-local | Publishes immediate announcements across linked platforms. | 1 | 1 | 1 |
 | `discord.role-access` | repository-local | Manages Discord roles trusted by protected bot commands. | 0 | 1 | 0 |
 | `twitch.stream-online` | repository-local | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 |
 | `integrations.scheduled-twitch-announcements` | repository-local | Schedules recurring announcements to linked Twitch chats. | 0 | 1 | 0 |
 
+## Shareable state declarations
+
+| Feature | Namespace | Label | Schema | Compatible schemas | Collision summary | Limits | Legacy adoption |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| fun.deaths | `game_deaths` | Per-game death counts | 1 | 1 | entry_count | 100 entries; 16384 bytes/value | integrationState |
+
 ## Workspace packages
 
 | Package | Feature | Installed by Worker |
 | --- | --- | --- |
 | `@elmybot/feature-alive` | `core.alive` | yes |
+| `@elmybot/feature-fun-deaths` | `fun.deaths` | yes |
 
 ## Commands
 
-| Feature | Command | Type | Capability | Description |
-| --- | --- | --- | --- | --- |
-| core.alive | `/alive` | action | public | Replies if alive. |
-| fun.counter | `/counter` | action | public | Increment this server's feature counter. |
-| integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. |
-| discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. |
-| integrations.scheduled-twitch-announcements | `/integration_schedule_twitch` | scheduled action | integration.announcement.publish | Schedule a recurring message in linked Twitch chats. |
-| core.alive | `!alive` | action | public | Replies if alive. |
-| fun.counter | `!counter` | action | public | Increment this channel's feature counter. |
-| integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. |
+| Feature | Command | Type | Access | Description | Example |
+| --- | --- | --- | --- | --- | --- |
+| core.alive | `/alive` | action | public | Replies if alive. | — |
+| fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `/deaths operation:check game:Dark Souls` |
+| fun.counter | `/counter` | action | public | Increment this server's feature counter. | — |
+| integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. | `/integration_announce_twitch message:Hello everyone!` |
+| discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. | `/config_allow_role role:@Moderators` |
+| integrations.scheduled-twitch-announcements | `/integration_schedule_twitch` | scheduled action | integration.announcement.publish | Schedule a recurring message in linked Twitch chats. | `/integration_schedule_twitch message:Hello everyone! min_interval:600 max_interval:900` |
+| core.alive | `!alive` | action | public | Replies if alive. | — |
+| fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `!deaths check "Dark Souls"` |
+| fun.counter | `!counter` | action | public | Increment this channel's feature counter. | — |
+| integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. | `!announce Hello everyone!` |
 
 ## Actions
 
-| Feature | Action kind | Origins | Capability | Services | Cooldown |
+| Feature | Action kind | Origins | Access | Services | Cooldown |
 | --- | --- | --- | --- | --- | --- |
 | core.alive | `core.health.check.v1` | discord, twitch | public | — | — |
+| fun.deaths | `fun.deaths.manage.v1` | discord, twitch | public; framework.moderators when `operation` is present and is not `check` | authorization, shareableState, state | — |
 | fun.counter | `fun.counter.increment.v1` | discord, twitch | public | config, state | actor, 5s |
 | integrations.announcements | `integration.announcement.publish.v1` | discord, twitch | integration.announcement.publish | — | — |
 | twitch.stream-online | `twitch.stream-online.publish.v1` | twitch | public | — | — |

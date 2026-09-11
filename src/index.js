@@ -17,6 +17,8 @@ import { TwitchEventSubInboxBackend } from "./platforms/twitch/eventsub-inbox.js
 import { TwitchEventSubManagerBackend } from "./platforms/twitch/eventsub-manager.js";
 import { createTwitchEventSubRegistry } from "./platforms/twitch/eventsub-registry.js";
 import { TwitchEventSubServiceBackend } from "./platforms/twitch/eventsub-service.js";
+import { featureRegistry } from "./features/index.js";
+import { ShareableStateRealmBackend } from "./shareable-state/index.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers,
@@ -56,6 +58,11 @@ export class TwitchEventSubService extends TwitchEventSubServiceBackend {
 export class TwitchEventSubInbox extends TwitchEventSubInboxBackend {
   constructor(state, env) {
     super(state, env, twitchEventSubRegistry);
+  }
+}
+export class ShareableStateRealm extends ShareableStateRealmBackend {
+  constructor(state, env) {
+    super(state, env, featureRegistry);
   }
 }
 export { GroupConfig } from "./group-configuration.js";

@@ -5,6 +5,7 @@ import {
 
 const SCHEMA_TYPE = "argument-schema";
 const MAX_ERROR_MESSAGE_LENGTH = 300;
+const objectSchemaFields = new WeakMap();
 
 export class SchemaValidationError extends TypeError {
   constructor(path, message) {
@@ -13,6 +14,7 @@ export class SchemaValidationError extends TypeError {
     this.name = "SchemaValidationError";
     this.code = "argument_validation_failed";
     this.path = path;
+    this.reason = String(message).slice(0, MAX_ERROR_MESSAGE_LENGTH);
   }
 }
 
@@ -210,7 +212,7 @@ function object(fields, { allowUnknown = false } = {}) {
     }
   }
   const frozenFields = Object.freeze({ ...fields });
-  return createSchema({
+  const definition = createSchema({
     kind: "object",
     parse(value, path) {
       if (!isPlainObject(value)) fail(path, "must be an object.");
@@ -237,10 +239,16 @@ function object(fields, { allowUnknown = false } = {}) {
       return Object.freeze(normalized);
     }
   });
+  objectSchemaFields.set(definition, frozenFields);
+  return definition;
 }
 
 export function isSchema(value) {
   return isFrameworkDefinition(value, SCHEMA_TYPE);
+}
+
+export function objectSchemaField(value, name) {
+  return objectSchemaFields.get(value)?.[name] ?? null;
 }
 
 export const schema = Object.freeze({

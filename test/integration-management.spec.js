@@ -3,15 +3,17 @@ import { env } from "cloudflare:test";
 import { commands } from "../src/platforms/discord/commands.js";
 import { CAPABILITIES } from "../src/platforms/discord/discord-permissions.js";
 import {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
   createIntegrationInvitation,
   defaultDiscordTwitchRoutes,
+  getIntegrationDefaultLink,
   getIntegrationManagementStatus,
   INTEGRATION_ROUTE_KINDS,
   listIntegrationAudit,
   resolveIntegrationRoutes,
   reserveIntegrationInvitation,
-  updateIntegrationRoute
+  updateIntegrationRoute,
+  verifyIntegrationInvitation
 } from "../src/integrations/index.js";
 
 const integrationEnv = {
@@ -37,10 +39,11 @@ const twitchGroup = (id = uniqueId("broadcaster")) => ({
   platform: "twitch", kind: "channel", id
 });
 
-async function activateIntegration() {
-  const group = discordGroup();
-  const actor = discordActor();
-  const channel = twitchGroup();
+async function activateIntegration({
+  group = discordGroup(),
+  actor = discordActor(),
+  channel = twitchGroup()
+} = {}) {
   const destinationChannelId = uniqueId("discord-channel");
   const invitation = await createIntegrationInvitation(integrationEnv, {
     group,
@@ -55,12 +58,16 @@ async function activateIntegration() {
     reservationId,
     reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
   });
-  const completion = await completeIntegrationInvitation(integrationEnv, {
+  await verifyIntegrationInvitation(integrationEnv, {
     invitationId: reservation.invitationId,
     reservationId,
     group: channel,
     actor: { platform: "twitch", id: channel.id, claims: ["twitch.broadcaster"] },
     groupLabel: uniqueId("channel")
+  });
+  const completion = await activatePendingIntegration(integrationEnv, {
+    invitationId: reservation.invitationId,
+    reservationId
   });
   return {
     group,
@@ -90,6 +97,7 @@ describe("Cross-platform integration management", () => {
   it("requires integration management capability for every operational command", () => {
     for (const name of [
       "integration_status",
+      "integration_default_set",
       "integration_route_set",
       "integration_audit",
       "integration_dead_letters",
@@ -186,5 +194,53 @@ describe("Cross-platform integration management", () => {
     );
     expect(routeResult.content).toContain("disabled");
     expect(routeResult.content).toContain(INTEGRATION_ROUTE_KINDS.TWITCH_ANNOUNCE_TO_DISCORD);
+  });
+
+  it("shows and switches the Discord guild's default Twitch link", async () => {
+    const first = await activateIntegration();
+    const second = await activateIntegration({
+      group: first.group,
+      actor: first.actor
+    });
+
+    const before = await commands.integration_list.exec(
+      commandInteraction(first, "integration_list"),
+      integrationEnv
+    );
+    const firstLine = before.content.split("\n").find((line) =>
+      line.includes(first.integration.id)
+    );
+    const secondLine = before.content.split("\n").find((line) =>
+      line.includes(second.integration.id)
+    );
+    expect(firstLine).toContain("**default**");
+    expect(secondLine).not.toContain("**default**");
+
+    const changed = await commands.integration_default_set.exec(
+      commandInteraction(first, "integration_default_set", [{
+        name: "integration_id",
+        value: second.integration.id
+      }]),
+      integrationEnv
+    );
+    expect(changed).toMatchObject({ flags: 64, allowed_mentions: { parse: [] } });
+    expect(changed.content).toContain("as this server's default Twitch link");
+
+    expect((await getIntegrationDefaultLink(integrationEnv, {
+      sourceGroup: first.group,
+      targetPlatform: "twitch"
+    })).defaultLink).toMatchObject({
+      integration: { id: second.integration.id },
+      targetGroup: second.channel
+    });
+
+    const unchanged = await commands.integration_default_set.exec(
+      commandInteraction(first, "integration_default_set", [{
+        name: "integration_id",
+        value: second.integration.id
+      }]),
+      integrationEnv
+    );
+    expect(unchanged.content).toContain("is already this server's default Twitch link");
   });
 });

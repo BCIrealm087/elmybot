@@ -12,7 +12,10 @@ import {
   SCHEDULED_ACTION_COMMAND_TYPE
 } from "./command-common.js";
 import { createFeatureRegistry } from "./feature-registry.js";
+import { formatCommandInputError } from "./command-input-error.js";
+import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
+import { parseTwitchCommandText } from "./twitch-command-text.js";
 
 const ROUTED_MESSAGE_EFFECT_KINDS = Object.freeze({
   discord: "discord.message.send.v1",
@@ -120,6 +123,41 @@ export function twitchTestActor(options = {}) {
   return testActor("twitch", options);
 }
 
+// Runs the same input twice, changing only one explicit capability. This helper
+// records evidence; callers must assert denial, no mutation, and allowed behavior.
+export async function runCapabilityCases({ actor, capability, invoke, readState }) {
+  if (capability === null || !isRegisteredCapability(capability)) {
+    throw new FeatureTestRuntimeError("A registered non-public capability is required.");
+  }
+  if (!actor || !Array.isArray(actor.capabilities) ||
+      typeof invoke !== "function" || typeof readState !== "function") {
+    throw new FeatureTestRuntimeError(
+      "Capability cases require an explicit actor, invoke, and readState."
+    );
+  }
+  const base = actor.capabilities.filter((value) => value !== capability);
+  const without = testActor(actor.platform, { ...actor, capabilities: base });
+  const withGrant = testActor(actor.platform, {
+    ...actor, capabilities: [...base, capability]
+  });
+  async function run(caseActor) {
+    const stateBefore = freezeJson(await readState());
+    let result = null;
+    let error = null;
+    try {
+      result = await invoke(caseActor);
+    } catch (cause) {
+      error = cause;
+    }
+    return Object.freeze({
+      result, error, stateBefore, stateAfter: freezeJson(await readState())
+    });
+  }
+  const withoutCapability = await run(without);
+  const withCapability = await run(withGrant);
+  return Object.freeze({ withoutCapability, withCapability });
+}
+
 export function discordTestModerator(options = {}) {
   return discordTestActor({
     ...options,
@@ -180,6 +218,59 @@ export function linkedTestRoute({
     targetGroup: createPlatformGroupRef(targetGroup),
     destination: freezeJson(destination)
   });
+}
+
+export function defaultTestLink({
+  sourceGroup,
+  targetGroup,
+  integrationId = "test-integration"
+}) {
+  const source = createPlatformGroupRef(sourceGroup);
+  const target = createPlatformGroupRef(targetGroup);
+  if (source.platform === target.platform) {
+    throw new FeatureTestRuntimeError(
+      "A test default link must connect different platforms."
+    );
+  }
+  return Object.freeze({
+    integration: createIntegrationRef({ id: integrationId }),
+    sourceGroup: source,
+    targetGroup: target
+  });
+}
+
+function normalizedDefaultLinks(values) {
+  if (!Array.isArray(values)) {
+    throw new FeatureTestRuntimeError("Test default links must be an array.");
+  }
+  const normalized = values.map((link, index) => {
+    let value;
+    try {
+      if (typeof link?.integration?.id !== "string") throw new TypeError();
+      value = defaultTestLink({
+        sourceGroup: link?.sourceGroup,
+        targetGroup: link?.targetGroup,
+        integrationId: link?.integration?.id
+      });
+    } catch (cause) {
+      if (cause instanceof FeatureTestRuntimeError) throw cause;
+      throw new FeatureTestRuntimeError(
+        `Test default link at index ${index} is invalid.`,
+        { code: "feature_test_default_link_invalid" }
+      );
+    }
+    return value;
+  });
+  const keys = normalized.map((link) =>
+    `${link.sourceGroup.key}\u0000${link.targetGroup.platform}`
+  );
+  if (new Set(keys).size !== keys.length) {
+    throw new FeatureTestRuntimeError(
+      "Test default links must not contain duplicate directions.",
+      { code: "feature_test_default_link_duplicate" }
+    );
+  }
+  return normalized;
 }
 
 function effectAdaptersFor(features) {
@@ -323,51 +414,157 @@ function createClock(initialTime) {
   });
 }
 
-function createMemoryServices(clock) {
+function createMemoryServices(clock, registry) {
   const config = new Map();
   const state = new Map();
+  const integrationState = new Map();
+  const shareableState = new Map();
   const cooldowns = new Map();
-  const storageKey = (groupKey, featureId, key) =>
-    `${groupKey}\u0000${featureId}\u0000${key}`;
+  const storageKey = (ownerKey, featureId, key) =>
+    `${ownerKey}\u0000${featureId}\u0000${key}`;
   const value = (map, key) => map.has(key) ? freezeJson(map.get(key)) : null;
 
+  function stateService(map, ownerKey, {
+    integrationScoped = false,
+    canonicalReset = false
+  } = {}) {
+    const argumentsAfterOwner = (args) => integrationScoped ? args.slice(1) : args;
+    return Object.freeze({
+      get: async (featureId, ...args) => {
+        const [key] = argumentsAfterOwner(args);
+        return value(map, storageKey(ownerKey(args), featureId, key));
+      },
+      set: async (featureId, ...args) => {
+        const [key, nextValue] = argumentsAfterOwner(args);
+        map.set(
+          storageKey(ownerKey(args), featureId, key),
+          freezeJson(nextValue)
+        );
+      },
+      delete: async (featureId, ...args) => {
+        const [key] = argumentsAfterOwner(args);
+        return map.delete(storageKey(ownerKey(args), featureId, key));
+      },
+      increment: async (featureId, ...args) => {
+        const [key, amount = 1] = argumentsAfterOwner(args);
+        const namespaced = storageKey(ownerKey(args), featureId, key);
+        const current = map.get(namespaced) ?? 0;
+        if (!Number.isSafeInteger(current) || !Number.isSafeInteger(amount) ||
+            !Number.isSafeInteger(current + amount)) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory state value is not safely incrementable."
+          );
+        }
+        const nextValue = current + amount;
+        map.set(namespaced, nextValue);
+        return nextValue;
+      },
+      boundedCounter: async (featureId, ...args) => {
+        const [descriptor, operation, operand] = argumentsAfterOwner(args);
+        const namespaced = storageKey(
+          ownerKey(args),
+          featureId,
+          `bounded-counter\u0000${descriptor.name}\u0000${descriptor.subject}`
+        );
+        const current = map.get(namespaced) ?? descriptor.initial;
+        if (
+          !Number.isSafeInteger(current) ||
+          current < descriptor.min ||
+          current > descriptor.max
+        ) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory state value is not a valid bounded counter."
+          );
+        }
+        if (operation === "get") return current;
+        if (operation === "set" && (
+          !Number.isSafeInteger(operand) ||
+          operand < descriptor.min ||
+          operand > descriptor.max
+        )) {
+          throw new FeatureTestRuntimeError(
+            "The in-memory bounded counter value is outside its bounds."
+          );
+        }
+        let nextValue = operation === "set" ? operand : descriptor.initial;
+        if (!["reset", "set"].includes(operation)) {
+          const direction = operation === "increment" ? 1n : -1n;
+          const candidate = BigInt(current) + direction * BigInt(operand);
+          nextValue = Number(
+            candidate < BigInt(descriptor.min)
+              ? BigInt(descriptor.min)
+              : candidate > BigInt(descriptor.max)
+                ? BigInt(descriptor.max)
+                : candidate
+          );
+        }
+        if (canonicalReset && operation === "reset") {
+          map.delete(namespaced);
+        } else if (map.has(namespaced) || nextValue !== descriptor.initial) {
+          map.set(namespaced, nextValue);
+        }
+        return nextValue;
+      }
+    });
+  }
+
   return Object.freeze({
-    runtime(groupKey) {
+    runtime(group, resolveDefaultLink) {
+      const resolvedShareableScopes = new WeakSet();
+      const shareableOwnerKey = (args) => {
+        const scope = args[0];
+        if (!resolvedShareableScopes.has(scope)) {
+          throw new FeatureTestRuntimeError(
+            "Shareable state requires a realm resolved by this invocation."
+          );
+        }
+        return `${scope.ownerKey}\u0000${scope.namespaceId}`;
+      };
       return Object.freeze({
         featureServices: Object.freeze({
           config: Object.freeze({
             get: async (featureId, key) => value(
               config,
-              storageKey(groupKey, featureId, key)
+              storageKey(group.key, featureId, key)
             )
           }),
-          state: Object.freeze({
-            get: async (featureId, key) => value(
-              state,
-              storageKey(groupKey, featureId, key)
-            ),
-            set: async (featureId, key, nextValue) => {
-              state.set(storageKey(groupKey, featureId, key), freezeJson(nextValue));
-            },
-            delete: async (featureId, key) =>
-              state.delete(storageKey(groupKey, featureId, key)),
-            increment: async (featureId, key, amount = 1) => {
-              const namespaced = storageKey(groupKey, featureId, key);
-              const current = state.get(namespaced) ?? 0;
-              if (!Number.isSafeInteger(current) || !Number.isSafeInteger(amount) ||
-                  !Number.isSafeInteger(current + amount)) {
+          state: stateService(state, () => group.key),
+          integrationState: stateService(
+            integrationState,
+            (args) => args[0]?.integration?.id,
+            { integrationScoped: true }
+          ),
+          shareableState: Object.freeze({
+            async current(featureId, targetPlatform, namespaceId) {
+              const declaration = registry.featuresById[featureId]?.shareableState.find(
+                (candidate) => candidate.id === namespaceId
+              );
+              if (!declaration) {
                 throw new FeatureTestRuntimeError(
-                  "The in-memory state value is not safely incrementable."
+                  "The shareable-state namespace is not declared by an installed feature.",
+                  { code: "shareable_state_namespace_not_declared" }
                 );
               }
-              const nextValue = current + amount;
-              state.set(namespaced, nextValue);
-              return nextValue;
-            }
+              const link = resolveDefaultLink(targetPlatform);
+              const scope = Object.freeze({
+                featureId,
+                namespaceId,
+                ownerKey: link
+                  ? `integration:${link.integration.id}`
+                  : `standalone:${group.key}:g1`
+              });
+              resolvedShareableScopes.add(scope);
+              return scope;
+            },
+            ...stateService(
+              shareableState,
+              shareableOwnerKey,
+              { integrationScoped: true, canonicalReset: true }
+            )
           })
         }),
         async claimFeatureCooldown({ featureId, actionKind, scopeKey, seconds }) {
-          const key = `${groupKey}\u0000${featureId}\u0000${actionKind}\u0000${scopeKey}`;
+          const key = `${group.key}\u0000${featureId}\u0000${actionKind}\u0000${scopeKey}`;
           const nowMs = clock.now().getTime();
           const expiresAtMs = cooldowns.get(key) ?? 0;
           if (expiresAtMs > nowMs) {
@@ -402,7 +599,40 @@ function createMemoryServices(clock) {
       },
       clear() {
         state.clear();
+        integrationState.clear();
+        shareableState.clear();
         cooldowns.clear();
+      }
+    }),
+    integrationState: Object.freeze({
+      get(integrationId, featureId, key) {
+        return value(
+          integrationState,
+          storageKey(integrationId, featureId, key)
+        );
+      }
+    }),
+    shareableState: Object.freeze({
+      getStandalone(group, featureId, namespaceId, key) {
+        const normalized = createPlatformGroupRef(group);
+        return value(
+          shareableState,
+          storageKey(
+            `standalone:${normalized.key}:g1\u0000${namespaceId}`,
+            featureId,
+            key
+          )
+        );
+      },
+      getIntegration(integrationId, featureId, namespaceId, key) {
+        return value(
+          shareableState,
+          storageKey(
+            `integration:${integrationId}\u0000${namespaceId}`,
+            featureId,
+            key
+          )
+        );
       }
     })
   });
@@ -446,6 +676,7 @@ function scheduleUnix(timing, clock, randomInteger) {
 
 export function createFeatureTestRuntime(featureOrFeatures, {
   initialTime,
+  defaultLinks = [],
   routes = [],
   randomInteger = ({ min }) => min
 } = {}) {
@@ -456,7 +687,8 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   });
   const actions = createActionRegistry(registry.actions);
   const clock = createClock(initialTime);
-  const memory = createMemoryServices(clock);
+  const memory = createMemoryServices(clock, registry);
+  const configuredDefaultLinks = normalizedDefaultLinks(defaultLinks);
   const configuredRoutes = [...routes];
   const pendingSchedules = [];
   const logs = [];
@@ -481,9 +713,25 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   }
 
   function runtimeContext(invocation, actor, triggerKind, inputRoutes, onRoute) {
-    const memoryRuntime = memory.runtime(invocation.origin.group.key);
+    const resolveDefaultLink = (targetPlatform) =>
+      configuredDefaultLinks.find((link) =>
+        link.sourceGroup.key === invocation.origin.group.key &&
+        link.targetGroup.platform === targetPlatform
+      ) ?? null;
+    const memoryRuntime = memory.runtime(
+      invocation.origin.group,
+      resolveDefaultLink
+    );
     return {
       ...memoryRuntime,
+      featureServices: Object.freeze({
+        ...memoryRuntime.featureServices,
+        links: Object.freeze({
+          async default(_featureId, targetPlatform) {
+            return resolveDefaultLink(targetPlatform);
+          }
+        })
+      }),
       triggerKind,
       clock,
       random: { integer: randomInteger },
@@ -571,12 +819,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     });
   }
 
-  async function command(platform, name, {
-    args = {},
-    actor = testActor(platform),
-    group: groupInput,
-    routes: inputRoutes
-  } = {}) {
+  function commandDefinition(platform, name) {
     const definition = registry.commands[platform][name];
     if (!definition) {
       throw new FeatureTestRuntimeError(
@@ -584,6 +827,16 @@ export function createFeatureTestRuntime(featureOrFeatures, {
         { code: "feature_test_command_not_found" }
       );
     }
+    return definition;
+  }
+
+  async function command(platform, name, {
+    args = {},
+    actor = testActor(platform),
+    group: groupInput,
+    routes: inputRoutes
+  } = {}) {
+    const definition = commandDefinition(platform, name);
     const group = normalizedGroup(platform, groupInput);
     const sourceEventId = nextSourceId(platform, "command");
 
@@ -666,6 +919,23 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }
 
     throw new FeatureTestRuntimeError("The feature command mode is unsupported.");
+  }
+
+  async function twitchCommandText(messageText, input = {}) {
+    const parsed = parseTwitchCommandText(messageText);
+    if (!parsed) {
+      throw new FeatureTestRuntimeError(
+        "Twitch command text must start with a bang-prefixed command name.",
+        { code: "feature_test_twitch_command_text_invalid" }
+      );
+    }
+
+    const definition = commandDefinition("twitch", parsed.name);
+
+    return await command("twitch", parsed.name, {
+      ...input,
+      args: definition.parse.parse(parsed.argsText)
+    });
   }
 
   async function event(kind, {
@@ -773,10 +1043,27 @@ export function createFeatureTestRuntime(featureOrFeatures, {
 
   return Object.freeze({
     registry,
+    inputError: (platform, name, error) => formatCommandInputError(
+      error, commandDefinition(requirePlatform(platform), name)
+    ),
     discord: Object.freeze({ command: (name, input) => command("discord", name, input) }),
-    twitch: Object.freeze({ command: (name, input) => command("twitch", name, input) }),
+    twitch: Object.freeze({
+      command: (name, input) => command("twitch", name, input),
+      commandText: twitchCommandText
+    }),
     event,
     clock,
+    links: Object.freeze({
+      set(nextLinks) {
+        const normalized = normalizedDefaultLinks(nextLinks);
+        configuredDefaultLinks.splice(
+          0,
+          configuredDefaultLinks.length,
+          ...normalized
+        );
+      },
+      all: () => Object.freeze([...configuredDefaultLinks])
+    }),
     routes: Object.freeze({
       set(nextRoutes) {
         if (!Array.isArray(nextRoutes)) {
@@ -788,6 +1075,8 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }),
     config: memory.config,
     state: memory.state,
+    integrationState: memory.integrationState,
+    shareableState: memory.shareableState,
     schedules: Object.freeze({
       pending: () => Object.freeze(pendingSchedules.map((record) =>
         Object.freeze({ ...record })

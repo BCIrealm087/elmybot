@@ -14,12 +14,15 @@ export {
 } from "./contracts.js";
 
 export {
-  completeIntegrationInvitation,
+  activatePendingIntegration,
+  cancelPendingIntegration,
   createIntegrationInvitation,
   getIntegrationById,
+  getIntegrationDefaultLink,
   getIntegrationManagementStatus,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
+  INTEGRATION_PENDING_TTL_MS,
   INTEGRATION_REGISTRY_NAME,
   IntegrationRegistry,
   IntegrationRegistryError,
@@ -27,10 +30,15 @@ export {
   listIntegrationsForGroup,
   listIntegrationAudit,
   reserveIntegrationInvitation,
+  resolveEffectiveShareableStateRealm,
+  resolvePendingIntegrationState,
+  resumePendingIntegration,
   revokeIntegration,
   revokeIntegrationsForGroup,
   resolveIntegrationRoutes,
-  updateIntegrationRoute
+  setIntegrationDefaultLink,
+  updateIntegrationRoute,
+  verifyIntegrationInvitation
 } from "./registry.js";
 
 export {

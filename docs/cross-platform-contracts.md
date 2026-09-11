@@ -112,8 +112,10 @@ createActionDefinition({
 Supporting an origin means that an adapter may expose the action. It does not
 bypass actor authorization or integration routing policy.
 
-An action may use `capability: null` when it is intentionally public, such as a
-health check. The action executor is runtime behavior and is never serialized.
+An action may use `capability: null` when its baseline is public, such as a
+health check. Conditional modes are documented separately through validated
+`conditionalAccess` metadata. The action executor is runtime behavior and is
+never serialized.
 
 Definitions are installed in an immutable action registry. The first shared
 action, `core.health.check.v1`, backs both Discord `/alive` and Twitch `!alive`.

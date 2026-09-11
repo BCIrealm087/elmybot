@@ -174,8 +174,12 @@ describe("Twitch broadcaster OAuth", () => {
 			channelOAuthEnv,
 			createExecutionContext()
 		);
-		const authorizationUrl = new URL(response.headers.get("location"));
-		expect(response.status).toBe(303);
+		const html = await response.text();
+		const href = html.match(/id="oauth-continue" href="([^"]+)"/)?.[1]
+			.replaceAll("&amp;", "&");
+		const authorizationUrl = new URL(href);
+		expect(response.status).toBe(200);
+		expect(html).toContain("window.location.replace");
 		expect(authorizationUrl.origin + authorizationUrl.pathname)
 			.toBe("https://id.twitch.tv/oauth2/authorize");
 		expect(authorizationUrl.searchParams.get("scope")).toBe("channel:bot");

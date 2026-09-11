@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import packagedAliveFeature from "@elmybot/feature-alive";
+import packagedDeathsFeature, {
+  FUN_DEATHS_ACTION_KIND
+} from "@elmybot/feature-fun-deaths";
 import {
   CORE_ACTION_KINDS,
   coreActions,
@@ -83,7 +86,32 @@ describe("Representative feature migrations", () => {
     });
     expect(discordCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
     expect(twitchCommands.counter.actionKind).toBe(COUNTER_ACTION_KIND);
-    expect(featureRegistry.services).toEqual(["config", "random", "state"]);
+    expect(featureRegistry.services).toEqual([
+      "authorization",
+      "config",
+      "integrationState",
+      "links",
+      "random",
+      "shareableState",
+      "state"
+    ]);
+  });
+
+  it("installs deaths as the standalone-or-linked shareable-state proof", () => {
+    expect(installedFeatures).toContain(packagedDeathsFeature);
+    expect(featureRegistry.featuresById["fun.deaths"].shareableState).toEqual([{
+      id: "game_deaths",
+      label: "Per-game death counts",
+      schemaVersion: 1,
+      compatibleVersions: [1],
+      collisionSummary: { kind: "entry_count" },
+      limits: { maxEntries: 100, maxValueBytes: 16_384 },
+      adoptLegacyIntegrationState: true
+    }]);
+    expect(featureRegistry.actions[FUN_DEATHS_ACTION_KIND]).toMatchObject({
+      featureId: "fun.deaths",
+      uses: { services: ["authorization", "shareableState", "state"] }
+    });
   });
 
   it("installs announcements as one routed action with two route directions", () => {
