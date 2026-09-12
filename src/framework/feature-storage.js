@@ -8,6 +8,7 @@ const MAX_FEATURE_VALUE_DEPTH = 20;
 const MAX_VALUES_PER_NAMESPACE = 100;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
 const MAX_COUNTER_SUBJECT_LENGTH = 300;
+const MAX_COUNTER_SUBJECT_LABEL_LENGTH = 80;
 const MAX_COOLDOWN_ROWS = 10_000;
 const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 
@@ -123,6 +124,17 @@ export function initializeFeatureStorageTables(state) {
       target_namespace_id TEXT NOT NULL,
       sealed_at_ms INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS framework_feature_counter_subjects (
+      feature_id TEXT NOT NULL,
+      counter_name TEXT NOT NULL,
+      subject_identity TEXT NOT NULL,
+      subject_label TEXT NOT NULL,
+      value_key TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, counter_name, subject_identity),
+      UNIQUE (feature_id, value_key)
+    );
   `);
 }
 
@@ -166,7 +178,20 @@ export function legacyFeatureStateMigration(state, input) {
       key: entry.value_key,
       value: JSON.parse(entry.value_json)
     }));
-    return { featureId, targetNamespaceId, sealedAtMs, entries };
+    const entryKeys = new Set(entries.map((entry) => entry.key));
+    const counterSubjects = state.storage.sql.exec(
+      `SELECT counter_name, subject_identity, subject_label, value_key
+       FROM framework_feature_counter_subjects
+       WHERE feature_id = ?
+       ORDER BY counter_name, subject_identity`,
+      featureId
+    ).toArray().filter((subject) => entryKeys.has(subject.value_key)).map((subject) => ({
+      counterName: subject.counter_name,
+      identity: subject.subject_identity,
+      label: subject.subject_label,
+      valueKey: subject.value_key
+    }));
+    return { featureId, targetNamespaceId, sealedAtMs, entries, counterSubjects };
   });
 }
 
@@ -356,7 +381,36 @@ function requireBoundedCounterInput(input) {
       "Bounded counter values must be safe integers within the configured bounds."
     );
   }
-  return { featureId, name, subject, min, max, initial, operation, amount, value };
+  const subjectLabel = input?.subjectLabel;
+  if (
+    subjectLabel !== undefined &&
+    (
+      typeof subjectLabel !== "string" ||
+      subjectLabel.trim().length === 0 ||
+      subjectLabel.length > MAX_COUNTER_SUBJECT_LABEL_LENGTH ||
+      Array.from(subjectLabel).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 31 || codePoint === 127;
+      })
+    )
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter subject labels must contain between 1 and ` +
+      `${MAX_COUNTER_SUBJECT_LABEL_LENGTH} characters.`
+    );
+  }
+  return {
+    featureId,
+    name,
+    subject,
+    ...(subjectLabel === undefined ? {} : { subjectLabel: subjectLabel.trim() }),
+    min,
+    max,
+    initial,
+    operation,
+    amount,
+    value
+  };
 }
 
 async function boundedCounterKey(name, subject) {
@@ -367,6 +421,102 @@ async function boundedCounterKey(name, subject) {
     (value) => value.toString(16).padStart(2, "0")
   ).join("");
   return `bc_${hexadecimal.slice(0, 60)}`;
+}
+
+function counterSubjectMetadata(sql, descriptor, key) {
+  const byIdentity = sql.exec(
+    `SELECT value_key, subject_label
+     FROM framework_feature_counter_subjects
+     WHERE feature_id = ? AND counter_name = ? AND subject_identity = ?`,
+    descriptor.featureId,
+    descriptor.name,
+    descriptor.subject
+  ).toArray()[0];
+  if (byIdentity && byIdentity.value_key !== key) {
+    throw new FeatureStorageUserFacingError(
+      "The bounded counter subject identity conflicts with stored metadata.",
+      409
+    );
+  }
+  const byKey = sql.exec(
+    `SELECT counter_name, subject_identity
+     FROM framework_feature_counter_subjects
+     WHERE feature_id = ? AND value_key = ?`,
+    descriptor.featureId,
+    key
+  ).toArray()[0];
+  if (
+    byKey &&
+    (byKey.counter_name !== descriptor.name || byKey.subject_identity !== descriptor.subject)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "The bounded counter storage key conflicts with stored subject metadata.",
+      409
+    );
+  }
+  return byIdentity ?? null;
+}
+
+function recordCounterSubject(sql, descriptor, key) {
+  if (descriptor.subjectLabel === undefined) return false;
+  const existing = counterSubjectMetadata(sql, descriptor, key);
+  if (existing) return false;
+  sql.exec(
+    `INSERT INTO framework_feature_counter_subjects
+      (feature_id, counter_name, subject_identity, subject_label,
+       value_key, created_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    descriptor.featureId,
+    descriptor.name,
+    descriptor.subject,
+    descriptor.subjectLabel,
+    key,
+    Date.now()
+  );
+  return true;
+}
+
+function boundedCounterSubjects(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const name = requireKey(input?.name);
+  const subjects = state.storage.sql.exec(
+    `SELECT metadata.subject_identity, metadata.subject_label, values_table.value_json
+     FROM framework_feature_counter_subjects AS metadata
+     INNER JOIN framework_feature_values AS values_table
+       ON values_table.value_kind = 'state'
+      AND values_table.feature_id = metadata.feature_id
+      AND values_table.value_key = metadata.value_key
+     WHERE metadata.feature_id = ? AND metadata.counter_name = ?
+     ORDER BY metadata.subject_identity`,
+    featureId,
+    name
+  ).toArray().map((entry) => ({
+    identity: entry.subject_identity,
+    label: entry.subject_label,
+    value: JSON.parse(entry.value_json)
+  }));
+  const unidentified = state.storage.sql.exec(
+    `SELECT COUNT(*) AS total
+     FROM framework_feature_values AS values_table
+     LEFT JOIN framework_feature_counter_subjects AS metadata
+       ON metadata.feature_id = values_table.feature_id
+      AND metadata.value_key = values_table.value_key
+     WHERE values_table.value_kind = 'state'
+       AND values_table.feature_id = ?
+       AND length(values_table.value_key) = 63
+       AND values_table.value_key GLOB 'bc_[0-9a-f]*'
+       AND metadata.value_key IS NULL`,
+    featureId
+  ).toArray()[0];
+  const unidentifiedCount = Number(unidentified?.total ?? 0);
+  return {
+    subjects,
+    coverage: {
+      complete: unidentifiedCount === 0,
+      identifiedCount: subjects.length,
+      unidentifiedCount
+    }
+  };
 }
 
 async function boundedCounterState(state, input) {
@@ -431,6 +581,7 @@ async function boundedCounterState(state, input) {
       JSON.stringify(value),
       Date.now()
     );
+    recordCounterSubject(state.storage.sql, descriptor, key);
     return { value };
   });
 }
@@ -514,6 +665,8 @@ export async function handleFeatureStateStorageOperation(state, operation, input
       return incrementState(state, input);
     case "state/bounded-counter":
       return await boundedCounterState(state, input);
+    case "state/bounded-counter-subjects":
+      return boundedCounterSubjects(state, input);
     default:
       return null;
   }

@@ -174,6 +174,38 @@ describe('Platform-independent worker behavior', () => {
       operation: 'set',
       value: 42,
     })).data).toEqual({ value: 42 });
+    expect((await post('state/bounded-counter-subjects', {
+      featureId: 'test.one',
+      name: 'deaths',
+    })).data).toEqual({
+      subjects: [],
+      coverage: {
+        complete: false,
+        identifiedCount: 0,
+        unidentifiedCount: 1,
+      },
+    });
+    expect((await post('state/bounded-counter', {
+      ...counter,
+      operation: 'set',
+      value: 42,
+      subjectLabel: 'NieR: Automata / Ending E',
+    })).data).toEqual({ value: 42 });
+    expect((await post('state/bounded-counter-subjects', {
+      featureId: 'test.one',
+      name: 'deaths',
+    })).data).toEqual({
+      subjects: [{
+        identity: 'NieR: Automata™ / ending E 🔥',
+        label: 'NieR: Automata / Ending E',
+        value: 42,
+      }],
+      coverage: {
+        complete: true,
+        identifiedCount: 1,
+        unidentifiedCount: 0,
+      },
+    });
 
     const lives = {
       featureId: 'test.one',
@@ -210,6 +242,13 @@ describe('Platform-independent worker behavior', () => {
     });
     expect(invalidCounter.response.status).toBe(422);
     expect(invalidCounter.data.userFacingError).toContain('between 1 and 300');
+    const invalidCounterLabel = await post('state/bounded-counter', {
+      ...counter,
+      subjectLabel: 'x'.repeat(81),
+      operation: 'get',
+    });
+    expect(invalidCounterLabel.response.status).toBe(422);
+    expect(invalidCounterLabel.data.userFacingError).toContain('between 1 and 80');
     const invalidCounterAmount = await post('state/bounded-counter', {
       ...counter,
       operation: 'increment',

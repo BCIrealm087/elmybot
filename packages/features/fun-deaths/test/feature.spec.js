@@ -9,7 +9,7 @@ import {
   twitchTestGroup,
   twitchTestModerator
 } from "@elmybot/framework/testing";
-import feature from "../src/feature.js";
+import feature, { normalizeGameSubject } from "../src/feature.js";
 
 function linkedRuntime({ integrationId = "deaths-integration" } = {}) {
   const discordGroup = discordTestGroup({ id: "deaths-guild" });
@@ -24,6 +24,33 @@ function linkedRuntime({ integrationId = "deaths-integration" } = {}) {
 }
 
 describe("fun.deaths", () => {
+  it("declares normalized local, lookup, and collection state exports", () => {
+    expect(feature.readableState.map(({ id, kind, scope }) => ({ id, kind, scope })))
+      .toEqual([
+        { id: "remembered_game", kind: "value", scope: { kind: "group_local" } },
+        {
+          id: "count",
+          kind: "lookup",
+          scope: { kind: "effective_shareable", namespace: "game_deaths" }
+        },
+        {
+          id: "counts",
+          kind: "collection",
+          scope: { kind: "effective_shareable", namespace: "game_deaths" }
+        }
+      ]);
+    expect(normalizeGameSubject("  DARK   Souls  ")).toEqual({
+      value: "dark souls",
+      label: "DARK Souls"
+    });
+    expect(feature.readableState.find(({ id }) => id === "counts").collection)
+      .toEqual({
+        membership: "materialized",
+        order: "canonical_subject",
+        legacyCoverage: "explicit"
+      });
+  });
+
   it("asks for a moderator-selected game when invoked without arguments", async () => {
     const { runtime, discordGroup, twitchGroup } = linkedRuntime();
 

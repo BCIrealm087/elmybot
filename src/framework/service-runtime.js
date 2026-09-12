@@ -441,6 +441,14 @@ export function createFeatureServiceRuntime(env, invocation) {
             }
           );
           return result.value;
+        },
+        async boundedCounterSubjects(featureId, scope, name) {
+          return await shareableRequest(
+            featureId,
+            scope,
+            "bounded-counter-subjects",
+            { name }
+          );
         }
       }),
       state: Object.freeze({
@@ -491,6 +499,14 @@ export function createFeatureServiceRuntime(env, invocation) {
             })
           );
           return result.value;
+        },
+        async boundedCounterSubjects(featureId, name) {
+          return await storageRequest(
+            env,
+            invocation,
+            "state/bounded-counter-subjects",
+            input(featureId, { name })
+          );
         }
       })
     }),

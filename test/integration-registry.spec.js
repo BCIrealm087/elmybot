@@ -930,6 +930,7 @@ describe("Cross-platform integration linking", () => {
       const descriptor = {
         name: "game",
         subject: "hades",
+        subjectLabel: "Hades",
         min: 0,
         max: Number.MAX_SAFE_INTEGER,
         initial: 0
@@ -940,9 +941,21 @@ describe("Cross-platform integration linking", () => {
         ),
         set: async (value) => await runtime.featureServices.shareableState.boundedCounter(
           "fun.deaths", scope, descriptor, "set", value
-        )
+        ),
+        subjects: async () =>
+          await runtime.featureServices.shareableState.boundedCounterSubjects(
+            "fun.deaths", scope, "game"
+          )
       };
     };
+    const expectedSubjects = (value) => ({
+      subjects: [{ identity: "hades", label: "Hades", value }],
+      coverage: {
+        complete: true,
+        identifiedCount: 1,
+        unidentifiedCount: 0
+      }
+    });
 
     await (await deathsState(group, "twitch")).set(3);
     await (await deathsState(channel, "discord")).set(5);
@@ -978,6 +991,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(3);
     expect(await (await deathsState(channel, "discord")).get()).toBe(3);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(3));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(3));
     await (await deathsState(group, "twitch")).set(4);
 
     await revokeIntegration(integrationEnv, {
@@ -988,6 +1005,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(4);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(4));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(4));
     await (await deathsState(group, "twitch")).set(6);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
 
@@ -1022,6 +1043,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(4);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(4));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(4));
   });
 
   it("resolves and pins standalone or active integration shareable-state realms", async () => {

@@ -2,6 +2,7 @@ import {
   access,
   defineAction,
   defineFeature,
+  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -40,6 +41,11 @@ function gameIdentity(game) {
   return displayName(game).normalize("NFKC").toLowerCase();
 }
 
+export function normalizeGameSubject(game) {
+  const label = displayName(game);
+  return Object.freeze({ value: gameIdentity(label), label });
+}
+
 function countMessage(game, count) {
   return `${game} deaths: ${count}`;
 }
@@ -73,6 +79,80 @@ export const feature = defineFeature({
     // See this package's README for the migration handoff and fresh-state example.
     adoptLegacyIntegrationState: true
   }],
+  readableState: [
+    defineReadableStateExport({
+      id: "remembered_game",
+      version: 1,
+      label: "Remembered game",
+      description: "The game currently selected by this Discord guild or Twitch channel.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "group_local" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: { type: "string", minLength: 1, maxLength: 80 },
+        absence: { kind: "unselected" }
+      }
+    }),
+    defineReadableStateExport({
+      id: "count",
+      version: 1,
+      label: "Death count",
+      description: "The effective standalone or shared death count for one game.",
+      kind: "lookup",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable", namespace: "game_deaths" },
+      access: { kind: "operator_grant" },
+      parameters: {
+        game: {
+          label: "Game",
+          schema: { type: "string", minLength: 1, maxLength: 80 },
+          normalize: normalizeGameSubject
+        }
+      },
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            game: { type: "string", minLength: 1, maxLength: 80 },
+            count: { type: "integer", minimum: 0, maximum: MAX_COUNT }
+          },
+          required: ["game", "count"]
+        },
+        absence: { kind: "default" }
+      }
+    }),
+    defineReadableStateExport({
+      id: "counts",
+      version: 1,
+      label: "Materialized death counts",
+      description: "Known game subjects with materialized counters in the effective state.",
+      kind: "collection",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable", namespace: "game_deaths" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              game: { type: "string", minLength: 1, maxLength: 80 },
+              count: { type: "integer", minimum: 0, maximum: MAX_COUNT }
+            },
+            required: ["game", "count"]
+          },
+          maxItems: 100
+        },
+        absence: { kind: "default" }
+      },
+      collection: {
+        membership: "materialized",
+        order: "canonical_subject",
+        legacyCoverage: "explicit"
+      }
+    })
+  ],
   actions: [
     defineAction({
       kind: FUN_DEATHS_ACTION_KIND,
@@ -132,8 +212,12 @@ export const feature = defineFeature({
           otherPlatform(ctx.origin.group.platform),
           "game_deaths"
         );
-        const deaths = sharedState
-          .boundedCounter("game", gameIdentity(selectedGame));
+        const gameSubject = normalizeGameSubject(selectedGame);
+        const deaths = sharedState.boundedCounter(
+          "game",
+          gameSubject.value,
+          { subjectLabel: gameSubject.label }
+        );
 
         let count;
         if (selectedOperation.kind === "plus") {

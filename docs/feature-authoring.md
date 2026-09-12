@@ -759,13 +759,20 @@ ceiling, use the bounded-counter handle instead of deriving a storage key or
 combining `get()` with `increment()`:
 
 ```js
-const deaths = ctx.state.boundedCounter("deaths", normalizedGameName);
+const deaths = ctx.state.boundedCounter("deaths", normalizedGameName, {
+  subjectLabel: displayGameName
+});
 const value = await deaths.decrement(); // atomically stops at zero
 ```
 
 The framework safely maps the subject to an internal key. Normalize subject
 identity in the feature only when the domain requires it—for example, if game
-names should be case-insensitive.
+names should be case-insensitive. Supply `subjectLabel` when the counter may be
+declared as a readable collection: it lets the framework enumerate a safe
+display label without changing the normalized identity or exposing its hashed
+storage key. Existing rows without labels keep their count and are reported as
+unidentified until a later mutation safely supplies the metadata. See
+[`state-query-readable-state.md`](state-query-readable-state.md).
 
 When both members of the selected relationship must update one authoritative
 value, declare a shareable namespace on the feature and resolve it through
@@ -777,7 +784,9 @@ const targetPlatform = ctx.origin.group.platform === "discord"
   ? "twitch"
   : "discord";
 const deaths = (await ctx.shareableState.current(targetPlatform, "game_deaths"))
-  .boundedCounter("deaths", normalizedGameName);
+  .boundedCounter("deaths", normalizedGameName, {
+    subjectLabel: displayGameName
+  });
 const value = await deaths.increment();
 ```
 

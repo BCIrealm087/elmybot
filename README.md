@@ -443,6 +443,7 @@ explicit catalog-regeneration action.
 - [Composable state queries and live subscriptions roadmap (proposed)](docs/state-querying-roadmap.md)
 - [Public state-query contract](docs/state-query-contract.md)
 - [State-query live transport and cost decision](docs/state-query-transport-decision.md)
+- [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

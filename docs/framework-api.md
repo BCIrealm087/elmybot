@@ -43,6 +43,8 @@ surface consists of:
 - manifest and version helpers: `defineFeature`, `isFeatureDefinition`,
   `frameworkApiVersion`, `supportedFrameworkApiVersions`, and
   `FeatureDefinitionError`;
+- readable-state helpers: `defineReadableStateExport` and
+  `ReadableStateDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -58,6 +60,14 @@ metadata. Omission normalizes to a frozen empty array, preserving every existing
 v1 definition. Declarations contain stable IDs, labels, schema compatibility,
 safe collision-summary policy, and bounded limits. This is the compatible
 addition of an optional manifest field with a stable default.
+
+`defineFeature()` also accepts optional `readableState` declarations created by
+`defineReadableStateExport()`. Omission normalizes to a frozen empty array. The
+helper validates public identity, schemas, supported platforms, ownership,
+operator-grant eligibility, normalization hooks, absence policy, and bounded
+collection behavior. A declaration only makes state eligible for a later read
+grant; it does not add a route or expose a value. See
+[`state-query-readable-state.md`](state-query-readable-state.md).
 
 Actions may explicitly request the controlled `authorization`, `config`,
 `integrationState`, `links`, `shareableState`, `state`, and `random` context
@@ -77,6 +87,10 @@ options)` API. It safely derives storage keys for arbitrary subjects and makes
 each read, assignment, saturating increment or decrement, or reset one atomic
 operation. All configuration and `ctx.state` remain scoped to the action's origin group,
 including when that group is linked to another platform.
+`options.subjectLabel` may provide a trimmed, non-control display label of at
+most 80 characters. Mutations can then attach enumerable metadata without
+changing the subject identity or derived counter key. Omitting it preserves the
+previous behavior.
 
 The additive `integrationState` service deliberately exposes mutable state
 owned by one active integration. The action must first resolve the current

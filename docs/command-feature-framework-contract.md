@@ -116,6 +116,7 @@ defineFeature({
   events: [],
   schedules: [],
   shareableState: [],
+  readableState: [],
   effectAdapters: {
     discord: [],
     twitch: []
@@ -133,6 +134,20 @@ functions are retained by reference and are never serialized.
 
 `effectAdapters` is an advanced, platform-owned extension point. Ordinary
 command features SHOULD use already registered effect factories.
+
+### Readable-state declarations
+
+`readableState` is optional and defaults to a frozen empty array. Entries must
+be created with the public `defineReadableStateExport()` helper. They declare
+versioned, operator-grant-eligible state metadata for the composable query
+system without making a value public or adding a route. The helper validates
+IDs, labels, descriptions, platforms, ownership, parameters, public result
+schemas, absence behavior, and bounded collection policy. Effective-shareable
+exports must refer to a `shareableState` namespace declared by the same feature.
+
+The complete implemented declaration and subject-metadata contract is in
+[`state-query-readable-state.md`](state-query-readable-state.md). Query
+evaluation, grants, and delivery are separate staged APIs.
 
 ### Shareable-state declarations
 

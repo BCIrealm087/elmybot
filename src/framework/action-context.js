@@ -173,6 +173,25 @@ function requireCounterSubject(subject) {
   return subject;
 }
 
+function requireCounterSubjectLabel(subjectLabel) {
+  if (subjectLabel === undefined) return null;
+  if (
+    typeof subjectLabel !== "string" ||
+    subjectLabel.trim().length === 0 ||
+    subjectLabel.length > 80 ||
+    Array.from(subjectLabel).some((character) => {
+      const codePoint = character.codePointAt(0);
+      return codePoint <= 31 || codePoint === 127;
+    })
+  ) {
+    throw new FeatureContextError(
+      "Bounded counter subject labels must contain between 1 and 80 characters.",
+      { code: "feature_counter_subject_label_invalid" }
+    );
+  }
+  return subjectLabel.trim();
+}
+
 function boundedCounterDescriptor(name, subject, options = {}) {
   if (
     typeof options !== "object" ||
@@ -203,6 +222,9 @@ function boundedCounterDescriptor(name, subject, options = {}) {
   return Object.freeze({
     name: requireFeatureKey(name),
     subject: requireCounterSubject(subject),
+    ...(options.subjectLabel === undefined
+      ? {}
+      : { subjectLabel: requireCounterSubjectLabel(options.subjectLabel) }),
     min,
     max,
     initial
