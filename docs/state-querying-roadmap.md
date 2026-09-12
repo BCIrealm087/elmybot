@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–2 are complete; steps 3–12 remain pending. Complete the relevant acceptance
+Steps 1–3 are complete; steps 4–12 remain pending. Complete the relevant acceptance
 criteria before marking another step done. Keep these numbers stable for
 subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -257,7 +257,13 @@ not performed merely by adding this roadmap.
 
 ### 3. Add readable state declarations, identities, and subject metadata
 
-**Status:** pending. **Depends on:** steps 1–2.
+**Status:** completed on 2026-09-12. **Depends on:** steps 1–2.
+
+The implemented declaration, catalog, logical-reference, counter-subject
+metadata, snapshot, lifecycle, and legacy-coverage boundary is recorded in
+[`state-query-readable-state.md`](state-query-readable-state.md). Query
+evaluation remains step 4; no public state route or subscription was added by
+this step.
 
 Add optional declarations and helpers through the supported framework entry
 points. Validate public names, schemas, ownership policy, parameter types,
@@ -582,3 +588,14 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 346 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34661139725](https://github.com/BCIrealm087/elmybot/actions/runs/34661139725).
   Steps 3–12 remain pending.
+- 2026-09-12: Step 3 completed. Framework API v1 now supports optional validated
+  readable-state declarations, a value-free public catalog, and canonical
+  logical references. Deaths declares its group-local remembered game and its
+  effective-shareable count lookup and materialized collection. Additive
+  counter-subject metadata preserves the existing hash identity, reports
+  unidentified legacy history explicitly, and follows snapshot cloning,
+  linking, revocation successors, and relinking. Implementation commit
+  [`baa8715`](https://github.com/BCIrealm087/elmybot/commit/baa8715c7bec2a2294408068eda572d9f12fb7a0)
+  passed all 354 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34677582714](https://github.com/BCIrealm087/elmybot/actions/runs/34677582714).
+  Steps 4–12 remain pending.
