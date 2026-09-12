@@ -169,6 +169,15 @@ The proof targets the repository's Cloudflare Vitest environment using
 can establish Web Streams framing, ordering, cancellation callbacks, replay,
 coalescing, and deterministic cost arithmetic.
 
+GitHub Actions run
+[`34661139725`](https://github.com/BCIrealm087/elmybot/actions/runs/34661139725)
+validated implementation commit
+[`a3e17ca`](https://github.com/BCIrealm087/elmybot/commit/a3e17ca48c5f03d4849569ac43d85d5da749c6f4).
+All 10 transport-proof tests passed as part of 346 passing repository tests in
+35 files; lint, JavaScript syntax checks, and the non-deploying Wrangler build
+also passed. The proof test's 15 ms runtime verifies deterministic local
+behavior only and is not a network-latency measurement.
+
 They cannot establish actual Durable Object eviction or hibernation: Cloudflare
 documents that local Miniflare delivers WebSocket events but does not evict the
 object. They also cannot establish edge buffering, EventSource behavior through

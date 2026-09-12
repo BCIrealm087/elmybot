@@ -577,4 +577,8 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   public SSE while provisionally using a Worker adapter and group-local
   hibernating WebSocket observers to avoid pinning Durable Objects for idle
   browser streams. Cost assumptions, initial budgets, and deployment-only
-  validation blockers are recorded. Steps 3–12 remain pending.
+  validation blockers are recorded. Implementation commit
+  [`a3e17ca`](https://github.com/BCIrealm087/elmybot/commit/a3e17ca48c5f03d4849569ac43d85d5da749c6f4)
+  passed all 346 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34661139725](https://github.com/BCIrealm087/elmybot/actions/runs/34661139725).
+  Steps 3–12 remain pending.
