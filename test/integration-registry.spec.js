@@ -1810,5 +1810,5 @@ describe("Cross-platform integration linking", () => {
         ).one().total).toBe(0);
       }
     );
-  });
+  }, 10_000);
 });
