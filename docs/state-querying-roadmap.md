@@ -1,6 +1,7 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–5 are complete.
+Status: implementation in progress; steps 1–5 are complete and step 6 is
+awaiting CI validation.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,10 +183,10 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–5 are complete; steps 6–12 remain pending. Complete the relevant acceptance
-criteria before marking another step done. Keep these numbers stable for
-subsequent work requests; record implementation commits and checks in the
-progress log.
+Steps 1–5 are complete; step 6 is awaiting CI validation; steps 7–12 remain
+pending. Complete the relevant acceptance criteria before marking another step
+done. Keep these numbers stable for subsequent work requests; record
+implementation commits and checks in the progress log.
 
 | Milestone | Steps | Result |
 | --- | --- | --- |
@@ -351,7 +352,15 @@ hidden state.
 
 ### 6. Record committed changes and recoverable notifications
 
-**Status:** pending. **Depends on:** steps 3–5.
+**Status:** implementation complete; CI validation in progress. **Depends on:**
+steps 3–5.
+
+The implemented leased source watchers, atomic revision outboxes, retry and
+restart recovery, deduplicated observer inbox, no-op rules, and bounded cleanup
+are recorded in
+[`state-query-notifications.md`](state-query-notifications.md). Lifecycle
+binding invalidation remains step 7, live dependency attachment remains step 8,
+and browser SSE remains step 9.
 
 Instrument local and shareable storage mutation boundaries, including collection
 membership and subject metadata changes. Use existing namespace revisions where
