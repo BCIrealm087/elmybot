@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Step 1 is complete; steps 2–12 remain pending. Complete the relevant acceptance
+Steps 1–2 are complete; steps 3–12 remain pending. Complete the relevant acceptance
 criteria before marking another step done. Keep these numbers stable for
 subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -224,7 +224,15 @@ result or error. The document clearly separates existing behavior from new APIs.
 
 ### 2. Validate the Cloudflare transport and cost assumptions
 
-**Status:** pending. **Depends on:** step 1 semantics.
+**Status:** completed on 2026-09-12. **Depends on:** step 1 semantics.
+
+The recorded result is
+[`state-query-transport-decision.md`](state-query-transport-decision.md). It
+keeps SSE as the public surface, selects a provisional Worker SSE adapter backed
+by per-group hibernating WebSocket observer objects, establishes initial budgets,
+and explicitly lists the evidence that still requires a deployed test Worker.
+The bounded transport proof and cost model are reproducible repository artifacts;
+no deployment was performed.
 
 Build a bounded technical proof of snapshot-plus-SSE delivery, disconnection,
 cleanup, reconnection, and idle behavior. Compare its expected Durable Object
@@ -563,3 +571,10 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   graph, user-composed reads over declared exports, whole-query authorization,
   explicit value-state semantics, effective-state following, and
   transport-neutral snapshot/subscription results. Steps 2–12 remain pending.
+- 2026-09-12: Step 2 completed. A bounded Web Streams proof covers SSE snapshots,
+  fanout, cancellation cleanup, replay/resynchronization, slow-reader coalescing,
+  idle heartbeat framing, and admission limits. The architecture decision keeps
+  public SSE while provisionally using a Worker adapter and group-local
+  hibernating WebSocket observers to avoid pinning Durable Objects for idle
+  browser streams. Cost assumptions, initial budgets, and deployment-only
+  validation blockers are recorded. Steps 3–12 remain pending.
