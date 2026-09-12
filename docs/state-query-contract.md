@@ -454,9 +454,9 @@ A grant contains:
 - maximum query/resource scope no greater than system limits;
 - deployment environment, issuance, expiry, and revocation identity.
 
-The exact credential representation and operator route belong to step 5. A
-query digest, logical reference, group ID, SSE cursor, integration ID, or CORS
-approval is never a credential.
+The implemented credential representation and operator routes are recorded in
+[`state-query-http.md`](state-query-http.md). A query digest, logical reference,
+group ID, SSE cursor, integration ID, or CORS approval is never a credential.
 
 Authorization is applied to every binding, including hidden dependencies and
 collection membership. Dynamic values are normalized and checked against the

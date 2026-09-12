@@ -151,7 +151,7 @@ function controlledReadContext(source, binding, dependencies, collectionReads) {
   });
 }
 
-async function evaluateAttempt(plan, sourceRuntime) {
+async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultBytes) {
   const cells = Object.create(null);
   const sourceStates = new Map();
   const readCache = new Map();
@@ -182,6 +182,8 @@ async function evaluateAttempt(plan, sourceRuntime) {
       cells[alias] = blocked;
       continue;
     }
+
+    if (authorizeBinding) await authorizeBinding(binding, freezeJson(argumentsValue));
 
     const source = await sourceRuntime.open(binding.featureId, binding.definition);
     let sourceState = sourceStates.get(source.bindingKey);
@@ -253,7 +255,7 @@ async function evaluateAttempt(plan, sourceRuntime) {
   )));
   if (
     new TextEncoder().encode(JSON.stringify(data)).byteLength >
-    STATE_QUERY_LIMITS.maxResultBytes
+    maxResultBytes
   ) {
     fail("ready result exceeds the encoded-size limit.", {
       code: "query_result_too_large",
@@ -332,12 +334,15 @@ async function unavailableEvaluation(plan, code, status, reason, now) {
 
 export async function evaluateStateQuery(registry, input, {
   env,
+  preparedPlan = null,
   sourceRuntime = null,
   sourceRuntimeFactory = null,
   correlationId,
   maxAttempts = 3,
   reason = "initial",
-  now = () => new Date()
+  now = () => new Date(),
+  authorizeBinding = null,
+  maxResultBytes = STATE_QUERY_LIMITS.maxResultBytes
 } = {}) {
   if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 5) {
     throw new TypeError("State-query maxAttempts must be an integer between 1 and 5.");
@@ -345,7 +350,14 @@ export async function evaluateStateQuery(registry, input, {
   if (!READY_REASON.has(reason)) {
     throw new TypeError("State-query evaluation reason is invalid.");
   }
-  const plan = await prepareStateQuery(registry, input);
+  if (
+    !Number.isSafeInteger(maxResultBytes) ||
+    maxResultBytes < 1 ||
+    maxResultBytes > STATE_QUERY_LIMITS.maxResultBytes
+  ) {
+    throw new TypeError("State-query maxResultBytes is invalid.");
+  }
+  const plan = preparedPlan ?? await prepareStateQuery(registry, input);
   for (let attemptNumber = 0; attemptNumber < maxAttempts; attemptNumber += 1) {
     const runtime = sourceRuntimeFactory
       ? await sourceRuntimeFactory({ attempt: attemptNumber + 1, plan })
@@ -354,7 +366,12 @@ export async function evaluateStateQuery(registry, input, {
           correlationId
         });
     try {
-      const attempt = await evaluateAttempt(plan, runtime);
+      const attempt = await evaluateAttempt(
+        plan,
+        runtime,
+        authorizeBinding,
+        maxResultBytes
+      );
       if (attempt.stable) return await readyEvaluation(plan, attempt, reason, now);
     } catch (error) {
       if (error instanceof StateQueryError) throw error;

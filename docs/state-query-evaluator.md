@@ -1,8 +1,8 @@
 # Read-only composable state-query evaluator
 
 Status: implemented foundation for state-querying roadmap step 4 on 2026-09-12.
-Read grants, public HTTP access, notifications, lifecycle observation, and SSE
-remain later roadmap steps.
+Read grants and public snapshot HTTP access were added in step 5. Notifications,
+lifecycle observation, and SSE remain later roadmap steps.
 
 ## Implemented boundary
 
@@ -23,10 +23,12 @@ Queries remain user-composed. A feature does not define a special query for a
 three-game overlay or a current-game widget. Presets may later expand into the
 same document format.
 
-This module is not an HTTP route and performs no authorization by itself. Step
-5 must authorize the whole normalized query before calling it and expose only
-the public envelope. The evaluator's observation plan is internal infrastructure
-for later notification and subscription work.
+This module remains transport-neutral and performs no authorization by itself.
+The step-5 HTTP adapter validates a grant before preparation, authorizes the
+whole normalized plan, rechecks resolved dynamic values before their reads, and
+exposes only the public envelope. The evaluator's observation plan is internal
+infrastructure for later notification and subscription work. See
+[`state-query-http.md`](state-query-http.md).
 
 ## Validation and canonicalization
 

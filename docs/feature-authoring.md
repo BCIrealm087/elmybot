@@ -804,6 +804,9 @@ includes a `resolve(ctx, arguments)` function whose context has only read method
 for that declaration's group-local or effective-shareable source. It cannot call
 the command action or mutate state. See the complete
 [read-only evaluator contract](state-query-evaluator.md).
+Operators can expose only selected declarations through scoped, expiring grants;
+the [state-query HTTP guide](state-query-http.md) describes discovery and
+snapshot behavior. A declaration remains private until such a grant exists.
 
 ## Cookbook 7: conditionally protected command modes
 

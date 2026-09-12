@@ -348,7 +348,10 @@ function evaluationOrder(bindings) {
     return depth;
   };
   for (const alias of Object.keys(bindings)) visit(alias);
-  return Object.freeze(order);
+  return Object.freeze({
+    order: Object.freeze(order),
+    maxDepth: Math.max(...depths.values())
+  });
 }
 
 function selectionDefinition(bindings, alias, input) {
@@ -410,7 +413,7 @@ export async function prepareStateQuery(registry, input) {
     fail("query.bindings", "exceeds the collection-binding limit.", "query_limit_exceeded", 413);
   }
   validateBindingReferences(bindings);
-  const order = evaluationOrder(bindings);
+  const evaluation = evaluationOrder(bindings);
 
   requireObject(input.select, "query.select");
   const selectionEntries = Object.entries(input.select);
@@ -454,7 +457,8 @@ export async function prepareStateQuery(registry, input) {
     digest: await stateQueryDigest(normalizedQuery),
     bindings,
     selections,
-    order
+    order: evaluation.order,
+    maxDependencyDepth: evaluation.maxDepth
   });
 }
 

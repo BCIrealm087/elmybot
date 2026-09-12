@@ -56,6 +56,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
+| `/state-query/*` | Scoped readable-state discovery, snapshots, sessions, and grant issuance |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -107,6 +108,7 @@ script. All commands except `/alive` are guild-only.
 | `/feature_config_set` | `feature`, `key`, `json_value` | Set an installed feature's namespaced configuration |
 | `/feature_config_show` | `feature`, `key` | Inspect a feature configuration value |
 | `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
+| `/state_query_grant` | `exports`, optional `duration_hours` | Create a scoped read credential in an ephemeral response |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
 | `/integration_default_set` | `integration_id` | Select the server's default Twitch link |
@@ -121,9 +123,10 @@ script. All commands except `/alive` are guild-only.
 
 Scheduling create/view/cancel capabilities allow the server owner, intrinsic
 Discord moderators, and configured allowed roles. Configuration management
-allows the owner and intrinsic moderators. Integration management is stricter:
+allows the owner and intrinsic moderators. Integration and state-query grant
+management are stricter:
 only the owner or a member with Administrator or Manage Server may link,
-inspect, configure, recover, or unlink integrations. Announcements allow the
+inspect, configure, recover, unlink integrations, or expose readable state. Announcements allow the
 owner, intrinsic moderators, and configured allowed roles.
 
 Random schedule intervals are expressed in seconds, must remain between 10
@@ -245,6 +248,9 @@ after the platform accepts a request and before local success is recorded.
 | `TWITCH_BOT_USER_ID` | No | Numeric user ID of the Twitch bot account |
 | `TWITCH_EVENTSUB_SECRET` | Yes | EventSub HMAC secret, 10–100 characters |
 | `TWITCH_OAUTH_SETUP_TOKEN` | Yes | Bearer token protecting operator endpoints |
+| `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` grant boundary |
+| `STATE_QUERY_PUBLIC_ORIGIN` | No | Committed origin for grant OAuth and session cookies |
+| `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Yes | HMAC key rejecting forged grant-routing fields before Durable Object lookup |
 | `TWITCH_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` identity |
 | `TWITCH_PUBLIC_ORIGIN` | No | Committed canonical callback and onboarding origin |
 
@@ -289,14 +295,17 @@ npx wrangler secret put TWITCH_CLIENT_SECRET --env test
 npx wrangler secret put TWITCH_BOT_USER_ID --env test
 npx wrangler secret put TWITCH_EVENTSUB_SECRET --env test
 npx wrangler secret put TWITCH_OAUTH_SETUP_TOKEN --env test
+npx wrangler secret put STATE_QUERY_CREDENTIAL_SIGNING_SECRET --env test
 ```
 
-Set the environment-specific `TWITCH_PUBLIC_ORIGIN` values in `wrangler.jsonc`.
+Set the environment-specific `TWITCH_PUBLIC_ORIGIN` and
+`STATE_QUERY_PUBLIC_ORIGIN` values in `wrangler.jsonc`.
 Register these Twitch OAuth callback URLs for each Worker host:
 
 ```text
 https://<worker-host>/twitch/oauth/callback
 https://<worker-host>/twitch/channels/oauth/callback
+https://<worker-host>/state-query/operator/twitch/callback
 ```
 
 Set the Discord interaction endpoint to:
@@ -367,6 +376,13 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 | `GET /twitch/eventsub/channels?broadcasterUserId=<id>` | Inspect desired and recovery state |
 | `POST /twitch/eventsub/channels` | Configure broadcaster desired state |
 | `DELETE /twitch/eventsub/channels?broadcasterUserId=<id>` | Disable desired state and remove managed subscriptions |
+
+State-query grant issuance is group-authorized rather than protected by the
+operator-wide Twitch setup token. Discord server owners and members with
+Administrator or Manage Server use `/state_query_grant`. Twitch broadcasters
+open `GET /state-query/operator/twitch` and reauthenticate with Twitch. See the
+[state-query HTTP and grant guide](docs/state-query-http.md) for credential,
+catalog, snapshot, session, revocation, origin, and scope details.
 
 ## Project layout
 
@@ -445,6 +461,7 @@ explicit catalog-regeneration action.
 - [State-query live transport and cost decision](docs/state-query-transport-decision.md)
 - [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
 - [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
+- [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

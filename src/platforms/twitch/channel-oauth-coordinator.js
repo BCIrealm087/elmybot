@@ -6,6 +6,12 @@ import {
 } from "./auth.js";
 import { logError } from "../../common.js";
 import { reserveIntegrationInvitation } from "../../integrations/index.js";
+import { featureRegistry } from "../../features/index.js";
+import { issueStateQueryGrant } from "../../state-querying/grant-client.js";
+import {
+  grantPermissionsForExportList,
+  STATE_QUERY_GRANT_LIMITS
+} from "../../state-querying/grants.js";
 import {
   INVITATION_PREFIX,
   INVITATION_TTL_MS,
@@ -20,10 +26,27 @@ import {
   invitationStorageKey,
   noStoreJson,
   randomInvitationToken,
+  revokeTwitchToken,
   validatedCallbackUrl,
   validatedConnectUrl,
   validatedRedirectUri
 } from "./channel-auth-common.js";
+
+export const STATE_QUERY_OAUTH_STATE_PREFIX = "stateQueryGrantOAuthState:";
+const STATE_QUERY_OAUTH_SCOPE = "openid";
+
+function validatedStateQueryRedirectUri(value) {
+	let url;
+	try {
+		url = new URL(value);
+	} catch {
+		throw channelOAuthError("State-query OAuth redirect URI is invalid.");
+	}
+	if (url.protocol !== "https:" || url.pathname !== "/state-query/operator/twitch/callback") {
+		throw channelOAuthError("State-query OAuth redirect URI is invalid.");
+	}
+	return url.href;
+}
 
 export class TwitchChannelOAuthCoordinator {
 	constructor(state, env) {
@@ -123,6 +146,47 @@ export class TwitchChannelOAuthCoordinator {
 		return { authorizationUrl: authorizationUrl.href, expiresAtMs: pending.expiresAtMs };
 	}
 
+	async startStateQueryGrantOAuth({
+		redirectUri,
+		clientId,
+		clientSecret,
+		exports,
+		expiresInSeconds
+	}) {
+		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
+		requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
+		redirectUri = validatedStateQueryRedirectUri(redirectUri);
+		const permissions = grantPermissionsForExportList(featureRegistry, "twitch", exports);
+		if (
+			!Number.isSafeInteger(expiresInSeconds) ||
+			expiresInSeconds < STATE_QUERY_GRANT_LIMITS.minLifetimeSeconds ||
+			expiresInSeconds > STATE_QUERY_GRANT_LIMITS.maxLifetimeSeconds
+		) {
+			throw channelOAuthError("State-query grant lifetime is invalid.");
+		}
+		const state = crypto.randomUUID();
+		const pending = {
+			state,
+			redirectUri,
+			permissions,
+			expiresInSeconds,
+			expiresAtMs: Date.now() + OAUTH_STATE_TTL_MS
+		};
+		await this.state.storage.put(`${STATE_QUERY_OAUTH_STATE_PREFIX}${state}`, pending);
+		await this.scheduleCleanup(pending.expiresAtMs);
+
+		const authorizationUrl = new URL("https://id.twitch.tv/oauth2/authorize");
+		authorizationUrl.search = new URLSearchParams({
+			response_type: "code",
+			client_id: clientId,
+			redirect_uri: redirectUri,
+			scope: STATE_QUERY_OAUTH_SCOPE,
+			state,
+			force_verify: "true"
+		}).toString();
+		return { authorizationUrl: authorizationUrl.href, expiresAtMs: pending.expiresAtMs };
+	}
+
 	async finishOAuth({ code, state, redirectUri, clientId, clientSecret }) {
 		if (![code, state, redirectUri].every((value) =>
 			typeof value === "string" && value.length > 0
@@ -183,15 +247,69 @@ export class TwitchChannelOAuthCoordinator {
 		return checkedJsonResponse(response, "Could not store the Twitch channel authorization.");
 	}
 
+	async finishStateQueryGrantOAuth({ code, state, redirectUri, clientId, clientSecret }) {
+		if (![code, state, redirectUri].every((value) =>
+			typeof value === "string" && value.length > 0
+		)) {
+			throw channelOAuthError("State-query OAuth callback parameters are incomplete.");
+		}
+		const stateKey = `${STATE_QUERY_OAUTH_STATE_PREFIX}${state}`;
+		const pending = await this.state.storage.get(stateKey);
+		redirectUri = validatedStateQueryRedirectUri(redirectUri);
+		if (
+			!pending ||
+			pending.state !== state ||
+			pending.redirectUri !== redirectUri ||
+			pending.expiresAtMs < Date.now()
+		) {
+			throw channelOAuthError("State-query OAuth state is invalid or expired.");
+		}
+		await this.state.storage.delete(stateKey);
+		clientId = requiredString(clientId, "TWITCH_CLIENT_ID");
+		clientSecret = requiredString(clientSecret, "TWITCH_CLIENT_SECRET");
+		const tokens = await twitchTokenRequest(new URLSearchParams({
+			client_id: clientId,
+			client_secret: clientSecret,
+			code,
+			grant_type: "authorization_code",
+			redirect_uri: redirectUri
+		}));
+		try {
+			const validation = await validateTwitchUserToken(tokens.access_token);
+			if (
+				validation?.client_id !== clientId ||
+				typeof validation?.user_id !== "string" ||
+				validation.user_id.length === 0 ||
+				!Array.isArray(validation.scopes) ||
+				!validation.scopes.includes(STATE_QUERY_OAUTH_SCOPE)
+			) {
+				throw channelOAuthError("The Twitch authorization identity is invalid.", {
+					status: 403,
+					code: "twitch_channel_oauth_wrong_identity"
+				});
+			}
+			return await issueStateQueryGrant(this.env, featureRegistry, {
+				target: { platform: "twitch", groupId: validation.user_id },
+				permissions: pending.permissions,
+				expiresInSeconds: pending.expiresInSeconds
+			}, {
+				actor: { platform: "twitch", id: validation.user_id }
+			});
+		} finally {
+			await revokeTwitchToken(clientId, tokens.access_token);
+		}
+	}
+
 	async alarm() {
 		const nowMs = Date.now();
-		const [states, invitations] = await Promise.all([
+		const [states, grantStates, invitations] = await Promise.all([
 			this.state.storage.list({ prefix: OAUTH_STATE_PREFIX }),
+			this.state.storage.list({ prefix: STATE_QUERY_OAUTH_STATE_PREFIX }),
 			this.state.storage.list({ prefix: INVITATION_PREFIX })
 		]);
 		const expiredKeys = [];
 		let nextExpiry = null;
-		for (const [key, pending] of [...states, ...invitations]) {
+		for (const [key, pending] of [...states, ...grantStates, ...invitations]) {
 			if (!Number.isFinite(pending?.expiresAtMs) || pending.expiresAtMs <= nowMs) {
 				expiredKeys.push(key);
 			} else if (nextExpiry === null || pending.expiresAtMs < nextExpiry) {
@@ -215,6 +333,12 @@ export class TwitchChannelOAuthCoordinator {
 			if (request.method === "POST" && url.pathname === "/oauth/callback") {
 				return noStoreJson(await this.finishOAuth(await request.json()));
 			}
+			if (request.method === "POST" && url.pathname === "/state-query/oauth/start") {
+				return noStoreJson(await this.startStateQueryGrantOAuth(await request.json()));
+			}
+			if (request.method === "POST" && url.pathname === "/state-query/oauth/callback") {
+				return noStoreJson(await this.finishStateQueryGrantOAuth(await request.json()));
+			}
 			return new Response("Not found", { status: 404 });
 		} catch (error) {
 			if (error instanceof TwitchOAuthError) {
@@ -229,4 +353,3 @@ export class TwitchChannelOAuthCoordinator {
 		}
 	}
 }
-

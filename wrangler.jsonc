@@ -11,6 +11,8 @@
 		"enabled": true
 	},
 	"vars": {
+		"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "production",
+		"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev",
 		"TWITCH_DEPLOYMENT_ENVIRONMENT": "production",
 		"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev"
 	},
@@ -99,6 +101,8 @@
 	"env": {
 		"test": {
 			"vars": {
+				"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "test",
+				"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",
 				"TWITCH_DEPLOYMENT_ENVIRONMENT": "test",
 				"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev"
 			},

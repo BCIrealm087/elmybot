@@ -5,6 +5,7 @@ import { ephemeralData, formatInterval, getOption } from "./common.js";
 import { discordGroupConfigFetch } from "./group-config.js";
 import { compileDiscordFeatureCommands } from "./feature-commands.js";
 import { integrationCommands } from "./integration-commands.js";
+import { issueBroadStateQueryGrant } from "../../state-querying/grant-client.js";
 import {
   DISCORD_JOB_KINDS,
   discordSchedulingHandlers,
@@ -73,6 +74,59 @@ async function featureConfigFetch(interaction, env, operation, body) {
 }
 
 const managementCommands = Object.freeze({
+  "state_query_grant": {
+    description: "Create a scoped read credential for web-source state queries",
+    guild: { capability: CAPABILITIES.STATE_QUERY_MANAGE },
+    deferred: true,
+    options: [
+      {
+        name: "exports",
+        description: "Comma-separated IDs, for example fun.deaths:count:v1",
+        type: 3,
+        required: true
+      },
+      {
+        name: "duration_hours",
+        description: "Credential lifetime from 1 to 720 hours (default 24)",
+        type: 4,
+        required: false,
+        min_value: 1,
+        max_value: 720
+      }
+    ],
+    exec: async (interaction, env) => {
+      const durationHours = getOption(interaction, "duration_hours") ?? 24;
+      try {
+        const issued = await issueBroadStateQueryGrant(env, featureRegistry, {
+          target: { platform: "discord", groupId: interaction.guild_id },
+          exports: String(getOption(interaction, "exports") ?? ""),
+          expiresInSeconds: durationHours * 60 * 60
+        }, {
+          actor: {
+            platform: "discord",
+            id: interaction.member?.user?.id ?? "unknown"
+          }
+        });
+        const expiresAt = Math.floor(issued.grant.expiresAtMs / 1000);
+        return ephemeralData(
+          "State-query read grant created. This credential is shown once; keep it secret.\n" +
+          `Credential: \`${issued.credential}\`\n` +
+          `Grant ID: \`${issued.grant.id}\`\n` +
+          `Expires: <t:${expiresAt}:F>\n` +
+          "Use it as a Bearer credential, or exchange it at `POST /state-query/session`."
+        );
+      } catch (error) {
+        if (error?.code === "state_query_grant_invalid") {
+          return ephemeralData(
+            "The export list is invalid. Use installed identities such as " +
+            "`fun.deaths:remembered_game:v1,fun.deaths:count:v1`."
+          );
+        }
+        throw error;
+      }
+    }
+  },
+
   "feature_config_set": {
     description: "Sets a namespaced setting for an installed feature",
     guild: { capability: CAPABILITIES.CONFIG_MANAGE },

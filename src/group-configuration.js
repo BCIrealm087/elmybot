@@ -4,6 +4,11 @@ import {
   handleFeatureStorageRequest,
   initializeFeatureStorageTables
 } from "./framework/feature-storage.js";
+import {
+  handleStateQueryGrantStorageRequest,
+  initializeStateQueryGrantTables,
+  StateQueryGrantStorageError
+} from "./state-querying/grant-storage.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -191,6 +196,7 @@ export class GroupConfig {
     this.env = env;
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
+    initializeStateQueryGrantTables(state);
   }
 
   async exportConfig() {
@@ -283,6 +289,13 @@ export class GroupConfig {
       );
       if (featureStorageResult !== null) return jsonResponse(featureStorageResult);
 
+      const stateQueryGrantResult = await handleStateQueryGrantStorageRequest(
+        this.state,
+        request,
+        url.pathname
+      );
+      if (stateQueryGrantResult !== null) return stateQueryGrantResult;
+
       const pathHandlers = requestHandlers[request.method];
       const pathHandler = pathHandlers && pathHandlers[url.pathname];
       if (!pathHandler) return new Response("Not Found", { status: 404 });
@@ -290,7 +303,8 @@ export class GroupConfig {
     } catch (e) {
       if (
         e instanceof GroupConfigUserFacingError ||
-        e instanceof FeatureStorageUserFacingError
+        e instanceof FeatureStorageUserFacingError ||
+        e instanceof StateQueryGrantStorageError
       ) {
         return jsonResponse({ userFacingError: e.message }, e.status);
       }
