@@ -95,6 +95,10 @@ and their pending records are deleted together. Explicit unregistration also
 removes pending work. With no active interest, a state mutation creates no
 outbox row, observer request, evaluation, or notification alarm.
 
+Watcher and outbox tables are created lazily on first registration. A state
+owner that has never been watched continues to advance its authoritative
+revisions without allocating notification tables or running recovery work.
+
 ## Observer inbox behavior
 
 `StateQueryObserver` stores invalidations in SQLite. Delivery IDs make retries
