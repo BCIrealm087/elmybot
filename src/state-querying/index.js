@@ -26,3 +26,16 @@ export {
   StateQueryCredentialError,
   validateStateQueryCredential
 } from "./grant-client.js";
+export {
+  acknowledgeStateQueryNotifications,
+  listStateQueryNotifications,
+  registerLocalStateQueryWatcher,
+  registerShareableStateQueryWatcher,
+  unregisterLocalStateQueryWatcher,
+  unregisterShareableStateQueryWatcher
+} from "./watcher-client.js";
+export {
+  STATE_QUERY_NOTIFICATION_LIMITS,
+  StateQueryNotificationError,
+  stateQueryObserverObjectName
+} from "./source-notifications.js";

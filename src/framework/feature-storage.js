@@ -278,6 +278,7 @@ function setValue(state, valueKind, input) {
   const valueJson = serializeValue(input?.value);
   state.storage.transactionSync(() => {
     const existing = valueRow(state.storage.sql, valueKind, featureId, key);
+    if (valueKind === "state" && existing?.value_json === valueJson) return;
     if (!existing && namespaceAtCapacity(state.storage.sql, valueKind, featureId)) {
       throw new FeatureStorageUserFacingError(
         `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} ${valueKind} values.`,
@@ -354,6 +355,7 @@ function incrementState(state, input) {
       );
     }
     const value = current + amount;
+    if (amount === 0) return { value };
     state.storage.sql.exec(
       `INSERT INTO framework_feature_values
         (value_kind, feature_id, value_key, value_json, updated_at_ms)
@@ -602,6 +604,13 @@ async function boundedCounterState(state, input) {
       );
     }
     if (!existing && value === descriptor.initial) return { value };
+    const valueJson = JSON.stringify(value);
+    if (existing?.value_json === valueJson) {
+      if (recordCounterSubject(state.storage.sql, descriptor, key)) {
+        touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+      }
+      return { value };
+    }
     if (!existing && namespaceAtCapacity(
       state.storage.sql,
       "state",
@@ -621,7 +630,7 @@ async function boundedCounterState(state, input) {
          updated_at_ms = excluded.updated_at_ms`,
       descriptor.featureId,
       key,
-      JSON.stringify(value),
+      valueJson,
       Date.now()
     );
     recordCounterSubject(state.storage.sql, descriptor, key);
@@ -720,12 +729,20 @@ export async function handleFeatureStateStorageOperation(state, operation, input
   }
 }
 
-export async function handleFeatureStorageRequest(state, request, pathname) {
+export async function handleFeatureStorageRequest(
+  state,
+  request,
+  pathname,
+  { beforeStateMutation = null } = {}
+) {
   if (request.method !== "POST" || !pathname.startsWith(FEATURE_STORAGE_PATH_PREFIX)) {
     return null;
   }
   const input = await request.json();
   const operation = pathname.slice(FEATURE_STORAGE_PATH_PREFIX.length);
+  if (featureStateOperationMutates(operation, input) && beforeStateMutation) {
+    await beforeStateMutation(input, operation);
+  }
   switch (operation) {
     case "config/get":
       return getValue(state.storage.sql, "config", input);

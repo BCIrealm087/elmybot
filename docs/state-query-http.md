@@ -1,8 +1,8 @@
 # State-query read grants, discovery, and snapshot HTTP API
 
 Status: implemented foundation for state-querying roadmap step 5 on 2026-09-12.
-Committed-change notification, lifecycle handoff observation, live dependency
-tracking, and SSE remain steps 6–9.
+Recoverable committed-change notifications were added in step 6. Lifecycle
+handoff observation, live dependency tracking, and SSE remain steps 7–9.
 
 ## Security model
 

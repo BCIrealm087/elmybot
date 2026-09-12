@@ -275,6 +275,11 @@ initial value. A missing `get()`, no-op decrement at the floor, or no-op reset
 does not consume one of the 100 state entries.
 
 The existing `GroupConfig` Durable Object owns these SQLite tables. Legacy
+group-local state revisions also drive the leased, recoverable invalidation
+outbox described in
+[`state-query-notifications.md`](state-query-notifications.md); feature authors
+do not emit notifications themselves.
+
 Discord role configuration remains in its existing storage and public listing;
 framework namespaces are not exposed through `/config_list_entries`.
 Integration-owned state uses the existing per-integration coordinator storage;

@@ -9,6 +9,14 @@ import {
   initializeStateQueryGrantTables,
   StateQueryGrantStorageError
 } from "./state-querying/grant-storage.js";
+import {
+  drainStateQueryNotifications,
+  handleLocalStateQuerySourceWatchRequest,
+  prepareStateQueryMutation,
+  recoverStateQueryNotificationDelivery,
+  stateQueryNotificationTablesExist,
+  StateQueryNotificationError
+} from "./state-querying/source-notifications.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -197,6 +205,12 @@ export class GroupConfig {
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
     initializeStateQueryGrantTables(state);
+    if (stateQueryNotificationTablesExist(state)) {
+      initializeLocalStateNotificationTables(state);
+      state.blockConcurrencyWhile(async () => {
+        await recoverStateQueryNotificationDelivery(state);
+      });
+    }
   }
 
   async exportConfig() {
@@ -285,9 +299,27 @@ export class GroupConfig {
       const featureStorageResult = await handleFeatureStorageRequest(
         this.state,
         request,
-        url.pathname
+        url.pathname,
+        {
+          beforeStateMutation: async (input) => await prepareStateQueryMutation(
+            this.state,
+            {
+              kind: "group_local",
+              featureId: input.featureId,
+              namespaceId: ""
+            }
+          )
+        }
       );
       if (featureStorageResult !== null) return jsonResponse(featureStorageResult);
+
+      const stateQueryWatchResult = await handleLocalStateQuerySourceWatchRequest(
+        this.state,
+        this.env,
+        request,
+        url.pathname
+      );
+      if (stateQueryWatchResult !== null) return stateQueryWatchResult;
 
       const stateQueryGrantResult = await handleStateQueryGrantStorageRequest(
         this.state,
@@ -304,7 +336,8 @@ export class GroupConfig {
       if (
         e instanceof GroupConfigUserFacingError ||
         e instanceof FeatureStorageUserFacingError ||
-        e instanceof StateQueryGrantStorageError
+        e instanceof StateQueryGrantStorageError ||
+        e instanceof StateQueryNotificationError
       ) {
         return jsonResponse({ userFacingError: e.message }, e.status);
       }
@@ -318,5 +351,9 @@ export class GroupConfig {
       }, e);
       return jsonResponse({ error: "Unknown error.", correlationId }, 500);
     }
+  }
+
+  async alarm() {
+    await drainStateQueryNotifications(this.state, this.env);
   }
 }

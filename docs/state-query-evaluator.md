@@ -1,8 +1,9 @@
 # Read-only composable state-query evaluator
 
 Status: implemented foundation for state-querying roadmap step 4 on 2026-09-12.
-Read grants and public snapshot HTTP access were added in step 5. Notifications,
-lifecycle observation, and SSE remain later roadmap steps.
+Read grants and public snapshot HTTP access were added in step 5. Recoverable
+notifications were added in step 6; lifecycle observation and SSE remain later
+roadmap steps.
 
 ## Implemented boundary
 
@@ -94,7 +95,9 @@ Each resolver read records an exact internal value, bounded-counter, or
 collection-membership dependency. Equivalent reads against the same physical
 source, export version, and normalized arguments are evaluated once per attempt.
 The returned observation plan retains these dependencies for steps 6–9 but is
-not part of the future public response.
+not part of the future public response. Step 6 now provides leased source
+watchers and recoverable revision invalidations; step 8 will attach this exact
+dependency plan and drive selective re-evaluation.
 
 Local feature-state namespaces now have an idempotently created mutation-version
 row. Shareable namespaces reuse their existing mutation version. An attempt

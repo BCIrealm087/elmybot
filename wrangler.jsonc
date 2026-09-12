@@ -31,7 +31,8 @@
 			{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
 			{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
 			{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
-			{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" }
+			{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" },
+			{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" }
 		]
 	},
 
@@ -95,6 +96,10 @@
 		{
 			"tag": "v14",
 			"new_sqlite_classes": ["ShareableStateRealm"]
+		},
+		{
+			"tag": "v15",
+			"new_sqlite_classes": ["StateQueryObserver"]
 		}
 	],
 
@@ -120,7 +125,8 @@
 					{ "name": "TWITCH_CHANNEL_REGISTRY", "class_name": "TwitchChannelRegistry" },
 					{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
 					{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
-					{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" }
+					{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" },
+					{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" }
 				]
 			}
 		}

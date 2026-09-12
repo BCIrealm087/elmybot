@@ -7,6 +7,16 @@ import {
 import {
   snapshotAndSealLegacyIntegrationFeatureState
 } from "../integrations/coordinator-client.js";
+import {
+  drainStateQueryNotifications,
+  initializeShareableStateNotificationTables,
+  prepareStateQueryMutation,
+  recoverStateQueryNotificationDelivery,
+  registerStateQuerySourceWatcher,
+  stateQueryNotificationTablesExist,
+  StateQueryNotificationError,
+  unregisterStateQuerySourceWatcher
+} from "../state-querying/source-notifications.js";
 
 const FEATURE_ID_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
 const NAMESPACE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -33,7 +43,9 @@ const REALM_OPERATIONS = new Set([
   "release-seal",
   "clone-snapshot",
   "initialize-empty",
-  "inventory"
+  "inventory",
+  "watch-register",
+  "watch-unregister"
 ]);
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
@@ -419,6 +431,10 @@ function bindRealmIdentity(state, identity) {
   );
 }
 
+function realmSourceKey(identity) {
+  return `shareable-state:${identity.kind}:g${identity.generation}:${identity.owner.key}`;
+}
+
 function namespaceDeclaration(registry, input) {
   const featureId = requireFeatureId(input?.featureId);
   const namespaceId = requireNamespaceId(input?.namespaceId);
@@ -479,6 +495,18 @@ function ensureNamespace(state, namespace) {
     Date.now(),
     namespace.featureId,
     namespace.namespaceId
+  );
+}
+
+function namespaceSchemaMutationPending(state, namespace) {
+  const existing = state.storage.sql.exec(
+    `SELECT schema_version FROM shareable_state_realm_namespaces
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0];
+  return Boolean(
+    existing && existing.schema_version !== namespace.declaration.schemaVersion
   );
 }
 
@@ -847,7 +875,12 @@ function releaseNamespaceSeal(state, namespace, input) {
   return { released };
 }
 
-async function namespaceInventory(state, registry, prepareNamespace) {
+async function namespaceInventory(
+  state,
+  registry,
+  prepareNamespace,
+  prepareNamespaceMutation
+) {
   const declarations = registry.features.flatMap((feature) =>
     feature.shareableState.map((declaration) => ({
       featureId: feature.id,
@@ -866,6 +899,9 @@ async function namespaceInventory(state, registry, prepareNamespace) {
       namespaceId: item.namespaceId,
       declaration: item.declaration
     });
+    if (namespaceSchemaMutationPending(state, namespace)) {
+      await prepareNamespaceMutation(namespace);
+    }
     ensureNamespace(state, namespace);
     await prepareNamespace(namespace);
     const captured = namespaceSnapshotRows(state, namespace);
@@ -1626,6 +1662,14 @@ function noStoreJson(value, status = 200) {
   return response;
 }
 
+function operationMayMutateState(operation, storage) {
+  if (new Set(["set", "delete", "increment", "clone-snapshot", "initialize-empty"])
+    .has(operation)) {
+    return true;
+  }
+  return operation === "bounded-counter" && storage?.operation !== "get";
+}
+
 export class ShareableStateRealmBackend {
   constructor(state, env, featureRegistry) {
     this.state = state;
@@ -1633,6 +1677,12 @@ export class ShareableStateRealmBackend {
     this.featureRegistry = featureRegistry;
     this.legacyAdoptions = new Map();
     initializeShareableStateRealmTables(state);
+    if (stateQueryNotificationTablesExist(state)) {
+      initializeShareableStateNotificationTables(state);
+      state.blockConcurrencyWhile(async () => {
+        await recoverStateQueryNotificationDelivery(state);
+      });
+    }
   }
 
   async prepareLegacyAdoption(identity, namespace, correlationId) {
@@ -1687,10 +1737,68 @@ export class ShareableStateRealmBackend {
             identity,
             namespace,
             correlationId
-          )
+          ),
+          async (namespace) => await prepareStateQueryMutation(this.state, {
+            kind: "shareable",
+            key: realmSourceKey(identity),
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId
+          })
         ));
       }
       const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
+      const expectedSource = { kind: "shareable", key: realmSourceKey(identity) };
+      const prepareNotification = async () => await prepareStateQueryMutation(
+        this.state,
+        {
+          ...expectedSource,
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId
+        }
+      );
+      if (operation === "watch-register") {
+        initializeShareableStateNotificationTables(this.state);
+        if (namespaceSchemaMutationPending(this.state, namespace)) {
+          await prepareNotification();
+        }
+        ensureNamespace(this.state, namespace);
+        await this.prepareLegacyAdoption(identity, namespace, correlationId);
+        return noStoreJson(await registerStateQuerySourceWatcher(
+          this.state,
+          this.env,
+          {
+            ...input?.storage,
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId,
+            source: expectedSource
+          },
+          expectedSource
+        ));
+      }
+      if (operation === "watch-unregister") {
+        initializeShareableStateNotificationTables(this.state);
+        if (namespaceSchemaMutationPending(this.state, namespace)) {
+          await prepareNotification();
+        }
+        ensureNamespace(this.state, namespace);
+        return noStoreJson(await unregisterStateQuerySourceWatcher(
+          this.state,
+          this.env,
+          {
+            ...input?.storage,
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId,
+            source: expectedSource
+          },
+          expectedSource
+        ));
+      }
+      if (
+        operationMayMutateState(operation, input?.storage) ||
+        namespaceSchemaMutationPending(this.state, namespace)
+      ) {
+        await prepareNotification();
+      }
       ensureNamespace(this.state, namespace);
       if (!new Set(["clone-snapshot", "initialize-empty"]).has(operation)) {
         await this.prepareLegacyAdoption(identity, namespace, correlationId);
@@ -1703,7 +1811,10 @@ export class ShareableStateRealmBackend {
       );
       return noStoreJson(result);
     } catch (error) {
-      if (error instanceof ShareableStateRealmError) {
+      if (
+        error instanceof ShareableStateRealmError ||
+        error instanceof StateQueryNotificationError
+      ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }
       logError("shareable_state.realm_request_failed", {
@@ -1713,5 +1824,9 @@ export class ShareableStateRealmBackend {
       }, error);
       return noStoreJson({ error: "Unknown error.", correlationId }, 500);
     }
+  }
+
+  async alarm() {
+    await drainStateQueryNotifications(this.state, this.env);
   }
 }

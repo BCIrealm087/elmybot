@@ -78,6 +78,8 @@ checked again before signature verification and JSON parsing.
 | `TWITCH_CHANNEL_REGISTRY` | `TwitchChannelRegistry` | Singleton non-secret channel membership and health index |
 | `INTEGRATION_REGISTRY` | `IntegrationRegistry` | Singleton authoritative link, membership, route, invitation, and audit state |
 | `INTEGRATION_COORDINATOR` | `IntegrationCoordinator` | One per integration; durable execution ledger and effect outbox |
+| `SHAREABLE_STATE_REALM` | `ShareableStateRealm` | One per standalone or integration realm; shareable namespaces, revisions, and notification outboxes |
+| `STATE_QUERY_OBSERVER` | `StateQueryObserver` | One per logical platform group; deduplicated, coalesced state invalidations for future live queries |
 
 All configured Durable Object classes use SQLite-backed namespaces. Migration
 tags in `wrangler.jsonc` are append-only after deployment.
@@ -462,6 +464,7 @@ explicit catalog-regeneration action.
 - [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
 - [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
 - [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
+- [Recoverable state-query change notifications](docs/state-query-notifications.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

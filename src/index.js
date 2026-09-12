@@ -20,6 +20,7 @@ import { TwitchEventSubServiceBackend } from "./platforms/twitch/eventsub-servic
 import { featureRegistry } from "./features/index.js";
 import { ShareableStateRealmBackend } from "./shareable-state/index.js";
 import { handleStateQueryRequest } from "./state-querying/http.js";
+import { StateQueryObserverBackend } from "./state-querying/observer.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers,
@@ -66,6 +67,7 @@ export class ShareableStateRealm extends ShareableStateRealmBackend {
     super(state, env, featureRegistry);
   }
 }
+export class StateQueryObserver extends StateQueryObserverBackend {}
 export { GroupConfig } from "./group-configuration.js";
 export { TwitchAppAuth } from "./platforms/twitch/app-auth.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
