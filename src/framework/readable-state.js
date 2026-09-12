@@ -298,7 +298,8 @@ export function defineReadableStateExport(input) {
     "access",
     "parameters",
     "result",
-    "collection"
+    "collection",
+    "resolve"
   ]), path);
   if (typeof input.id !== "string" || !EXPORT_ID_PATTERN.test(input.id)) {
     fail(`${path}.id`, "is invalid.");
@@ -307,6 +308,9 @@ export function defineReadableStateExport(input) {
     fail(`${path}.version`, "must be a positive integer no greater than 1000000.");
   }
   if (!EXPORT_KINDS.has(input.kind)) fail(`${path}.kind`, "is invalid.");
+  if (typeof input.resolve !== "function") {
+    fail(`${path}.resolve`, "must be a function.");
+  }
   const result = normalizeResult(input.result, `${path}.result`);
   const definition = {
     id: input.id,
@@ -319,6 +323,7 @@ export function defineReadableStateExport(input) {
     access: normalizeAccess(input.access, `${path}.access`),
     parameters: normalizeParameters(input.parameters, input.kind, `${path}.parameters`),
     result,
+    resolve: input.resolve,
     ...(input.kind === "collection"
       ? { collection: normalizeCollection(input.collection, input.kind, result, `${path}.collection`) }
       : {})

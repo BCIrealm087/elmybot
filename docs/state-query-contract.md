@@ -562,6 +562,7 @@ Required first-version codes include:
 | `query_type_mismatch` | A projected dynamic value cannot satisfy a parameter |
 | `query_limit_exceeded` | A structural or encoded-size limit is exceeded |
 | `query_collection_too_large` | A complete collection result exceeds its bound |
+| `query_collection_incomplete` | Unidentified legacy subjects prevent an honest complete collection |
 | `query_result_too_large` | Encoded ready data exceeds its bound |
 | `query_access_denied` | The supplied grant does not authorize the complete query |
 | `query_grant_expired` | The read grant has expired |

@@ -1,7 +1,8 @@
 # Readable state declarations and subject metadata
 
-Status: implemented foundation for state-querying roadmap step 3 on 2026-09-12.
-Snapshot evaluation, grants, HTTP access, and live delivery remain later steps.
+Status: readable declarations and metadata implemented by roadmap step 3;
+read-only resolver execution implemented by step 4 on 2026-09-12. Grants,
+HTTP access, and live delivery remain later steps.
 
 ## What this step adds
 
@@ -24,9 +25,9 @@ The installed deaths feature declares:
 | `count` v1 | lookup | `effective_shareable` | One normalized game's standalone or currently selected shared count, defaulting to zero |
 | `counts` v1 | collection | `effective_shareable` | Materialized counters whose subjects have known metadata, with explicit legacy coverage |
 
-These declarations are metadata. They do not add public routes, read credentials,
-or execute queries. Step 4 will bind the declarations to a controlled read-only
-evaluation context.
+These declarations do not add public routes or read credentials. Their resolver
+functions run only through the internal, controlled read-only evaluator added
+in step 4.
 
 ## Contributor declaration
 
@@ -77,6 +78,10 @@ export default defineFeature({
       result: {
         schema: { type: "integer", minimum: 0 },
         absence: { kind: "default" }
+      },
+      async resolve(ctx, { game }) {
+        const count = await ctx.state.boundedCounter("game", game);
+        return { state: "present", value: count };
       }
     })
   ]
@@ -99,11 +104,11 @@ declared fields, and arrays have at most 100 items.
 declaration names one namespace declared by the same feature; registry creation
 fails if it does not. The public catalog returns the logical scope but not the
 namespace, storage key, integration, realm, normalizer function, or internal
-operator-grant eligibility rule.
+operator-grant eligibility rule. Resolver functions are also omitted.
 
 `result.absence.kind` is `absent`, `unselected`, or `default`. It declares the result
-cell behavior selected in step 1. The concrete value construction and schema
-check belong to the step 4 evaluator. Collections additionally normalize to the
+cell behavior selected in step 1. Concrete value construction belongs to the
+resolver and its schema check belongs to the step 4 evaluator. Collections additionally normalize to the
 first-release policy:
 
 - membership is materialized entries;
@@ -230,9 +235,11 @@ Implemented now:
 - behavioral coverage for declarations, references, known/unknown subjects,
   reset, and snapshot cloning.
 
+Step 4 additionally binds each declaration to a scope-limited `resolve`
+function. See [`state-query-evaluator.md`](state-query-evaluator.md).
+
 Still deferred:
 
-- executing export reads and producing result cells (step 4);
 - grants, authorized discovery, and snapshot HTTP endpoints (step 5);
 - revisions and recoverable notifications (step 6);
 - live dependency and lifecycle observation (steps 7–8); and

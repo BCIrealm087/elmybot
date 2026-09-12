@@ -65,8 +65,10 @@ addition of an optional manifest field with a stable default.
 `defineReadableStateExport()`. Omission normalizes to a frozen empty array. The
 helper validates public identity, schemas, supported platforms, ownership,
 operator-grant eligibility, normalization hooks, absence policy, and bounded
-collection behavior. A declaration only makes state eligible for a later read
-grant; it does not add a route or expose a value. See
+collection behavior. Its required `resolve(ctx, arguments)` function receives
+only the declaration's scope-bound, read-only state methods and must return a
+schema-valid result cell. A declaration only makes state eligible for a later
+read grant; it does not add a route or expose a value. See
 [`state-query-readable-state.md`](state-query-readable-state.md).
 
 Actions may explicitly request the controlled `authorization`, `config`,

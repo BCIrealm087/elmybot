@@ -220,6 +220,13 @@ describe("Standalone shareable-state realms", () => {
         backend,
         group,
         "score",
+        "query-read",
+        { key: "value" }
+      ))).data).toEqual({ found: false });
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
         "set",
         { key: "value", value: { z: 1, a: 2 } }
       ))).data).toEqual({ ok: true });
@@ -241,6 +248,19 @@ describe("Standalone shareable-state realms", () => {
         `SELECT mutation_version FROM shareable_state_realm_namespaces
          WHERE feature_id = 'test.score' AND namespace_id = 'score'`
       ).one().mutation_version).toBe(1);
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
+        "query-read",
+        { key: "value" }
+      ))).data).toEqual({ found: true, value: { a: 2, z: 1 } });
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
+        "revision"
+      ))).data).toEqual({ mutationVersion: 1 });
 
       expect((await responseData(await realmRequest(
         backend,

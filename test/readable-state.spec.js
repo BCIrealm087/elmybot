@@ -42,6 +42,7 @@ function scoreExport(overrides = {}) {
       },
       absence: { kind: "default" }
     },
+    resolve: async () => ({ state: "present", value: { game: "game", count: 0 } }),
     ...overrides
   });
 }
@@ -106,6 +107,7 @@ describe("readable state declarations", () => {
       { id: "Score" },
       { platforms: [] },
       { access: { kind: "public" } },
+      { resolve: null },
       { kind: "value" },
       { scope: { kind: "effective_shareable" } },
       {
@@ -227,5 +229,17 @@ describe("readable state declarations", () => {
     })]);
     expect(() => createReadableStateReference(broken, base))
       .toThrow(/normalizer returned an invalid value/);
+
+    const nonIdempotent = registryWith([scoreExport({
+      parameters: {
+        game: {
+          label: "Game",
+          schema: { type: "string", minLength: 1, maxLength: 80 },
+          normalize: (value) => `${value}x`
+        }
+      }
+    })]);
+    expect(() => createReadableStateReference(nonIdempotent, base))
+      .toThrow(/must be idempotent/);
   });
 });

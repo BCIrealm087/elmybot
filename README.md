@@ -444,6 +444,7 @@ explicit catalog-regeneration action.
 - [Public state-query contract](docs/state-query-contract.md)
 - [State-query live transport and cost decision](docs/state-query-transport-decision.md)
 - [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
+- [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

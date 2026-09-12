@@ -74,37 +74,12 @@ export function normalizeReadableStateArguments(definition, input = {}) {
   const values = {};
   const subjects = {};
   for (const [name, parameter] of Object.entries(definition.parameters)) {
-    let value;
-    try {
-      value = validateReadableStateSchemaValue(
-        parameter.schema,
-        input[name],
-        `${path}.${name}`
-      );
-    } catch (cause) {
-      fail(`${path}.${name}`, "does not satisfy its declared schema.", { cause });
-    }
-    let normalized = { value, subject: null };
-    if (parameter.normalize) {
-      try {
-        normalized = normalizedSubject(
-          parameter.normalize(value),
-          `${path}.${name}.normalized`
-        );
-      } catch (cause) {
-        if (cause instanceof ReadableStateReferenceError) throw cause;
-        fail(`${path}.${name}`, "could not be normalized.", { cause });
-      }
-    }
-    try {
-      values[name] = validateReadableStateSchemaValue(
-        parameter.schema,
-        normalized.value,
-        `${path}.${name}.normalized`
-      );
-    } catch (cause) {
-      fail(`${path}.${name}`, "normalizer returned an invalid value.", { cause });
-    }
+    const normalized = normalizeReadableStateParameter(
+      parameter,
+      input[name],
+      `${path}.${name}`
+    );
+    values[name] = normalized.value;
     if (normalized.subject) subjects[name] = normalized.subject;
   }
 
@@ -112,6 +87,57 @@ export function normalizeReadableStateArguments(definition, input = {}) {
     values: Object.freeze(values),
     subjects: Object.freeze(subjects)
   });
+}
+
+export function normalizeReadableStateParameter(parameter, input, path = "value") {
+  let value;
+  try {
+    value = validateReadableStateSchemaValue(parameter.schema, input, path);
+  } catch (cause) {
+    fail(path, "does not satisfy its declared schema.", { cause });
+  }
+  let normalized = { value, subject: null };
+  if (parameter.normalize) {
+    try {
+      normalized = normalizedSubject(
+        parameter.normalize(value),
+        `${path}.normalized`
+      );
+    } catch (cause) {
+      if (cause instanceof ReadableStateReferenceError) throw cause;
+      fail(path, "could not be normalized.", { cause });
+    }
+  }
+  try {
+    value = validateReadableStateSchemaValue(
+      parameter.schema,
+      normalized.value,
+      `${path}.normalized`
+    );
+  } catch (cause) {
+    fail(path, "normalizer returned an invalid value.", { cause });
+  }
+  if (parameter.normalize) {
+    let repeated;
+    try {
+      repeated = normalizedSubject(
+        parameter.normalize(value),
+        `${path}.renormalized`
+      );
+      validateReadableStateSchemaValue(
+        parameter.schema,
+        repeated.value,
+        `${path}.renormalized`
+      );
+    } catch (cause) {
+      if (cause instanceof ReadableStateReferenceError) throw cause;
+      fail(path, "could not be normalized idempotently.", { cause });
+    }
+    if (!Object.is(repeated.value, value)) {
+      fail(path, "normalizer must be idempotent.");
+    }
+  }
+  return Object.freeze({ value, subject: normalized.subject });
 }
 
 export function createReadableStateReference(registry, input) {

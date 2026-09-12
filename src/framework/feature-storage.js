@@ -135,6 +135,11 @@ export function initializeFeatureStorageTables(state) {
       PRIMARY KEY (feature_id, counter_name, subject_identity),
       UNIQUE (feature_id, value_key)
     );
+
+    CREATE TABLE IF NOT EXISTS framework_feature_state_versions (
+      feature_id TEXT PRIMARY KEY,
+      mutation_version INTEGER NOT NULL DEFAULT 0 CHECK (mutation_version >= 0)
+    );
   `);
 }
 
@@ -228,6 +233,35 @@ function getValue(sql, valueKind, input) {
   return { value: row ? JSON.parse(row.value_json) : null };
 }
 
+function queryReadValue(sql, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const row = valueRow(sql, "state", featureId, key);
+  return row
+    ? { found: true, value: JSON.parse(row.value_json) }
+    : { found: false };
+}
+
+function featureStateRevision(sql, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const row = sql.exec(
+    `SELECT mutation_version FROM framework_feature_state_versions
+     WHERE feature_id = ?`,
+    featureId
+  ).toArray()[0];
+  return { mutationVersion: Number(row?.mutation_version ?? 0) };
+}
+
+function touchFeatureStateRevision(sql, featureId) {
+  sql.exec(
+    `INSERT INTO framework_feature_state_versions (feature_id, mutation_version)
+     VALUES (?, 1)
+     ON CONFLICT(feature_id) DO UPDATE SET
+       mutation_version = mutation_version + 1`,
+    featureId
+  );
+}
+
 function namespaceAtCapacity(sql, valueKind, featureId) {
   const row = sql.exec(
     `SELECT COUNT(*) AS total FROM framework_feature_values
@@ -263,6 +297,9 @@ function setValue(state, valueKind, input) {
       valueJson,
       Date.now()
     );
+    if (valueKind === "state") {
+      touchFeatureStateRevision(state.storage.sql, featureId);
+    }
   });
   return { ok: true };
 }
@@ -270,8 +307,9 @@ function setValue(state, valueKind, input) {
 function deleteValue(state, valueKind, input) {
   const featureId = requireFeatureId(input?.featureId);
   const key = requireKey(input?.key);
-  const existing = valueRow(state.storage.sql, valueKind, featureId, key);
-  if (existing) {
+  const existing = state.storage.transactionSync(() => {
+    const row = valueRow(state.storage.sql, valueKind, featureId, key);
+    if (!row) return null;
     state.storage.sql.exec(
       `DELETE FROM framework_feature_values
        WHERE value_kind = ? AND feature_id = ? AND value_key = ?`,
@@ -279,7 +317,11 @@ function deleteValue(state, valueKind, input) {
       featureId,
       key
     );
-  }
+    if (valueKind === "state") {
+      touchFeatureStateRevision(state.storage.sql, featureId);
+    }
+    return row;
+  });
   return { deleted: Boolean(existing) };
 }
 
@@ -324,6 +366,7 @@ function incrementState(state, input) {
       JSON.stringify(value),
       Date.now()
     );
+    touchFeatureStateRevision(state.storage.sql, featureId);
     return { value };
   });
 }
@@ -582,6 +625,7 @@ async function boundedCounterState(state, input) {
       Date.now()
     );
     recordCounterSubject(state.storage.sql, descriptor, key);
+    touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
     return { value };
   });
 }
@@ -657,6 +701,10 @@ export async function handleFeatureStateStorageOperation(state, operation, input
   switch (operation) {
     case "state/get":
       return getValue(state.storage.sql, "state", input);
+    case "state/query-read":
+      return queryReadValue(state.storage.sql, input);
+    case "state/revision":
+      return featureStateRevision(state.storage.sql, input);
     case "state/set":
       return setValue(state, "state", input);
     case "state/delete":

@@ -20,6 +20,8 @@ const TRANSITION_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,300}$/;
 const MAX_TRANSITION_SEAL_LEASE_MS = 2 * 60 * 1000;
 const REALM_OPERATIONS = new Set([
   "get",
+  "query-read",
+  "revision",
   "set",
   "delete",
   "increment",
@@ -1305,6 +1307,24 @@ function getValue(state, namespace, input) {
   return { value: row ? JSON.parse(row.value_json) : null };
 }
 
+function queryReadValue(state, namespace, input) {
+  const key = requireKey(input?.key);
+  const row = valueRow(state.storage.sql, namespace, key);
+  return row
+    ? { found: true, value: JSON.parse(row.value_json) }
+    : { found: false };
+}
+
+function namespaceRevision(state, namespace) {
+  const row = state.storage.sql.exec(
+    `SELECT mutation_version FROM shareable_state_realm_namespaces
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).one();
+  return { mutationVersion: Number(row.mutation_version) };
+}
+
 function setValue(state, namespace, input) {
   const key = requireKey(input?.key);
   const valueJson = serializeValue(
@@ -1569,6 +1589,10 @@ async function runOperation(state, namespace, operation, input) {
   switch (operation) {
     case "get":
       return getValue(state, namespace, input);
+    case "query-read":
+      return queryReadValue(state, namespace, input);
+    case "revision":
+      return namespaceRevision(state, namespace);
     case "set":
       return setValue(state, namespace, input);
     case "delete":

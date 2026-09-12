@@ -798,6 +798,13 @@ transaction spanning the two owners. See the
 [compatibility-only legacy section](feature-state.md#compatibility-only-legacy-integration-state)
 only when maintaining already deployed integration-owned data.
 
+To make selected state eligible for later operator-granted queries, add
+`readableState` declarations with `defineReadableStateExport()`. Each declaration
+includes a `resolve(ctx, arguments)` function whose context has only read methods
+for that declaration's group-local or effective-shareable source. It cannot call
+the command action or mutate state. See the complete
+[read-only evaluator contract](state-query-evaluator.md).
+
 ## Cookbook 7: conditionally protected command modes
 
 Keep the action public when everyone may read but only moderators may mutate.

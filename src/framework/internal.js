@@ -16,5 +16,6 @@ export {
 export {
   createReadableStateReference,
   normalizeReadableStateArguments,
+  normalizeReadableStateParameter,
   ReadableStateReferenceError
 } from "../state-querying/catalog.js";

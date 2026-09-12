@@ -141,6 +141,25 @@ describe('Platform-independent worker behavior', () => {
       featureId: 'test.one',
       key: 'concurrent',
     })).data).toEqual({ value: 10 });
+    const revisionBeforeNull = (await post('state/revision', {
+      featureId: 'test.one',
+    })).data.mutationVersion;
+    expect((await post('state/set', {
+      featureId: 'test.one',
+      key: 'nullable',
+      value: null,
+    })).data).toEqual({ ok: true });
+    expect((await post('state/query-read', {
+      featureId: 'test.one',
+      key: 'nullable',
+    })).data).toEqual({ found: true, value: null });
+    expect((await post('state/query-read', {
+      featureId: 'test.one',
+      key: 'missing',
+    })).data).toEqual({ found: false });
+    expect((await post('state/revision', {
+      featureId: 'test.one',
+    })).data.mutationVersion).toBeGreaterThan(revisionBeforeNull);
 
     const counter = {
       featureId: 'test.one',

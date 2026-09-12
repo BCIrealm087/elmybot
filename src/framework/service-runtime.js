@@ -413,6 +413,13 @@ export function createFeatureServiceRuntime(env, invocation) {
           const result = await shareableRequest(featureId, scope, "get", { key });
           return result.value;
         },
+        async queryRead(featureId, scope, key) {
+          return await shareableRequest(featureId, scope, "query-read", { key });
+        },
+        async revision(featureId, scope) {
+          const result = await shareableRequest(featureId, scope, "revision", {});
+          return result.mutationVersion;
+        },
         async set(featureId, scope, key, value) {
           await shareableRequest(featureId, scope, "set", { key, value });
         },
@@ -460,6 +467,23 @@ export function createFeatureServiceRuntime(env, invocation) {
             input(featureId, { key })
           );
           return result.value;
+        },
+        async queryRead(featureId, key) {
+          return await storageRequest(
+            env,
+            invocation,
+            "state/query-read",
+            input(featureId, { key })
+          );
+        },
+        async revision(featureId) {
+          const result = await storageRequest(
+            env,
+            invocation,
+            "state/revision",
+            input(featureId)
+          );
+          return result.mutationVersion;
         },
         async set(featureId, key, value) {
           await storageRequest(

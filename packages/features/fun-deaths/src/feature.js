@@ -50,6 +50,10 @@ function countMessage(game, count) {
   return `${game} deaths: ${count}`;
 }
 
+function present(value) {
+  return Object.freeze({ state: "present", value });
+}
+
 function otherPlatform(platform) {
   return platform === "discord" ? "twitch" : "discord";
 }
@@ -92,6 +96,12 @@ export const feature = defineFeature({
       result: {
         schema: { type: "string", minLength: 1, maxLength: 80 },
         absence: { kind: "unselected" }
+      },
+      async resolve(ctx) {
+        const remembered = await ctx.state.get(LAST_GAME_KEY);
+        return remembered.found
+          ? present(remembered.value)
+          : Object.freeze({ state: "unselected" });
       }
     }),
     defineReadableStateExport({
@@ -120,6 +130,14 @@ export const feature = defineFeature({
           required: ["game", "count"]
         },
         absence: { kind: "default" }
+      },
+      async resolve(ctx, { game }) {
+        const [count, collection] = await Promise.all([
+          ctx.state.boundedCounter("game", game, { min: 0, max: MAX_COUNT }),
+          ctx.state.boundedCounterSubjects("game")
+        ]);
+        const known = collection.subjects.find(({ identity }) => identity === game);
+        return present({ game: known?.label ?? game, count });
       }
     }),
     defineReadableStateExport({
@@ -150,6 +168,13 @@ export const feature = defineFeature({
         membership: "materialized",
         order: "canonical_subject",
         legacyCoverage: "explicit"
+      },
+      async resolve(ctx) {
+        const collection = await ctx.state.boundedCounterSubjects("game");
+        return present(collection.subjects.map((subject) => ({
+          game: subject.label,
+          count: subject.value
+        })));
       }
     })
   ],

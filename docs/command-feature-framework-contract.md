@@ -144,6 +144,8 @@ system without making a value public or adding a route. The helper validates
 IDs, labels, descriptions, platforms, ownership, parameters, public result
 schemas, absence behavior, and bounded collection policy. Effective-shareable
 exports must refer to a `shareableState` namespace declared by the same feature.
+Each declaration supplies a resolver that receives only scope-bound read
+methods; it cannot mutate state or invoke command behavior.
 
 The complete implemented declaration and subject-metadata contract is in
 [`state-query-readable-state.md`](state-query-readable-state.md). Query
