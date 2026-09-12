@@ -1,7 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–5 are complete and step 6 is
-awaiting CI validation.
+Status: implementation in progress; steps 1–6 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -183,10 +182,10 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–5 are complete; step 6 is awaiting CI validation; steps 7–12 remain
-pending. Complete the relevant acceptance criteria before marking another step
-done. Keep these numbers stable for subsequent work requests; record
-implementation commits and checks in the progress log.
+Steps 1–6 are complete; steps 7–12 remain pending. Complete the relevant
+acceptance criteria before marking another step done. Keep these numbers stable
+for subsequent work requests; record implementation commits and checks in the
+progress log.
 
 | Milestone | Steps | Result |
 | --- | --- | --- |
@@ -352,8 +351,7 @@ hidden state.
 
 ### 6. Record committed changes and recoverable notifications
 
-**Status:** implementation complete; CI validation in progress. **Depends on:**
-steps 3–5.
+**Status:** completed on 2026-09-12. **Depends on:** steps 3–5.
 
 The implemented leased source watchers, atomic revision outboxes, retry and
 restart recovery, deduplicated observer inbox, no-op rules, and bounded cleanup
@@ -643,3 +641,21 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 370 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34687256942](https://github.com/BCIrealm087/elmybot/actions/runs/34687256942).
   Steps 6–12 remain pending.
+- 2026-09-12: Step 6 completed. Group-local and effective-shareable state
+  revisions now create coalesced outbox invalidations atomically with committed
+  mutations when leased watchers exist. Registration closes the snapshot/write
+  race, source alarms recover retryable delivery, observer inboxes deduplicate
+  and reject older revisions, and bounded expiry removes stale interest and
+  pending work. Equal writes avoid revision churn while subject metadata and
+  collection membership remain observable; never-watched sources allocate no
+  notification storage. Implementation commits
+  [`9cf3cc9`](https://github.com/BCIrealm087/elmybot/commit/9cf3cc972399cdd61949e8ab98a968b74f77f7c8)
+  and
+  [`ffcad1e`](https://github.com/BCIrealm087/elmybot/commit/ffcad1e07c3bd4c786c8008d245ab1ab757b372d),
+  with the documented tree at
+  [`27d4d40`](https://github.com/BCIrealm087/elmybot/commit/27d4d40a9103ef11c18edd047f917fdb45f6cce7),
+  passed all 376 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34722915097](https://github.com/BCIrealm087/elmybot/actions/runs/34722915097).
+  The roadmap-status tree passed the same checks in
+  [CI run 34723048624](https://github.com/BCIrealm087/elmybot/actions/runs/34723048624).
+  Steps 7–12 remain pending.
