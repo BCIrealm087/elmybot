@@ -12,6 +12,7 @@ import {
 import {
   drainStateQueryNotifications,
   handleLocalStateQuerySourceWatchRequest,
+  initializeLocalStateNotificationTables,
   prepareStateQueryMutation,
   recoverStateQueryNotificationDelivery,
   stateQueryNotificationTablesExist,
