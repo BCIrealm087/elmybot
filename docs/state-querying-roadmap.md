@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: proposed implementation roadmap; the query system is not implemented.
+Status: implementation in progress; steps 1–4 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–3 are complete; steps 4–12 remain pending. Complete the relevant acceptance
+Steps 1–4 are complete; steps 5–12 remain pending. Complete the relevant acceptance
 criteria before marking another step done. Keep these numbers stable for
 subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -293,7 +293,13 @@ ownership through the lifecycle.
 
 ### 4. Implement the read-only composable evaluator
 
-**Status:** pending. **Depends on:** step 3.
+**Status:** completed on 2026-09-12. **Depends on:** step 3.
+
+The implemented parser, planner, scope-bound read runtime, resolver contract,
+revision validation, dependency observation, and deaths proof are recorded in
+[`state-query-evaluator.md`](state-query-evaluator.md). This remains an internal,
+transport-neutral evaluator: read grants, discovery, and public snapshot HTTP
+access begin in step 5.
 
 Implement parsing, validation, planning, and evaluation for the bounded query
 language. Support direct reads, parameterized lookups, named combinations and
@@ -599,3 +605,14 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 354 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34677582714](https://github.com/BCIrealm087/elmybot/actions/runs/34677582714).
   Steps 4–12 remain pending.
+- 2026-09-12: Step 4 completed. A bounded parser and read-only evaluator now
+  support user-composed direct, literal, dynamic, projected, combined, and
+  collection reads. Scope-bound sources follow current effective ownership per
+  attempt, record exact dependencies, deduplicate equivalent reads, and validate
+  source revisions with bounded retries without claiming cross-owner atomicity.
+  Deaths resolvers prove local and shareable reads without command effects or
+  feature-state mutations. Implementation commit
+  [`d33b64e`](https://github.com/BCIrealm087/elmybot/commit/d33b64e6e2a43b54bdcfb5b94d90cdab000f1557)
+  passed all 361 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34683269492](https://github.com/BCIrealm087/elmybot/actions/runs/34683269492).
+  Steps 5–12 remain pending.
