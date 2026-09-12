@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–4 are complete.
+Status: implementation in progress; steps 1–5 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–4 are complete; steps 5–12 remain pending. Complete the relevant acceptance
+Steps 1–5 are complete; steps 6–12 remain pending. Complete the relevant acceptance
 criteria before marking another step done. Keep these numbers stable for
 subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -322,7 +322,12 @@ Composed reads are not advertised as cross-owner transactions.
 
 ### 5. Add read grants, discovery, and snapshot HTTP access
 
-**Status:** pending. **Depends on:** step 4.
+**Status:** completed on 2026-09-12. **Depends on:** step 4.
+
+The implemented grant model, platform issuance flows, authorized discovery,
+snapshot route, same-origin browser session, revocation, and security boundary
+are recorded in [`state-query-http.md`](state-query-http.md). SSE remains step 9;
+the session established here provides its browser-compatible credential flow.
 
 Implement authenticated grant issuance for each supported platform group,
 scoped read credentials, expiry/revocation, and environment isolation. Reuse
@@ -616,3 +621,16 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 361 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34683269492](https://github.com/BCIrealm087/elmybot/actions/runs/34683269492).
   Steps 5–12 remain pending.
+- 2026-09-12: Step 5 completed. Scoped, expiring, revocable read grants now
+  authorize one exact Discord guild or Twitch channel, selected exports,
+  normalized literal and dynamic subjects, future collection membership, and
+  reduced resource ceilings. Discord managers issue grants through an ephemeral
+  command; Twitch broadcasters reauthenticate through identity-only OAuth.
+  Authorized catalog and snapshot routes, whole-query enforcement, environment
+  isolation, HMAC-authenticated routing fields, hashed stored secrets, and a
+  same-origin secure browser session prevent query or cache identities from
+  becoming credentials. Implementation commit
+  [`4301c09`](https://github.com/BCIrealm087/elmybot/commit/4301c09e07ea2a43d2f78e1b02f26cd43a6ecfac)
+  passed all 370 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34687256942](https://github.com/BCIrealm087/elmybot/actions/runs/34687256942).
+  Steps 6–12 remain pending.
