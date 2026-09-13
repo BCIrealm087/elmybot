@@ -665,3 +665,17 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   The roadmap-status tree passed the same checks in
   [CI run 34723048624](https://github.com/BCIrealm087/elmybot/actions/runs/34723048624).
   Steps 7–12 remain pending.
+- 2026-09-13: Step 7 completed. The integration registry now persists ordered,
+  directional effective-state binding revisions and recoverable lifecycle
+  invalidations for activation, default changes, revocation transitions,
+  fallback repair, and standalone successor readiness. Registration closes the
+  snapshot/attachment race, observer high-water authority rejects delayed old
+  bindings after acknowledgement, and evaluation re-resolves the current source
+  and rechecks access before accepting a handoff. Tests cover same-value and
+  A-to-B-to-A changes, asymmetric defaults, interrupted transitions, lazy
+  successor recovery, restart delivery, unavailable status, and unselected-link
+  stability. The verified implementation tree at
+  [`ec00dd7`](https://github.com/BCIrealm087/elmybot/commit/ec00dd74ebc1a4c5135bc47e642b1300dfc306f6)
+  passed all 384 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34750303408](https://github.com/BCIrealm087/elmybot/actions/runs/34750303408).
+  Steps 8–12 remain pending.
