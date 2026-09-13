@@ -5,6 +5,7 @@ import {
   runInDurableObject
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { ALARM_DRAIN_TIME_BUDGET_MS } from "../src/alarm-drain.js";
 import { commands } from "../src/platforms/discord/commands.js";
 import {
   CAPABILITIES,
@@ -1797,6 +1798,11 @@ describe("Cross-platform integration linking", () => {
            WHERE integration_id LIKE ? AND status = 'active'`,
           `${prefix}-%`
         ).one().total).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(1);
+        expect(await state.storage.getAlarm()).not.toBeNull();
 
         await instance.alarm();
         expect(state.storage.sql.exec(
@@ -1811,4 +1817,73 @@ describe("Cross-platform integration linking", () => {
       }
     );
   }, 10_000);
+
+  it("continues group revocation after its time budget", async () => {
+    const group = discordGroup();
+    const groupKey = `discord:guild:${group.id}`;
+    const prefix = uniqueId("revocation-time-budget");
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        for (let index = 0; index < 2; index += 1) {
+          const integrationId = `${prefix}-${index}`;
+          state.storage.sql.exec(
+            `INSERT INTO integrations
+              (integration_id, status, created_at_ms, updated_at_ms,
+               activated_at_ms, created_by_platform, created_by_actor_id,
+               completed_by_platform, completed_by_actor_id)
+             VALUES (?, 'active', ?, ?, ?, 'discord', 'actor', 'twitch', 'actor')`,
+            integrationId,
+            nowMs + index,
+            nowMs + index,
+            nowMs + index
+          );
+          state.storage.sql.exec(
+            `INSERT INTO integration_members
+              (integration_id, group_key, platform, group_kind, group_id,
+               joined_at_ms)
+             VALUES (?, ?, 'discord', 'guild', ?, ?)`,
+            integrationId,
+            groupKey,
+            group.id,
+            nowMs
+          );
+        }
+
+        const freeze = vi.spyOn(instance, "freezeIntegrationForRevocation")
+          .mockImplementation(async () => {
+            nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+            return [];
+          });
+        expect(await instance.revokeForGroup({ group, reason: "test" }))
+          .toEqual({ revoked: 1, pending: true });
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'revoked'`,
+          `${prefix}-%`
+        ).one().total).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(1);
+        const continuationAlarm = await state.storage.getAlarm();
+        expect(continuationAlarm).toBeGreaterThanOrEqual(nowMs);
+
+        freeze.mockImplementation(async () => []);
+        nowMs = continuationAlarm;
+        await instance.alarm();
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'revoked'`,
+          `${prefix}-%`
+        ).one().total).toBe(2);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(0);
+      }
+    );
+  });
 });

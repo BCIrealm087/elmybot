@@ -1,4 +1,5 @@
 import { jsonResponse, logError } from "../common.js";
+import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
   cloneShareableStateSnapshot,
@@ -2800,6 +2801,7 @@ export class IntegrationRegistry {
   }
 
   async performGroupRevocationBatch(groupKey) {
+    const startedAtMs = Date.now();
     const job = this.state.storage.sql.exec(
       `SELECT group_key, actor_platform, actor_id, reason
        FROM integration_group_revocations
@@ -2824,7 +2826,8 @@ export class IntegrationRegistry {
       ? { platform: job.actor_platform, id: job.actor_id }
       : null;
     let revoked = 0;
-    for (const row of rows) {
+    for (const [processed, row] of rows.entries()) {
+      if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
       const integration = this.getIntegration(row.integration_id);
       if (integration.status === "active") {
         this.beginIntegrationRevocation({
