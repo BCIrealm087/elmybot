@@ -28,15 +28,23 @@ export {
 } from "./grant-client.js";
 export {
   acknowledgeStateQueryNotifications,
+  attachLiveStateQuery,
+  getLiveStateQuery,
   getStateQueryBinding,
   listStateQueryNotifications,
   registerLocalStateQueryWatcher,
   registerStateQueryBindingWatcher,
   registerShareableStateQueryWatcher,
+  removeLiveStateQuery,
+  renewLiveStateQuery,
   unregisterLocalStateQueryWatcher,
   unregisterStateQueryBindingWatcher,
   unregisterShareableStateQueryWatcher
 } from "./watcher-client.js";
+export {
+  STATE_QUERY_LIVE_LIMITS,
+  StateQueryLiveError
+} from "./live-observation.js";
 export {
   STATE_QUERY_BINDING_LIMITS,
   stateQueryBindingSourceKey

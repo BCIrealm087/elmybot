@@ -1,7 +1,7 @@
 # Effective-state binding lifecycle for live queries
 
 Status: implemented foundation for state-querying roadmap step 7 on 2026-09-13.
-Live dependency attachment remains step 8 and public SSE remains step 9.
+Live dependency attachment was added in step 8; public SSE remains step 9.
 
 ## Boundary
 
@@ -91,9 +91,10 @@ authority and checks all three properties:
 
 A ready-to-ready race retries the complete bounded query against the new owner.
 An active transition returns the existing explicit `query_transitioning`
-envelope instead of presenting the old value as fresh. Step 8 will perform the
-corresponding attach-new-before-detach-old dependency handoff; Step 9 will send
-the replacement envelope over SSE.
+envelope instead of presenting the old value as fresh. Step 8 performs the
+corresponding attach-new-before-detach-old dependency handoff, as described in
+[`state-query-live-observation.md`](state-query-live-observation.md); step 9 will
+send the replacement envelope over SSE.
 
 ## Initial limits
 

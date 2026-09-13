@@ -33,6 +33,11 @@ export function createStateQuerySourceRuntime(env, {
       if (definition.scope.kind === "group_local") {
         source = Object.freeze({
           bindingKey: `group-local\u0000${group.key}\u0000${featureId}`,
+          watch: Object.freeze({
+            kind: "group_local",
+            sourceGroup: group,
+            featureId
+          }),
           async revision() {
             return await services.state.revision(featureId);
           },
@@ -69,6 +74,16 @@ export function createStateQuerySourceRuntime(env, {
           ].join("\u0000"),
           lifecycleRevision: scope.bindingRevision,
           physicalSourceKey,
+          watch: Object.freeze({
+            kind: "shareable",
+            realm: scope.realm,
+            featureId,
+            namespaceId: definition.scope.namespace
+          }),
+          bindingWatch: Object.freeze({
+            sourceGroup: group,
+            targetPlatform: counterpart(target.platform)
+          }),
           async lifecycle() {
             const result = await getStateQueryBinding(env, {
               sourceGroup: group,

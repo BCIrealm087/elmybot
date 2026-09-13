@@ -300,10 +300,25 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
     binding: state.source.bindingKey,
     revision: state.startRevision
   })).sort((left, right) => left.binding.localeCompare(right.binding));
+  const sourceWatches = [...sourceStates.values()].flatMap((state) =>
+    state.source.watch ? [{
+      binding: state.source.bindingKey,
+      ...state.source.watch,
+      expectedRevision: state.startRevision
+    }] : []
+  );
+  const bindingWatches = [...new Map([...sourceStates.values()].flatMap((state) =>
+    state.source.bindingWatch ? [[canonicalStateQueryJson(state.source.bindingWatch), {
+      ...state.source.bindingWatch,
+      expectedRevision: state.source.lifecycleRevision
+    }]] : []
+  )).values()];
   return {
     stable: true,
     data,
     sourceBindings,
+    sourceWatches: freezeJson(sourceWatches),
+    bindingWatches: freezeJson(bindingWatches),
     dependencies: Object.freeze([...dependencies.values()])
   };
 }
@@ -333,6 +348,8 @@ async function readyEvaluation(plan, attempt, reason, now) {
     observation: Object.freeze({
       query: plan.query,
       sources: freezeJson(attempt.sourceBindings),
+      sourceWatches: attempt.sourceWatches,
+      bindingWatches: attempt.bindingWatches,
       dependencies: attempt.dependencies
     })
   });

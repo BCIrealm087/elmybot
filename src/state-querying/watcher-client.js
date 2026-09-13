@@ -10,6 +10,7 @@ import {
 } from "../shareable-state/index.js";
 import { stateQueryEnvironment } from "./grant-client.js";
 import { STATE_QUERY_OBSERVER_PATHS } from "./observer.js";
+import { STATE_QUERY_LIVE_PATHS } from "./live-observation.js";
 import {
   STATE_QUERY_NOTIFICATION_LIMITS,
   STATE_QUERY_SOURCE_WATCH_PATH,
@@ -208,4 +209,20 @@ export async function listStateQueryNotifications(env, target, { limit = 100 } =
 
 export async function acknowledgeStateQueryNotifications(env, target, ids) {
   return await observerRequest(env, target, STATE_QUERY_OBSERVER_PATHS.acknowledge, { ids });
+}
+
+export async function attachLiveStateQuery(env, input) {
+  return await observerRequest(env, input?.query?.target, STATE_QUERY_LIVE_PATHS.attach, input);
+}
+
+export async function renewLiveStateQuery(env, target, input) {
+  return await observerRequest(env, target, STATE_QUERY_LIVE_PATHS.renew, input);
+}
+
+export async function removeLiveStateQuery(env, target, input) {
+  return await observerRequest(env, target, STATE_QUERY_LIVE_PATHS.remove, input);
+}
+
+export async function getLiveStateQuery(env, target, input) {
+  return await observerRequest(env, target, STATE_QUERY_LIVE_PATHS.get, input);
 }

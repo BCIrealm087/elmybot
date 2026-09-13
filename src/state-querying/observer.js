@@ -1,5 +1,19 @@
 import { jsonResponse, logError } from "../common.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
+import {
+  attachLiveStateQuery,
+  drainLiveStateQueries,
+  getLiveStateQuery,
+  initializeLiveObservationTables,
+  invalidateLiveQueriesForNotification,
+  removeLiveStateQuery,
+  renewLiveStateQuery,
+  scheduleLiveObservationAlarm,
+  STATE_QUERY_LIVE_PATHS,
+  StateQueryLiveError
+} from "./live-observation.js";
+import { StateQueryCredentialError } from "./grant-client.js";
+import { StateQueryError } from "./query.js";
 
 const DELIVERY_PATH = "/internal/state-query/notifications/deliver";
 const LIST_PATH = "/internal/state-query/notifications/list";
@@ -180,6 +194,7 @@ function initializeTables(state) {
     CREATE INDEX IF NOT EXISTS state_query_observer_binding_authority_updated
       ON state_query_observer_binding_authority(updated_at_ms);
   `);
+  initializeLiveObservationTables(state);
   const notificationColumns = new Set(
     state.storage.sql.exec("PRAGMA table_info(state_query_observer_notifications)")
       .toArray()
@@ -300,7 +315,7 @@ function receiveNotification(state, input) {
       );
     }
     const existingSource = state.storage.sql.exec(
-      `SELECT 1 AS found FROM state_query_observer_notifications
+      `SELECT source_revision FROM state_query_observer_notifications
        WHERE watcher_id = ? AND source_kind = ? AND source_key = ?
          AND feature_id = ? AND namespace_id = ?`,
       notification.watcherId,
@@ -309,6 +324,8 @@ function receiveNotification(state, input) {
       notification.source.featureId,
       notification.source.namespaceId
     ).toArray()[0];
+    const notificationAdvances = !existingSource ||
+      notification.revision > Number(existingSource.source_revision);
     const total = Number(state.storage.sql.exec(
       "SELECT COUNT(*) AS total FROM state_query_observer_notifications"
     ).one().total);
@@ -352,6 +369,9 @@ function receiveNotification(state, input) {
       notification.binding?.sourceKey ?? null,
       notification.binding?.reason ?? null
     );
+    if (notificationAdvances) {
+      invalidateLiveQueriesForNotification(state, notification, nowMs);
+    }
     return { accepted: true, duplicate: false };
   });
 }
@@ -435,6 +455,13 @@ export class StateQueryObserverBackend {
     this.state = state;
     this.env = env;
     initializeTables(state);
+    state.blockConcurrencyWhile(async () => {
+      await scheduleLiveObservationAlarm(state);
+    });
+  }
+
+  async alarm() {
+    await drainLiveStateQueries(this.state, this.env);
   }
 
   async fetch(request) {
@@ -448,7 +475,9 @@ export class StateQueryObserverBackend {
         throw new StateQueryObserverError("Request body must be valid JSON.", { cause });
       }
       if (url.pathname === DELIVERY_PATH) {
-        return noStoreJson(receiveNotification(this.state, input));
+        const result = receiveNotification(this.state, input);
+        await scheduleLiveObservationAlarm(this.state);
+        return noStoreJson(result);
       }
       if (url.pathname === LIST_PATH) {
         return noStoreJson(listNotifications(this.state, input));
@@ -456,9 +485,26 @@ export class StateQueryObserverBackend {
       if (url.pathname === ACK_PATH) {
         return noStoreJson(acknowledgeNotifications(this.state, input));
       }
+      if (url.pathname === STATE_QUERY_LIVE_PATHS.attach) {
+        return noStoreJson(await attachLiveStateQuery(this.state, this.env, input), 201);
+      }
+      if (url.pathname === STATE_QUERY_LIVE_PATHS.renew) {
+        return noStoreJson(await renewLiveStateQuery(this.state, this.env, input));
+      }
+      if (url.pathname === STATE_QUERY_LIVE_PATHS.remove) {
+        return noStoreJson(await removeLiveStateQuery(this.state, this.env, input));
+      }
+      if (url.pathname === STATE_QUERY_LIVE_PATHS.get) {
+        return noStoreJson(getLiveStateQuery(this.state, input));
+      }
       return new Response("Not Found", { status: 404 });
     } catch (error) {
-      if (error instanceof StateQueryObserverError) {
+      if (
+        error instanceof StateQueryObserverError ||
+        error instanceof StateQueryLiveError ||
+        error instanceof StateQueryCredentialError ||
+        error instanceof StateQueryError
+      ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }
       const correlationId = `state-query-observer:${crypto.randomUUID()}`;

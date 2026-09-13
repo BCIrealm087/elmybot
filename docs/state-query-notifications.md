@@ -1,8 +1,8 @@
 # Recoverable state-query change notifications
 
 Status: implemented foundation for state-querying roadmap step 6 on 2026-09-12.
-Effective-state lifecycle handoffs were added in step 7; live dependency
-planning and SSE remain steps 8–9.
+Effective-state lifecycle handoffs were added in step 7 and live dependency
+coordination in step 8; public SSE remains step 9.
 
 ## Boundary
 
@@ -13,11 +13,13 @@ state value, query document, grant, credential, platform OAuth data, or command
 payload.
 
 Notifications are internal framework infrastructure, not a Framework API v1
-feature-author surface or public HTTP endpoint. Step 8 will attach the
-evaluator's exact dependency graph to these source watchers. Until then, the
-receiver is a durable inbox and acknowledgement boundary rather than a live
-query evaluator. Logical-group binding revisions and realm handoff notifications
-are described in [`state-query-bindings.md`](state-query-bindings.md).
+feature-author surface or public HTTP endpoint. Step 8 attaches the evaluator's
+exact dependency graph to these source watchers and consumes their invalidations
+inside the observer. Logical-group binding revisions and realm handoff
+notifications are described in
+[`state-query-bindings.md`](state-query-bindings.md); coordinator behavior is
+described in
+[`state-query-live-observation.md`](state-query-live-observation.md).
 
 ## State owners and observer placement
 
@@ -69,8 +71,8 @@ watcher and creates its outbox record. The watcher remains attached during a
 mismatch so another mutation cannot fall into a detach/resnapshot gap.
 
 This is the storage half of the version-checked snapshot-and-attach handshake.
-Steps 8–9 will coordinate the complete query snapshot and all of its source
-registrations before exposing a live result.
+Step 8 coordinates the complete query snapshot and all of its source
+registrations before persisting a live result; step 9 will expose that result.
 
 ## Delivery, retry, and restart recovery
 

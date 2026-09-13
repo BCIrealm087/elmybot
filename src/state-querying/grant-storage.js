@@ -101,6 +101,18 @@ function credentialStatus(row, input, nowMs) {
   return "active";
 }
 
+function referenceStatus(row, input, nowMs) {
+  if (!row) return "denied";
+  if (
+    row.environment !== input.environment ||
+    row.target_platform !== input.target.platform ||
+    row.target_group_id !== input.target.groupId
+  ) return "denied";
+  if (row.revoked_at_ms !== null) return "revoked";
+  if (Number(row.expires_at_ms) <= nowMs) return "expired";
+  return "active";
+}
+
 function issueGrant(state, input) {
   const grantId = requireString(input?.grantId, "Grant ID", 80);
   const secretDigest = requireString(input?.secretDigest, "Secret digest", 100);
@@ -172,6 +184,23 @@ function validateGrant(state, input) {
     : { status };
 }
 
+function validateGrantReference(state, input) {
+  const normalized = {
+    grantId: requireString(input?.grantId, "Grant ID", 80),
+    environment: requireString(input?.environment, "Environment", 40),
+    target: {
+      platform: requireString(input?.target?.platform, "Target platform", 20),
+      groupId: requireString(input?.target?.groupId, "Target group", 200)
+    }
+  };
+  const nowMs = safeInteger(input?.nowMs ?? Date.now(), "Current time");
+  const row = findGrant(state.storage.sql, normalized.grantId);
+  const status = referenceStatus(row, normalized, nowMs);
+  return status === "active"
+    ? { status, grant: storedGrant(row) }
+    : { status };
+}
+
 function revokeGrant(state, input) {
   const result = validateGrant(state, input);
   if (result.status !== "active") return result;
@@ -197,6 +226,7 @@ export function handleStateQueryGrantStorageRequest(state, request, pathname) {
     if (operation === "issue") result = issueGrant(state, input);
     else if (operation === "validate") result = validateGrant(state, input);
     else if (operation === "revoke") result = revokeGrant(state, input);
+    else if (operation === "reference") result = validateGrantReference(state, input);
     else return new Response("Not Found", { status: 404 });
     return Response.json(result, {
       headers: { "cache-control": "no-store" }

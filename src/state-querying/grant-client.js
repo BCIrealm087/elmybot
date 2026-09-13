@@ -239,6 +239,39 @@ export async function validateStateQueryCredential(env, credential, {
   throw new StateQueryCredentialError("The state-query credential is invalid.");
 }
 
+export async function validateStateQueryGrantReference(env, {
+  target,
+  grantId,
+  nowMs = Date.now()
+}) {
+  const environment = stateQueryEnvironment(env);
+  const normalizedTarget = {
+    platform: target?.platform,
+    groupId: target?.groupId
+  };
+  group(normalizedTarget);
+  const result = await grantRequest(env, normalizedTarget, "reference", {
+    grantId,
+    environment,
+    target: normalizedTarget,
+    nowMs
+  });
+  if (result.status === "active") return result.grant;
+  if (result.status === "expired") {
+    throw new StateQueryCredentialError("The state-query grant has expired.", {
+      code: "query_grant_expired",
+      status: 401
+    });
+  }
+  if (result.status === "revoked") {
+    throw new StateQueryCredentialError("The state-query grant has been revoked.", {
+      code: "query_grant_revoked",
+      status: 401
+    });
+  }
+  throw new StateQueryCredentialError("The state-query grant reference is invalid.");
+}
+
 export async function revokeStateQueryCredential(env, credential, {
   nowMs = Date.now()
 } = {}) {
