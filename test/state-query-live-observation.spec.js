@@ -35,6 +35,15 @@ const liveEnv = {
   STATE_QUERY_CREDENTIAL_SIGNING_SECRET:
     "test-state-query-signing-secret-32-bytes-minimum"
 };
+const DRAIN_SETTLE_MS = 20;
+const DRAIN_ROUNDS = 3;
+
+async function settleDrain(operation) {
+  for (let round = 0; round < DRAIN_ROUNDS; round += 1) {
+    await operation();
+    await new Promise((resolve) => setTimeout(resolve, DRAIN_SETTLE_MS));
+  }
+}
 
 function target(platform = "discord") {
   return { platform, groupId: unique(platform) };
@@ -147,27 +156,44 @@ function observerStub(selectedTarget) {
 }
 
 async function drainObserver(selectedTarget) {
-  await runInDurableObject(observerStub(selectedTarget), async (instance) => {
-    await instance.alarm();
+  await settleDrain(async () => {
+    await runInDurableObject(observerStub(selectedTarget), async (instance) => {
+      await instance.alarm();
+    });
   });
 }
 
 async function drainLocal(selectedTarget) {
   const selectedGroup = group(selectedTarget);
   const stub = liveEnv.CONFIG.get(liveEnv.CONFIG.idFromName(selectedGroup.key));
-  await runInDurableObject(stub, async (instance) => {
-    await instance.alarm();
+  await settleDrain(async () => {
+    await runInDurableObject(stub, async (instance) => {
+      await instance.alarm();
+    });
   });
 }
 
 async function drainShareable(selectedTarget) {
   const scope = await shareableScope(selectedTarget);
-  await runInDurableObject(
-    shareableStateRealmStub(liveEnv, scope.realm),
-    async (instance) => {
-      await instance.alarm();
-    }
-  );
+  await settleDrain(async () => {
+    await runInDurableObject(
+      shareableStateRealmStub(liveEnv, scope.realm),
+      async (instance) => {
+        await instance.alarm();
+      }
+    );
+  });
+}
+
+async function drainBindings() {
+  await settleDrain(async () => {
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        await drainStateQueryBindingNotifications(state, liveEnv);
+      }
+    );
+  });
 }
 
 async function current(selectedTarget, selectedQueryId) {
@@ -473,9 +499,9 @@ describe("live state-query dependency coordination", () => {
           integrationId: secondId,
           actor: { platform: "discord", id: "manager", claims: [] }
         });
-        await drainStateQueryBindingNotifications(state, liveEnv);
       }
     );
+    await drainBindings();
     await drainObserver(selectedTarget);
     const switched = await current(selectedTarget, "source-handoff");
     expect(switched.envelope.data.count.value).toBe(7);
