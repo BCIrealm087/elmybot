@@ -411,7 +411,7 @@ Delayed old-source notifications cannot overwrite the new binding.
 
 ### 8. Implement live query dependencies and collection observation
 
-**Status:** pending. **Depends on:** steps 4, 6–7.
+**Status:** completed on 2026-09-13. **Depends on:** steps 4, 6–7.
 
 Maintain a dependency graph for active composed queries and re-evaluate only
 affected work. Observe collection membership so new entries can enter a query
@@ -679,3 +679,17 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 384 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34750303408](https://github.com/BCIrealm087/elmybot/actions/runs/34750303408).
   Steps 8–12 remain pending.
+- 2026-09-13: Step 8 completed. Group-local observers now persist active
+  composed queries, exact dependencies, and shared leased source edges; source
+  and binding invalidations reevaluate only graph-related queries. Evaluation
+  attaches and version-checks replacement dependencies before retiring old
+  interest, including remembered-game selection changes, initially absent
+  selections, collection insertion/removal, and same-value realm handoffs.
+  Grant references are revalidated independently per query, sharing cannot let
+  one client's lease or revocation affect another, and explicit budgets bound
+  retained queries, distinct plans, dependency fanout, alarm batches, retries,
+  and pending work. Implementation commit
+  [`c22be90`](https://github.com/BCIrealm087/elmybot/commit/c22be9027af67d8ca5caa4cfc32b700d27e19e35)
+  passed all 391 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34769121986](https://github.com/BCIrealm087/elmybot/actions/runs/34769121986).
+  Steps 9–12 remain pending.
