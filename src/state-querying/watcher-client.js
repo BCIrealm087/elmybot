@@ -1,5 +1,10 @@
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import {
+  getStateQueryBinding as getRegistryStateQueryBinding,
+  registerStateQueryBindingWatcher as registerRegistryStateQueryBindingWatcher,
+  unregisterStateQueryBindingWatcher as unregisterRegistryStateQueryBindingWatcher
+} from "../integrations/registry-client.js";
+import {
   requestShareableStateRealm,
   shareableStateRealmObjectName
 } from "../shareable-state/index.js";
@@ -139,6 +144,37 @@ export async function unregisterShareableStateQueryWatcher(env, input) {
   return await shareableWatcherRequest(env, "unregister", {
     expectedRevision: 0,
     ...input
+  });
+}
+
+function bindingWatcherInput(env, input) {
+  const sourceGroup = group(input.sourceGroup);
+  const normalized = checkedWatcherInput(env, { ...input, target: sourceGroup });
+  return {
+    sourceGroup,
+    targetPlatform: input.targetPlatform,
+    ...normalized
+  };
+}
+
+export async function getStateQueryBinding(env, input) {
+  return await getRegistryStateQueryBinding(env, {
+    sourceGroup: group(input.sourceGroup),
+    targetPlatform: input.targetPlatform
+  });
+}
+
+export async function registerStateQueryBindingWatcher(env, input) {
+  return await registerRegistryStateQueryBindingWatcher(
+    env,
+    bindingWatcherInput(env, input)
+  );
+}
+
+export async function unregisterStateQueryBindingWatcher(env, input) {
+  return await unregisterRegistryStateQueryBindingWatcher(env, {
+    ...bindingWatcherInput(env, { expectedRevision: 0, ...input }),
+    expectedRevision: 0
   });
 }
 

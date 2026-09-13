@@ -1,5 +1,6 @@
 import { createFeatureServiceRuntime } from "../framework/service-runtime.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
+import { getStateQueryBinding } from "../integrations/registry-client.js";
 import { shareableStateRealmObjectName } from "../shareable-state/index.js";
 
 function counterpart(platform) {
@@ -55,13 +56,26 @@ export function createStateQuerySourceRuntime(env, {
           counterpart(target.platform),
           definition.scope.namespace
         );
+        const physicalSourceKey = shareableStateRealmObjectName(scope.realm);
         source = Object.freeze({
           bindingKey: [
             "effective-shareable",
-            shareableStateRealmObjectName(scope.realm),
+            group.key,
+            counterpart(target.platform),
+            `binding-${scope.bindingRevision}`,
+            physicalSourceKey,
             featureId,
             definition.scope.namespace
           ].join("\u0000"),
+          lifecycleRevision: scope.bindingRevision,
+          physicalSourceKey,
+          async lifecycle() {
+            const result = await getStateQueryBinding(env, {
+              sourceGroup: group,
+              targetPlatform: counterpart(target.platform)
+            });
+            return result.binding;
+          },
           async revision() {
             return await services.shareableState.revision(featureId, scope);
           },

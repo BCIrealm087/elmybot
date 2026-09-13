@@ -20,6 +20,7 @@ export {
   getIntegrationById,
   getIntegrationDefaultLink,
   getIntegrationManagementStatus,
+  getStateQueryBinding,
   INTEGRATION_INVITATION_RETENTION_MS,
   INTEGRATION_INVITATION_TTL_MS,
   INTEGRATION_PENDING_TTL_MS,
@@ -30,6 +31,7 @@ export {
   listIntegrationsForGroup,
   listIntegrationAudit,
   reserveIntegrationInvitation,
+  registerStateQueryBindingWatcher,
   resolveEffectiveShareableStateRealm,
   resolvePendingIntegrationState,
   resumePendingIntegration,
@@ -37,6 +39,7 @@ export {
   revokeIntegrationsForGroup,
   resolveIntegrationRoutes,
   setIntegrationDefaultLink,
+  unregisterStateQueryBindingWatcher,
   updateIntegrationRoute,
   verifyIntegrationInvitation
 } from "./registry.js";

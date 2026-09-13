@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–6 are complete.
+Status: implementation in progress; steps 1–7 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–6 are complete; steps 7–12 remain pending. Complete the relevant
+Steps 1–7 are complete; steps 8–12 remain pending. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -383,7 +383,13 @@ are correct; stale watcher records expire; command behavior remains compatible.
 
 ### 7. Make live bindings follow the effective-state lifecycle
 
-**Status:** pending. **Depends on:** step 6.
+**Status:** completed on 2026-09-13. **Depends on:** step 6.
+
+The implemented ordered binding authority, recoverable lifecycle invalidation,
+evaluation handoff checks, limits, and failure behavior are recorded in
+[`state-query-bindings.md`](state-query-bindings.md). The internal observer
+boundary is ready for step 8 to attach and replace complete query dependency
+sets; public SSE remains step 9.
 
 Add reliable invalidation for activation, default changes, transition entry and
 completion, revocation, fallback repair, and standalone successor readiness.

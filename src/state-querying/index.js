@@ -28,12 +28,19 @@ export {
 } from "./grant-client.js";
 export {
   acknowledgeStateQueryNotifications,
+  getStateQueryBinding,
   listStateQueryNotifications,
   registerLocalStateQueryWatcher,
+  registerStateQueryBindingWatcher,
   registerShareableStateQueryWatcher,
   unregisterLocalStateQueryWatcher,
+  unregisterStateQueryBindingWatcher,
   unregisterShareableStateQueryWatcher
 } from "./watcher-client.js";
+export {
+  STATE_QUERY_BINDING_LIMITS,
+  stateQueryBindingSourceKey
+} from "./binding-notifications.js";
 export {
   STATE_QUERY_NOTIFICATION_LIMITS,
   StateQueryNotificationError,

@@ -172,6 +172,15 @@ async function resolveShareableState(
     targetPlatform,
     correlationId: invocation.correlationId
   });
+  if (
+    !Number.isSafeInteger(result?.bindingRevision) ||
+    result.bindingRevision < 0
+  ) {
+    throw new FeatureServiceRuntimeError(
+      "Shareable-state resolution returned an invalid binding revision.",
+      { code: "shareable_state_resolution_invalid", status: 502 }
+    );
+  }
   if (result.defaultLink === null) {
     let realm;
     try {
@@ -195,6 +204,7 @@ async function resolveShareableState(
       featureId,
       namespaceId,
       targetPlatform,
+      bindingRevision: result.bindingRevision,
       realm
     });
   }
@@ -207,6 +217,7 @@ async function resolveShareableState(
     featureId,
     namespaceId,
     targetPlatform,
+    bindingRevision: result.bindingRevision,
     realm: createIntegrationRealmIdentity(link.integration, {
       generation: link.integration.shareableStateGeneration ?? 1
     }),

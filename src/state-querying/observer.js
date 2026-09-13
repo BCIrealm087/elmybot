@@ -52,12 +52,13 @@ function normalizeTarget(value) {
 function normalizeNotification(input) {
   if (input?.version !== 1) fail("Notification version is unsupported.");
   const sourceKind = input?.source?.kind;
-  if (!new Set(["group_local", "shareable"]).has(sourceKind)) {
+  if (!new Set(["group_local", "shareable", "binding"]).has(sourceKind)) {
     fail("Notification source kind is invalid.");
   }
   const namespaceId = input?.source?.namespaceId;
   if (
-    (sourceKind === "group_local" && namespaceId !== undefined) ||
+    (new Set(["group_local", "binding"]).has(sourceKind) &&
+      namespaceId !== undefined) ||
     (sourceKind === "shareable" && (
       typeof namespaceId !== "string" ||
       !/^[a-z][a-z0-9_-]{0,63}$/.test(namespaceId)
@@ -80,6 +81,30 @@ function normalizeNotification(input) {
   if (!Number.isSafeInteger(committedAtMs) || committedAtMs < 0) {
     fail("Notification commit time is invalid.");
   }
+  let binding = null;
+  if (sourceKind === "binding") {
+    if (
+      !new Set(["ready", "transitioning", "unavailable"])
+        .has(input?.binding?.status) ||
+      typeof input?.binding?.reason !== "string" ||
+      input.binding.reason.length === 0 ||
+      input.binding.reason.length > 80 ||
+      !/^[a-z][a-z0-9_]*$/.test(input.binding.reason) ||
+      (input.binding.sourceKey !== undefined && (
+        typeof input.binding.sourceKey !== "string" ||
+        !/^\S{1,500}$/.test(input.binding.sourceKey)
+      ))
+    ) {
+      fail("Notification binding is invalid.");
+    }
+    binding = {
+      status: input.binding.status,
+      sourceKey: input.binding.sourceKey ?? null,
+      reason: input.binding.reason
+    };
+  } else if (input?.binding !== undefined) {
+    fail("Only binding notifications may include binding state.");
+  }
   return {
     id: requireString(input?.id, NOTIFICATION_ID_PATTERN, "Notification ID", 32),
     watcherId: requireString(
@@ -98,7 +123,7 @@ function normalizeNotification(input) {
         "Notification source key",
         500
       ),
-      featureId: requireString(
+      featureId: sourceKind === "binding" ? "" : requireString(
         input?.source?.featureId,
         FEATURE_ID_PATTERN,
         "Notification feature ID",
@@ -107,7 +132,8 @@ function normalizeNotification(input) {
       namespaceId: namespaceId ?? ""
     },
     revision,
-    committedAtMs
+    committedAtMs,
+    binding
   };
 }
 
@@ -131,12 +157,45 @@ function initializeTables(state) {
       source_revision INTEGER NOT NULL,
       committed_at_ms INTEGER NOT NULL,
       received_at_ms INTEGER NOT NULL,
+      binding_status TEXT,
+      binding_source_key TEXT,
+      binding_reason TEXT,
       UNIQUE (watcher_id, source_kind, source_key, feature_id, namespace_id)
     );
 
     CREATE INDEX IF NOT EXISTS state_query_observer_notifications_received
       ON state_query_observer_notifications(received_at_ms);
+
+    CREATE TABLE IF NOT EXISTS state_query_observer_binding_authority (
+      watcher_id TEXT NOT NULL,
+      source_key TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL CHECK (binding_revision >= 0),
+      binding_status TEXT NOT NULL,
+      binding_source_key TEXT,
+      binding_reason TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (watcher_id, source_key)
+    );
+
+    CREATE INDEX IF NOT EXISTS state_query_observer_binding_authority_updated
+      ON state_query_observer_binding_authority(updated_at_ms);
   `);
+  const notificationColumns = new Set(
+    state.storage.sql.exec("PRAGMA table_info(state_query_observer_notifications)")
+      .toArray()
+      .map((column) => column.name)
+  );
+  for (const [name, type] of [
+    ["binding_status", "TEXT"],
+    ["binding_source_key", "TEXT"],
+    ["binding_reason", "TEXT"]
+  ]) {
+    if (!notificationColumns.has(name)) {
+      state.storage.sql.exec(
+        `ALTER TABLE state_query_observer_notifications ADD COLUMN ${name} ${type}`
+      );
+    }
+  }
 }
 
 function bindIdentity(sql, notification, nowMs) {
@@ -177,12 +236,69 @@ function receiveNotification(state, input) {
        WHERE received_at_ms < ?`,
       nowMs - RETENTION_MS
     );
+    state.storage.sql.exec(
+      `DELETE FROM state_query_observer_binding_authority
+       WHERE updated_at_ms < ?`,
+      nowMs - RETENTION_MS
+    );
     const existing = state.storage.sql.exec(
       `SELECT 1 AS found FROM state_query_observer_notifications
        WHERE notification_id = ?`,
       notification.id
     ).toArray()[0];
     if (existing) return { accepted: true, duplicate: true };
+    if (notification.source.kind === "binding") {
+      const authority = state.storage.sql.exec(
+        `SELECT binding_revision FROM state_query_observer_binding_authority
+         WHERE watcher_id = ? AND source_key = ?`,
+        notification.watcherId,
+        notification.source.key
+      ).toArray()[0];
+      if (
+        authority &&
+        Number(authority.binding_revision) >= notification.revision
+      ) {
+        return { accepted: true, duplicate: false, stale: true };
+      }
+      if (!authority) {
+        const authorityTotal = Number(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM state_query_observer_binding_authority"
+        ).one().total);
+        if (authorityTotal >= MAX_INBOX_NOTIFICATIONS) {
+          state.storage.sql.exec(
+            `DELETE FROM state_query_observer_binding_authority
+             WHERE rowid IN (
+               SELECT rowid
+               FROM state_query_observer_binding_authority
+               ORDER BY updated_at_ms, watcher_id, source_key
+               LIMIT ?
+             )`,
+            authorityTotal - MAX_INBOX_NOTIFICATIONS + 1
+          );
+        }
+      }
+      state.storage.sql.exec(
+        `INSERT INTO state_query_observer_binding_authority
+          (watcher_id, source_key, binding_revision, binding_status,
+           binding_source_key, binding_reason, updated_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(watcher_id, source_key) DO UPDATE SET
+           binding_revision = excluded.binding_revision,
+           binding_status = excluded.binding_status,
+           binding_source_key = excluded.binding_source_key,
+           binding_reason = excluded.binding_reason,
+           updated_at_ms = excluded.updated_at_ms
+         WHERE excluded.binding_revision >
+           state_query_observer_binding_authority.binding_revision`,
+        notification.watcherId,
+        notification.source.key,
+        notification.revision,
+        notification.binding.status,
+        notification.binding.sourceKey,
+        notification.binding.reason,
+        nowMs
+      );
+    }
     const existingSource = state.storage.sql.exec(
       `SELECT 1 AS found FROM state_query_observer_notifications
        WHERE watcher_id = ? AND source_kind = ? AND source_key = ?
@@ -210,13 +326,17 @@ function receiveNotification(state, input) {
     state.storage.sql.exec(
       `INSERT INTO state_query_observer_notifications
         (notification_id, watcher_id, source_kind, source_key, feature_id,
-         namespace_id, source_revision, committed_at_ms, received_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         namespace_id, source_revision, committed_at_ms, received_at_ms,
+         binding_status, binding_source_key, binding_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(watcher_id, source_kind, source_key, feature_id, namespace_id)
        DO UPDATE SET notification_id = excluded.notification_id,
                      source_revision = excluded.source_revision,
                      committed_at_ms = excluded.committed_at_ms,
-                     received_at_ms = excluded.received_at_ms
+                     received_at_ms = excluded.received_at_ms,
+                     binding_status = excluded.binding_status,
+                     binding_source_key = excluded.binding_source_key,
+                     binding_reason = excluded.binding_reason
        WHERE excluded.source_revision >
          state_query_observer_notifications.source_revision`,
       notification.id,
@@ -227,7 +347,10 @@ function receiveNotification(state, input) {
       notification.source.namespaceId,
       notification.revision,
       notification.committedAtMs,
-      nowMs
+      nowMs,
+      notification.binding?.status ?? null,
+      notification.binding?.sourceKey ?? null,
+      notification.binding?.reason ?? null
     );
     return { accepted: true, duplicate: false };
   });
@@ -241,7 +364,8 @@ function listNotifications(state, input) {
   return {
     notifications: state.storage.sql.exec(
       `SELECT notification_id, watcher_id, source_kind, source_key, feature_id,
-              namespace_id, source_revision, committed_at_ms, received_at_ms
+              namespace_id, source_revision, committed_at_ms, received_at_ms,
+              binding_status, binding_source_key, binding_reason
        FROM state_query_observer_notifications
        ORDER BY received_at_ms, notification_id
        LIMIT ?`,
@@ -252,12 +376,19 @@ function listNotifications(state, input) {
       source: {
         kind: row.source_kind,
         key: row.source_key,
-        featureId: row.feature_id,
+        ...(row.feature_id ? { featureId: row.feature_id } : {}),
         ...(row.namespace_id ? { namespaceId: row.namespace_id } : {})
       },
       revision: Number(row.source_revision),
       committedAtMs: Number(row.committed_at_ms),
-      receivedAtMs: Number(row.received_at_ms)
+      receivedAtMs: Number(row.received_at_ms),
+      ...(row.source_kind === "binding" ? {
+        binding: {
+          status: row.binding_status,
+          ...(row.binding_source_key ? { sourceKey: row.binding_source_key } : {}),
+          reason: row.binding_reason
+        }
+      } : {})
     }))
   };
 }

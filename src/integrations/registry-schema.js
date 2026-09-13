@@ -247,6 +247,57 @@ export function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS shareable_state_successors_pending
       ON shareable_state_standalone_successors(status, created_at_ms, group_key);
+
+    CREATE TABLE IF NOT EXISTS state_query_binding_revisions (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL CHECK (binding_revision >= 0),
+      binding_status TEXT NOT NULL CHECK (
+        binding_status IN ('ready', 'transitioning', 'unavailable')
+      ),
+      source_key TEXT,
+      reason TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform)
+    );
+
+    CREATE TABLE IF NOT EXISTS state_query_binding_watchers (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      watcher_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      observer_key TEXT NOT NULL,
+      lease_expires_at_ms INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      renewed_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform, watcher_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS state_query_binding_watchers_expiry
+      ON state_query_binding_watchers(lease_expires_at_ms);
+
+    CREATE TABLE IF NOT EXISTS state_query_binding_outbox (
+      notification_id TEXT PRIMARY KEY,
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      watcher_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      observer_key TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL CHECK (binding_revision >= 0),
+      binding_status TEXT NOT NULL CHECK (
+        binding_status IN ('ready', 'transitioning', 'unavailable')
+      ),
+      source_key TEXT,
+      reason TEXT NOT NULL,
+      committed_at_ms INTEGER NOT NULL,
+      lease_expires_at_ms INTEGER NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+      next_attempt_at_ms INTEGER NOT NULL,
+      UNIQUE (source_group_key, target_platform, watcher_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS state_query_binding_outbox_due
+      ON state_query_binding_outbox(next_attempt_at_ms);
   `);
 
   // `pending` was the pre-lifecycle name for an invitation that had not yet
@@ -272,7 +323,7 @@ export function initializeRegistryTables(state) {
        AND target_member.group_key = default_link.target_group_key
        AND target_member.platform = default_link.target_platform
       WHERE integration.integration_id = default_link.integration_id
-        AND integration.status = 'active'
+        AND integration.status IN ('active', 'revoking')
     );
 
     INSERT INTO integration_default_links

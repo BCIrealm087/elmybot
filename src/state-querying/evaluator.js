@@ -119,6 +119,34 @@ async function sourceRevision(source) {
   return revision;
 }
 
+async function sourceLifecycleStillCurrent(source) {
+  if (typeof source.lifecycle !== "function") return true;
+  const current = await source.lifecycle();
+  if (
+    !Number.isSafeInteger(current?.revision) ||
+    current.revision < 0 ||
+    !new Set(["ready", "transitioning", "unavailable"]).has(current?.status) ||
+    (current.sourceKey !== null && current.sourceKey !== undefined &&
+      typeof current.sourceKey !== "string")
+  ) {
+    throw new TypeError("State-query source returned invalid lifecycle authority.");
+  }
+  if (current.status === "transitioning") {
+    throw new FeatureServiceRuntimeError(
+      "The selected shareable state is transitioning.",
+      { code: "shareable_state_transition", status: 409 }
+    );
+  }
+  if (current.status === "unavailable") {
+    throw new FeatureServiceRuntimeError(
+      "The selected shareable state is unavailable.",
+      { code: "shareable_state_resolution_invalid", status: 503 }
+    );
+  }
+  return current.revision === source.lifecycleRevision &&
+    current.sourceKey === source.physicalSourceKey;
+}
+
 function controlledReadContext(source, binding, dependencies, collectionReads) {
   const record = (dependency) => {
     const normalized = freezeJson({
@@ -238,7 +266,12 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
   let stable = true;
   for (const sourceState of sourceStates.values()) {
     sourceState.endRevision = await sourceRevision(sourceState.source);
-    if (sourceState.endRevision !== sourceState.startRevision) stable = false;
+    if (
+      sourceState.endRevision !== sourceState.startRevision ||
+      !await sourceLifecycleStillCurrent(sourceState.source)
+    ) {
+      stable = false;
+    }
   }
   if (!stable) return { stable: false };
 
@@ -377,14 +410,25 @@ export async function evaluateStateQuery(registry, input, {
       if (error instanceof StateQueryError) throw error;
       if (
         error instanceof FeatureServiceRuntimeError &&
-        ["shareable_state_transition", "shareable_state_resolution_invalid"]
-          .includes(error.code)
+        error.code === "shareable_state_transition"
       ) {
         return await unavailableEvaluation(
           plan,
           "query_transitioning",
           "transitioning",
           "transition_started",
+          now
+        );
+      }
+      if (
+        error instanceof FeatureServiceRuntimeError &&
+        error.code === "shareable_state_resolution_invalid"
+      ) {
+        return await unavailableEvaluation(
+          plan,
+          "query_source_unavailable",
+          "unavailable",
+          reason,
           now
         );
       }

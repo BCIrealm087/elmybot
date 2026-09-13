@@ -1,8 +1,8 @@
 # Recoverable state-query change notifications
 
 Status: implemented foundation for state-querying roadmap step 6 on 2026-09-12.
-Effective-state lifecycle handoffs, live dependency planning, and SSE remain
-steps 7–9.
+Effective-state lifecycle handoffs were added in step 7; live dependency
+planning and SSE remain steps 8–9.
 
 ## Boundary
 
@@ -16,8 +16,8 @@ Notifications are internal framework infrastructure, not a Framework API v1
 feature-author surface or public HTTP endpoint. Step 8 will attach the
 evaluator's exact dependency graph to these source watchers. Until then, the
 receiver is a durable inbox and acknowledgement boundary rather than a live
-query evaluator. Step 7 separately adds logical-group binding revisions and
-realm handoff notifications.
+query evaluator. Logical-group binding revisions and realm handoff notifications
+are described in [`state-query-bindings.md`](state-query-bindings.md).
 
 ## State owners and observer placement
 

@@ -2,8 +2,8 @@
 
 Status: implemented foundation for state-querying roadmap step 4 on 2026-09-12.
 Read grants and public snapshot HTTP access were added in step 5. Recoverable
-notifications were added in step 6; lifecycle observation and SSE remain later
-roadmap steps.
+notifications were added in step 6 and ordered lifecycle authority in step 7.
+Live dependency attachment and SSE remain steps 8–9.
 
 ## Implemented boundary
 
@@ -106,10 +106,11 @@ all bindings finish. A changed revision retries the complete query up to three
 times by default; exhaustion returns `query_evaluation_unstable`. This validates
 a converged observation but does not claim a transaction across owners.
 
-The ready envelope contains opaque query, binding, and result digests. At this
-snapshot stage the binding value fingerprints the currently resolved source
-set. Step 7 supplies the durable handoff revision needed for live A-to-B-to-A
-ordering and source-change delivery.
+The ready envelope contains opaque query, binding, and result digests. The
+binding value fingerprints the currently resolved source set and, for
+effective-shareable sources, the durable step-7 handoff revision. Evaluation
+rechecks that ordered registry authority before returning, so ready-to-ready
+races retry and active transitions return an explicit transitioning envelope.
 
 ## Deaths proof
 

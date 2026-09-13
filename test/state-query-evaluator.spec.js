@@ -289,6 +289,131 @@ describe("state-query evaluator", () => {
     expect(recovered.envelope.status).toBe("ready");
   });
 
+  it("retries ordered binding handoffs and reports an active transition", async () => {
+    let attempts = 0;
+    const source = (bindingRevision, sourceKey, current) => ({
+      bindingKey: `shareable:binding-${bindingRevision}:${sourceKey}`,
+      lifecycleRevision: bindingRevision,
+      physicalSourceKey: sourceKey,
+      async lifecycle() {
+        return current;
+      },
+      async revision() {
+        return 4;
+      },
+      async boundedCounter() {
+        return 7;
+      },
+      async boundedCounterSubjects() {
+        return {
+          subjects: [{ identity: "hades", label: "Hades", value: 7 }],
+          coverage: {
+            complete: true,
+            identifiedCount: 1,
+            unidentifiedCount: 0
+          }
+        };
+      }
+    });
+    const selectedTarget = target();
+    const queryDocument = query(
+      selectedTarget,
+      { count: read("count", literal("Hades")) },
+      { deaths: { ref: "count", path: ["count"] } }
+    );
+    const authorizeBinding = vi.fn(async () => {});
+    const initial = await evaluateStateQuery(featureRegistry, queryDocument, {
+      sourceRuntime: {
+        async open() {
+          return source(1, "integration:a:g1", {
+            revision: 1,
+            status: "ready",
+            sourceKey: "integration:a:g1",
+            reason: "integration_activated"
+          });
+        }
+      }
+    });
+    const recovered = await evaluateStateQuery(featureRegistry, query(
+      selectedTarget,
+      queryDocument.bindings,
+      queryDocument.select
+    ), {
+      maxAttempts: 2,
+      authorizeBinding,
+      sourceRuntimeFactory: () => {
+        attempts += 1;
+        const bindingRevision = attempts === 1 ? 1 : 2;
+        const sourceKey = attempts === 1 ? "integration:a:g1" : "integration:b:g1";
+        return {
+          async open() {
+            return source(bindingRevision, sourceKey, {
+              revision: 2,
+              status: "ready",
+              sourceKey: "integration:b:g1",
+              reason: "default_changed"
+            });
+          }
+        };
+      }
+    });
+    expect(recovered.envelope).toMatchObject({
+      status: "ready",
+      data: { deaths: { state: "present", value: 7 } }
+    });
+    expect(attempts).toBe(2);
+    expect(authorizeBinding).toHaveBeenCalledTimes(2);
+    expect(recovered.observation.sources[0].binding).toContain("binding-2");
+    expect(recovered.envelope.data).toEqual(initial.envelope.data);
+    expect(recovered.envelope.bindingRevision)
+      .not.toBe(initial.envelope.bindingRevision);
+    expect(recovered.envelope.resultRevision)
+      .not.toBe(initial.envelope.resultRevision);
+
+    const transitioning = await evaluateStateQuery(featureRegistry, query(
+      target(),
+      { count: read("count", literal("Hades")) },
+      { deaths: { ref: "count", path: ["count"] } }
+    ), {
+      sourceRuntime: {
+        async open() {
+          return source(2, "integration:b:g1", {
+            revision: 3,
+            status: "transitioning",
+            sourceKey: null,
+            reason: "revocation_started"
+          });
+        }
+      }
+    });
+    expect(transitioning.envelope).toMatchObject({
+      status: "transitioning",
+      reason: "transition_started",
+      error: { code: "query_transitioning" }
+    });
+
+    const unavailable = await evaluateStateQuery(featureRegistry, query(
+      target(),
+      { count: read("count", literal("Hades")) },
+      { deaths: { ref: "count", path: ["count"] } }
+    ), {
+      sourceRuntime: {
+        async open() {
+          return source(3, "integration:c:g1", {
+            revision: 4,
+            status: "unavailable",
+            sourceKey: null,
+            reason: "successor_unavailable"
+          });
+        }
+      }
+    });
+    expect(unavailable.envelope).toMatchObject({
+      status: "unavailable",
+      error: { code: "query_source_unavailable" }
+    });
+  });
+
   it("reads real deaths state without changing local or shareable revisions", async () => {
     const selectedTarget = target("discord");
     const group = {
