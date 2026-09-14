@@ -2,6 +2,9 @@
 
 Status: implemented for state-querying roadmap step 9 on 2026-09-14.
 
+The supported browser client, query setup page, and OBS widget are documented
+in [state-query-browser.md](state-query-browser.md).
+
 ## Public surface
 
 `POST /state-query/stream` accepts the same Bearer credential or secure

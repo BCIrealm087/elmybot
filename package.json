@@ -17,7 +17,8 @@
 		"dev": "wrangler dev",
 		"lint": "eslint . && node scripts/check-feature-api-boundary.js && node scripts/check-workspace-features.js && node scripts/generate-feature-docs.js --check",
 		"start": "wrangler dev",
-		"test": "vitest"
+		"test": "vitest",
+		"test:browser": "node scripts/smoke-state-query-browser.js"
 	},
 	"dependencies": {
 		"@elmybot/feature-alive": "1.0.0",
@@ -30,6 +31,7 @@
 		"dotenv": "^17.2.3",
 		"eslint": "^10.9.1",
 		"globals": "^17.11.0",
+		"playwright": "1.62.1",
 		"tweetnacl": "^1.0.3",
 		"vitest": "^4.1.0",
 		"wrangler": "^4.126.0"

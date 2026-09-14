@@ -1,5 +1,9 @@
 import { env, runInDurableObject, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createStateQueryClient } from "../public/state-query/client.js";
+import { createStateQueryTools } from "../public/state-query/query.js";
+import { IntegrationRegistry, integrationRegistryStub } from "../src/integrations/index.js";
+import { drainStateQueryBindingNotifications } from "../src/state-querying/binding-notifications.js";
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { featureRegistry } from "../src/features/index.js";
 import { createCommandInvocation, createPlatformGroupRef } from
@@ -14,7 +18,7 @@ import {
   pollStateQueryStream
 } from "../src/state-querying/sse.js";
 import { stateQueryObserverObjectName } from "../src/state-querying/source-notifications.js";
-import { shareableStateRealmStub } from "../src/shareable-state/index.js";
+import { createIntegrationRealmIdentity, requestShareableStateRealm, shareableStateRealmStub } from "../src/shareable-state/index.js";
 
 const streamEnv = {
   ...env,
@@ -195,6 +199,73 @@ async function drainLocalMutation(target) {
 }
 
 describe("public state-query SSE", () => {
+  it("runs the browser client through secure session, game changes, and a real realm handoff", async () => {
+    const target = selectedTarget();
+    await setRememberedGame(target, "Hades");
+    await setGameCount(target, "Hades", 2);
+    await setGameCount(target, "Sekiro", 5);
+    const grant = await issue(target, "fun.deaths:count:v1,fun.deaths:remembered_game:v1");
+    const origin = "https://elmybot-worker.cutelmy.workers.dev";
+    let cookie = "";
+    const client = createStateQueryClient({ baseUrl: origin, fetch: async (url, init) => {
+      const response = await SELF.fetch(url.toString(), { ...init, headers: {
+        ...init.headers, origin, ...(cookie ? { cookie } : {})
+      } });
+      if (response.headers.has("set-cookie")) cookie = response.headers.get("set-cookie").split(";")[0];
+      return response;
+    } });
+    let latest;
+    let connectionStatus;
+    try {
+      await client.session(grant.credential);
+      expect((await client.catalog()).target).toEqual(target);
+      const document = createStateQueryTools().deaths(target);
+      expect((await client.read(document)).data.deaths.value.count).toBe(2);
+      client.watch(document, { onResult(value) { latest = value; }, onStatus(value) { connectionStatus = value; } });
+      await vi.waitFor(() => expect(latest?.result.data.deaths.value.count).toBe(2), { timeout: 3000 });
+      await setRememberedGame(target, "Sekiro");
+      await drainLocalMutation(target);
+      await vi.waitFor(() => expect(latest?.result.data.deaths.value).toEqual({ game: "Sekiro", count: 5 }), { timeout: 3000 });
+
+      const integrationId = `browser-handoff-${++sequence}`;
+      const discord = group(target);
+      const twitch = createPlatformGroupRef({ platform: "twitch", kind: "channel", id: integrationId });
+      const realm = createIntegrationRealmIdentity({ id: integrationId }, { generation: 1 });
+      await requestShareableStateRealm(streamEnv, { realm, featureId: "fun.deaths", namespaceId: "game_deaths", operation: "bounded-counter", storage: {
+        name: "game", subject: "sekiro", subjectLabel: "Sekiro", min: 0, max: Number.MAX_SAFE_INTEGER, initial: 0, operation: "set", value: 12
+      } });
+      await runInDurableObject(integrationRegistryStub(streamEnv), async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, streamEnv);
+        state.storage.sql.exec(`INSERT INTO integrations
+          (integration_id, status, created_at_ms, updated_at_ms, activated_at_ms,
+           created_by_platform, created_by_actor_id, completed_by_platform,
+           completed_by_actor_id, shareable_state_generation)
+          VALUES (?, 'active', 1, 1, 1, 'discord', 'manager', 'twitch', 'broadcaster', 1)`, integrationId);
+        for (const member of [discord, twitch]) state.storage.sql.exec(`INSERT INTO integration_members
+          (integration_id, group_key, platform, group_kind, group_id, joined_at_ms)
+          VALUES (?, ?, ?, ?, ?, 1)`, integrationId, member.key, member.platform, member.kind, member.id);
+        registry.assignDefaultLinkIfAbsent({ sourceGroup: discord, targetGroup: twitch, integrationId, nowMs: Date.now() });
+      });
+      for (let round = 0; round < 3; round++) {
+        await runInDurableObject(integrationRegistryStub(streamEnv), async (_instance, state) => {
+          await drainStateQueryBindingNotifications(state, streamEnv);
+        });
+        await runInDurableObject(observerStub(target), async (instance) => { await instance.alarm(); });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      await vi.waitFor(() => expect(latest?.result.data.deaths.value.count).toBe(12), { timeout: 3000 });
+      expect(latest.reason).toBe("source_change");
+      await drainMutation(target, await setGameCount(target, "Sekiro", 13));
+      await vi.waitFor(() => expect(latest?.result.data.deaths.value.count).toBe(13), { timeout: 3000 });
+      await revokeStateQueryCredential(streamEnv, grant.credential);
+      await runInDurableObject(observerStub(target), async (instance, state) => {
+        state.storage.sql.exec("UPDATE state_query_observer_queries SET next_authorization_at_ms = 0");
+        await instance.alarm();
+      });
+      await vi.waitFor(() => expect(connectionStatus?.state).toBe("ended"), { timeout: 3000 });
+    } finally { await client.close(); }
+  }, 15_000);
+
   it("coalesces adjacent multiplexed history per query ID", async () => {
     const target = selectedTarget();
     await runInDurableObject(observerStub(target), async (_instance, state) => {

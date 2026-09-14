@@ -13,6 +13,11 @@ export default [
 	},
 	js.configs.recommended,
 	{
+		files: ["public/**/*.js"],
+		languageOptions: { globals: globals.browser },
+		rules: { "no-unused-vars": ["error", { caughtErrors: "none" }] }
+	},
+	{
 		files: ["src/**/*.js"],
 		languageOptions: {
 			ecmaVersion: "latest",

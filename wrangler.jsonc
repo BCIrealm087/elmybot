@@ -7,6 +7,10 @@
 	"name": "elmybot-worker",
 	"main": "src/index.js",
 	"compatibility_date": "2026-01-11",
+	"assets": {
+		"directory": "./public",
+		"binding": "BROWSER_ASSETS"
+	},
 	"observability": {
 		"enabled": true
 	},

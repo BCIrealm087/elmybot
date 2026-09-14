@@ -17,6 +17,7 @@ import {
   stateQueryGrantCatalog
 } from "./grants.js";
 import { evaluateStateQuery } from "./evaluator.js";
+import { stateQueryBrowserResponse } from "./browser-pages.js";
 import {
   TWITCH_CHANNEL_OAUTH_COORDINATOR_NAME
 } from "../platforms/twitch/channel-auth-common.js";
@@ -183,7 +184,7 @@ function issuedPage(issued) {
 <p><code>${escapeHtml(issued.credential)}</code></p>
 <p>Grant ID: <code>${escapeHtml(issued.grant.id)}</code></p>
 <p>Expires: <time>${escapeHtml(new Date(issued.grant.expiresAtMs).toISOString())}</time></p>
-<p>A secure same-origin session cookie is active. You may now open <a href="/state-query/catalog">the authorized catalog</a>.</p>
+<p>A secure same-origin session cookie is active. You may now open <a href="/state-query/setup">the query setup page</a>.</p>
 </main></body></html>`;
 }
 
@@ -428,6 +429,13 @@ export async function handleStateQueryRequest(
 ) {
   const url = new URL(request.url);
   try {
+    if (["app.js", "client.js", "query.js", "ui.js", "browser.css"].some(
+      (name) => url.pathname === `/state-query/${name}`
+    )) {
+      return await env.BROWSER_ASSETS.fetch(request);
+    }
+    const browserResponse = stateQueryBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     if (url.pathname === "/state-query/operator/twitch") {
       return await twitchOperatorResponse(request, env);
     }

@@ -56,7 +56,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
-| `/state-query/*` | Scoped readable-state discovery, snapshots, live SSE, sessions, and grant issuance |
+| `/state-query/*` | Scoped readable-state discovery, snapshots, live SSE, sessions, grant issuance, query setup, and widgets |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -386,6 +386,11 @@ open `GET /state-query/operator/twitch` and reauthenticate with Twitch. See the
 [state-query HTTP and grant guide](docs/state-query-http.md) for credential,
 catalog, snapshot, session, revocation, origin, and scope details.
 
+After deployment, open `/state-query/setup` to compose and preview a query and
+copy a `/state-query/widget` browser-source URL. OBS uses its own session;
+enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
+documents the client API, setup flow, and credential-free widget URLs.
+
 ## Project layout
 
 ```text
@@ -413,8 +418,9 @@ GitHub Actions runs the complete suite for pushes to `master` and
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
 3. runs ESLint;
-4. checks tracked JavaScript and MJS syntax; and
-5. performs a non-deploying Wrangler dry run.
+4. runs a Chromium setup/widget smoke test and saves its preview;
+5. checks tracked JavaScript and MJS syntax; and
+6. performs a non-deploying Wrangler dry run.
 
 The CI Wrangler dry run is the authoritative clean build/configuration check.
 
@@ -467,6 +473,7 @@ explicit catalog-regeneration action.
 - [Recoverable state-query change notifications](docs/state-query-notifications.md)
 - [Public state-query SSE delivery](docs/state-query-sse.md)
 - [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
+- [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)
