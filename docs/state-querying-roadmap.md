@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–9 are complete.
+Status: implementation in progress; steps 1–10 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–9 are complete; steps 10–12 remain pending. Complete the relevant
+Steps 1–10 are complete; steps 11–12 remain pending. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -462,7 +462,12 @@ permanent stale subscriptions remain.
 
 ### 10. Complete the deaths proof and contributor workflow
 
-**Status:** pending. **Depends on:** steps 3–9.
+**Status:** completed on 2026-09-14. **Depends on:** steps 3–9.
+Implementation commit: `68d4c6f`.
+
+The complete deaths composition proof, optional query builders, contributor
+test runtime, and readable counter scaffold workflow are recorded in
+[`state-query-deaths-proof.md`](state-query-deaths-proof.md).
 
 Finish deaths declarations, subject metadata compatibility, and optional presets
 for fixed-game and current-game views. Keep normal command syntax, permissions,
@@ -712,3 +717,18 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   the Wrangler dry run in
   [CI run 34800948511](https://github.com/BCIrealm087/elmybot/actions/runs/34800948511).
   Steps 10–12 remain pending.
+- 2026-09-14: Step 10 completed. Deaths now proves all five independently
+  composed query shapes over standalone and linked state, including dynamic
+  remembered-game dependencies, materialized collection removal, and optional
+  fixed/current query builders. The contributor test runtime evaluates and
+  watches production query documents against in-memory feature state, and the
+  local/shareable counter scaffolds demonstrate readable exports whose ordinary
+  mutations produce updates without feature-authored notification or SSE code.
+  Public SSE coverage registers the five deaths queries together and exposed a
+  multiplexed recovery defect; bounded history now coalesces the newest result
+  independently per client query ID. Implementation commit
+  [`68d4c6f`](https://github.com/BCIrealm087/elmybot/commit/68d4c6fe64080b6931eba3dfc47be32cbd1e7a6c)
+  passed all 403 tests, lint and project checks, JavaScript syntax checks, and
+  the Wrangler dry run in
+  [CI run 34814540622](https://github.com/BCIrealm087/elmybot/actions/runs/34814540622).
+  Steps 11–12 remain pending.
