@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–7 are complete.
+Status: implementation in progress; steps 1–9 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–7 are complete; steps 8–12 remain pending. Complete the relevant
+Steps 1–9 are complete; steps 10–12 remain pending. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -433,8 +433,8 @@ queries. Resource limits fail explicitly.
 
 ### 9. Expose SSE snapshots, updates, status, and recovery
 
-**Status:** implementation published; CI validation pending. **Depends on:*
-steps 2, 5, 7–8. Implementation commit: `5686037`.
+**Status:** completed on 2026-09-14. **Depends on:** steps 2, 5, 7–8.
+Implementation commit: `5686037`.
 
 The public API, recovery model, bounded durable history, cleanup behavior, and
 the tested durable-polling fallback are recorded in
@@ -698,3 +698,17 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   passed all 391 tests, lint, syntax checks, and the Wrangler dry run in
   [CI run 34769121986](https://github.com/BCIrealm087/elmybot/actions/runs/34769121986).
   Steps 9–12 remain pending.
+- 2026-09-14: Step 9 completed. The public `POST /state-query/stream`
+  endpoint now authenticates Bearer or secure-session credentials, registers
+  up to 20 named queries, and streams UTF-8 SSE snapshots, complete updates,
+  statuses, heartbeats, and opaque recovery cursors. Durable bounded history,
+  reconnect reauthorization and resynchronization, duplicate/out-of-order
+  suppression, slow-reader coalescing, terminal grant revocation, multiplexing,
+  and cleanup are covered by actual streaming tests. Implementation commit
+  [`5686037`](https://github.com/BCIrealm087/elmybot/commit/5686037aa59777f8a4e2e4236e19aee894269ce2)
+  plus deterministic revocation-budget test stabilization in
+  [`4ce6158`](https://github.com/BCIrealm087/elmybot/commit/4ce61589c44778798d581beb0d93fd7e4e9c9a2c)
+  passed all 397 tests, lint and project checks, JavaScript syntax checks, and
+  the Wrangler dry run in
+  [CI run 34800948511](https://github.com/BCIrealm087/elmybot/actions/runs/34800948511).
+  Steps 10–12 remain pending.
