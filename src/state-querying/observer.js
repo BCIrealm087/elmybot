@@ -14,6 +14,17 @@ import {
 } from "./live-observation.js";
 import { StateQueryCredentialError } from "./grant-client.js";
 import { StateQueryError } from "./query.js";
+import {
+  initializeStateQueryStreamTables,
+  pollStateQueryStream,
+  publishStateQueryStreamUpdates,
+  registerPolledStateQueryStream,
+  removePolledStateQueryStream,
+  STATE_QUERY_STREAM_CLOSE_PATH,
+  STATE_QUERY_STREAM_PATH,
+  STATE_QUERY_STREAM_POLL_PATH,
+  StateQueryStreamError
+} from "./sse.js";
 
 const DELIVERY_PATH = "/internal/state-query/notifications/deliver";
 const LIST_PATH = "/internal/state-query/notifications/list";
@@ -195,6 +206,7 @@ function initializeTables(state) {
       ON state_query_observer_binding_authority(updated_at_ms);
   `);
   initializeLiveObservationTables(state);
+  initializeStateQueryStreamTables(state);
   const notificationColumns = new Set(
     state.storage.sql.exec("PRAGMA table_info(state_query_observer_notifications)")
       .toArray()
@@ -462,10 +474,54 @@ export class StateQueryObserverBackend {
 
   async alarm() {
     await drainLiveStateQueries(this.state, this.env);
+    await publishStateQueryStreamUpdates(this.state);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_PATH) {
+      try {
+        return noStoreJson(await registerPolledStateQueryStream(
+          this.state, this.env, await request.json()
+        ), 201);
+      } catch (error) {
+        if (
+          error instanceof StateQueryStreamError ||
+          error instanceof StateQueryLiveError ||
+          error instanceof StateQueryCredentialError ||
+          error instanceof StateQueryError
+        ) {
+          return noStoreJson({ error: error.message, code: error.code }, error.status);
+        }
+        throw error;
+      }
+    }
+    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_POLL_PATH) {
+      try {
+        return noStoreJson(await pollStateQueryStream(
+          this.state, this.env, await request.json()
+        ));
+      } catch (error) {
+        if (error instanceof TypeError) return new Response(null, { status: 499 });
+        if (
+          error instanceof StateQueryStreamError ||
+          error instanceof StateQueryLiveError ||
+          error instanceof StateQueryCredentialError ||
+          error instanceof StateQueryError
+        ) {
+          return noStoreJson({ error: error.message, code: error.code }, error.status);
+        }
+        throw error;
+      }
+    }
+    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_CLOSE_PATH) {
+      try {
+        await removePolledStateQueryStream(this.state, this.env, await request.json());
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+      }
+      return new Response(null, { status: 204 });
+    }
     if (request.method !== "POST") return new Response("Not Found", { status: 404 });
     try {
       let input;
@@ -502,6 +558,7 @@ export class StateQueryObserverBackend {
       if (
         error instanceof StateQueryObserverError ||
         error instanceof StateQueryLiveError ||
+        error instanceof StateQueryStreamError ||
         error instanceof StateQueryCredentialError ||
         error instanceof StateQueryError
       ) {

@@ -56,7 +56,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
-| `/state-query/*` | Scoped readable-state discovery, snapshots, sessions, and grant issuance |
+| `/state-query/*` | Scoped readable-state discovery, snapshots, live SSE, sessions, and grant issuance |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -465,6 +465,7 @@ explicit catalog-regeneration action.
 - [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
 - [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
 - [Recoverable state-query change notifications](docs/state-query-notifications.md)
+- [Public state-query SSE delivery](docs/state-query-sse.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

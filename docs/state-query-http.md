@@ -168,13 +168,24 @@ The endpoint resolves the target group's current effective state on every
 request. It does not retain a realm identity from grant issuance and does not
 execute commands or mutations.
 
+## Live subscriptions
+
+`POST /state-query/stream` accepts the same authentication and query meaning,
+with one to 20 client-named queries in a single SSE subscription. It performs a
+version-checked snapshot-and-attach handshake, then sends complete replacement
+results, status events, and heartbeat comments. Recovery cursors, buffering,
+cleanup, and examples are specified in
+[`state-query-sse.md`](state-query-sse.md).
+
 ## Revocation and errors
 
 `DELETE /state-query/grant` authenticates with the credential itself, marks the
 grant revoked durably, and clears its session cookie. A cookie-authenticated
 revoke requires the configured same origin. Revocation is idempotent for the
 same valid credential. Later catalog and snapshot requests return
-`query_grant_revoked`; expired credentials return `query_grant_expired`.
+`query_grant_revoked`; expired credentials return `query_grant_expired`. An
+already-open live subscription emits the matching terminal status and closes
+after its independent authorization check.
 
 Malformed, wrong-environment, wrong-target, unknown-export, and otherwise
 unauthorized requests are collapsed to `query_access_denied` before they can

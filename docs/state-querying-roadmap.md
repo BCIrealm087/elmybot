@@ -433,7 +433,12 @@ queries. Resource limits fail explicitly.
 
 ### 9. Expose SSE snapshots, updates, status, and recovery
 
-**Status:** pending. **Depends on:** steps 2, 5, 7–8.
+**Status:** implementation complete; CI validation pending. **Depends on:**
+steps 2, 5, 7–8.
+
+The public API, recovery model, bounded durable history, cleanup behavior, and
+the tested durable-polling fallback are recorded in
+[`state-query-sse.md`](state-query-sse.md).
 
 Implement the selected SSE architecture with validated query registration,
 multiplexed query IDs where supported, UTF-8 event framing, connection cleanup,
