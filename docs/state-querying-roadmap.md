@@ -433,8 +433,8 @@ queries. Resource limits fail explicitly.
 
 ### 9. Expose SSE snapshots, updates, status, and recovery
 
-**Status:** implementation complete; CI validation pending. **Depends on:**
-steps 2, 5, 7–8.
+**Status:** implementation published; CI validation pending. **Depends on:*
+steps 2, 5, 7–8. Implementation commit: `5686037`.
 
 The public API, recovery model, bounded durable history, cleanup behavior, and
 the tested durable-polling fallback are recorded in
