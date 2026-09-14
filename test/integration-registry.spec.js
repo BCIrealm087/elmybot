@@ -1665,6 +1665,7 @@ describe("Cross-platform integration linking", () => {
   it("expires and continues large maintenance batches through alarms", async () => {
     const prefix = uniqueId("expiry-batch");
     const nowMs = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(nowMs);
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
       async (instance, state) => {
@@ -1873,7 +1874,8 @@ describe("Cross-platform integration linking", () => {
 
         freeze.mockImplementation(async () => []);
         nowMs = continuationAlarm;
-        await instance.alarm();
+        expect(await instance.processGroupRevocationBatch(groupKey))
+          .toEqual({ revoked: 1, pending: false });
         expect(state.storage.sql.exec(
           `SELECT COUNT(*) AS total FROM integrations
            WHERE integration_id LIKE ? AND status = 'revoked'`,
