@@ -2,6 +2,7 @@ import {
   access,
   defineAction,
   defineFeature,
+  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -27,6 +28,28 @@ export const feature = defineFeature({
     schemaVersion: 1,
     collisionSummary: { kind: "presence" }
   }],
+  readableState: [
+    defineReadableStateExport({
+      id: "score",
+      version: 1,
+      label: "Shareable score",
+      description: "The current standalone or linked score.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable", namespace: "score" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        absence: { kind: "default" }
+      },
+      async resolve(ctx) {
+        return {
+          state: "present",
+          value: await ctx.state.boundedCounter("score", "shared")
+        };
+      }
+    })
+  ],
   actions: [
     defineAction({
       kind: RECIPE_SHAREABLE_ACTION_KIND,

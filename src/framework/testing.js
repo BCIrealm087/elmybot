@@ -16,6 +16,7 @@ import { formatCommandInputError } from "./command-input-error.js";
 import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
+import { evaluateStateQuery } from "../state-querying/evaluator.js";
 
 const ROUTED_MESSAGE_EFFECT_KINDS = Object.freeze({
   discord: "discord.message.send.v1",
@@ -420,11 +421,32 @@ function createMemoryServices(clock, registry) {
   const integrationState = new Map();
   const shareableState = new Map();
   const cooldowns = new Map();
+  const revisions = new Map();
+  const counterSubjects = new Map();
+  const changeListeners = new Set();
   const storageKey = (ownerKey, featureId, key) =>
     `${ownerKey}\u0000${featureId}\u0000${key}`;
   const value = (map, key) => map.has(key) ? freezeJson(map.get(key)) : null;
 
-  function stateService(map, ownerKey, {
+  function revisionKey(storeKind, ownerKey, featureId) {
+    return `${storeKind}\u0000${ownerKey}\u0000${featureId}`;
+  }
+
+  function touch(storeKind, ownerKey, featureId) {
+    const key = revisionKey(storeKind, ownerKey, featureId);
+    revisions.set(key, (revisions.get(key) ?? 0) + 1);
+    for (const listener of changeListeners) listener("value_changed");
+  }
+
+  function counterSubjectKey(storeKind, ownerKey, featureId, name, subject) {
+    return [storeKind, ownerKey, featureId, name, subject].join("\u0000");
+  }
+
+  function sameJson(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  function stateService(map, storeKind, ownerKey, {
     integrationScoped = false,
     canonicalReset = false
   } = {}) {
@@ -436,18 +458,24 @@ function createMemoryServices(clock, registry) {
       },
       set: async (featureId, ...args) => {
         const [key, nextValue] = argumentsAfterOwner(args);
-        map.set(
-          storageKey(ownerKey(args), featureId, key),
-          freezeJson(nextValue)
-        );
+        const owner = ownerKey(args);
+        const namespaced = storageKey(owner, featureId, key);
+        const normalized = freezeJson(nextValue);
+        if (map.has(namespaced) && sameJson(map.get(namespaced), normalized)) return;
+        map.set(namespaced, normalized);
+        touch(storeKind, owner, featureId);
       },
       delete: async (featureId, ...args) => {
         const [key] = argumentsAfterOwner(args);
-        return map.delete(storageKey(ownerKey(args), featureId, key));
+        const owner = ownerKey(args);
+        const deleted = map.delete(storageKey(owner, featureId, key));
+        if (deleted) touch(storeKind, owner, featureId);
+        return deleted;
       },
       increment: async (featureId, ...args) => {
         const [key, amount = 1] = argumentsAfterOwner(args);
-        const namespaced = storageKey(ownerKey(args), featureId, key);
+        const owner = ownerKey(args);
+        const namespaced = storageKey(owner, featureId, key);
         const current = map.get(namespaced) ?? 0;
         if (!Number.isSafeInteger(current) || !Number.isSafeInteger(amount) ||
             !Number.isSafeInteger(current + amount)) {
@@ -456,13 +484,16 @@ function createMemoryServices(clock, registry) {
           );
         }
         const nextValue = current + amount;
+        if (nextValue === current) return nextValue;
         map.set(namespaced, nextValue);
+        touch(storeKind, owner, featureId);
         return nextValue;
       },
       boundedCounter: async (featureId, ...args) => {
         const [descriptor, operation, operand] = argumentsAfterOwner(args);
+        const owner = ownerKey(args);
         const namespaced = storageKey(
-          ownerKey(args),
+          owner,
           featureId,
           `bounded-counter\u0000${descriptor.name}\u0000${descriptor.subject}`
         );
@@ -498,12 +529,128 @@ function createMemoryServices(clock, registry) {
                 : candidate
           );
         }
+        const metadataKey = counterSubjectKey(
+          storeKind,
+          owner,
+          featureId,
+          descriptor.name,
+          descriptor.subject
+        );
+        let changed = false;
         if (canonicalReset && operation === "reset") {
-          map.delete(namespaced);
+          const deletedValue = map.delete(namespaced);
+          const deletedSubject = counterSubjects.delete(metadataKey);
+          changed = deletedValue || deletedSubject;
         } else if (map.has(namespaced) || nextValue !== descriptor.initial) {
+          changed = !map.has(namespaced) || map.get(namespaced) !== nextValue;
           map.set(namespaced, nextValue);
+          if (descriptor.subjectLabel !== undefined && !counterSubjects.has(metadataKey)) {
+            counterSubjects.set(metadataKey, Object.freeze({
+              identity: descriptor.subject,
+              label: descriptor.subjectLabel,
+              name: descriptor.name,
+              valueKey: namespaced
+            }));
+            changed = true;
+          }
         }
+        if (changed) touch(storeKind, owner, featureId);
         return nextValue;
+      }
+    });
+  }
+
+  function readableSource(map, storeKind, owner, featureId, bindingKey) {
+    const counterValue = (name, subject, options = {}) => {
+      const initial = options.initial ?? options.min ?? 0;
+      return map.get(storageKey(
+        owner,
+        featureId,
+        `bounded-counter\u0000${name}\u0000${subject}`
+      )) ?? initial;
+    };
+    return Object.freeze({
+      bindingKey,
+      async revision() {
+        return revisions.get(revisionKey(storeKind, owner, featureId)) ?? 0;
+      },
+      async get(key) {
+        const namespaced = storageKey(owner, featureId, key);
+        return map.has(namespaced)
+          ? Object.freeze({ found: true, value: freezeJson(map.get(namespaced)) })
+          : Object.freeze({ found: false });
+      },
+      async boundedCounter(name, subject, options = {}) {
+        return counterValue(name, subject, options);
+      },
+      async boundedCounterSubjects(name) {
+        const prefix = [storeKind, owner, featureId, name, ""].join("\u0000");
+        const subjects = [...counterSubjects.entries()]
+          .filter(([key, metadata]) =>
+            key.startsWith(prefix) && map.has(metadata.valueKey)
+          )
+          .map(([, metadata]) => Object.freeze({
+            identity: metadata.identity,
+            label: metadata.label,
+            value: map.get(metadata.valueKey)
+          }))
+          .sort((left, right) => left.identity.localeCompare(right.identity));
+        return Object.freeze({
+          subjects: Object.freeze(subjects),
+          coverage: Object.freeze({
+            complete: true,
+            identifiedCount: subjects.length,
+            unidentifiedCount: 0
+          })
+        });
+      }
+    });
+  }
+
+  function sourceRuntime(target, resolveDefaultLink) {
+    const group = createPlatformGroupRef({
+      platform: target.platform,
+      kind: target.platform === "discord" ? "guild" : "channel",
+      id: target.groupId
+    });
+    const sources = new Map();
+    return Object.freeze({
+      async open(featureId, definition) {
+        const cacheKey = `${featureId}\u0000${definition.scope.kind}\u0000` +
+          `${definition.scope.namespace ?? ""}`;
+        if (sources.has(cacheKey)) return sources.get(cacheKey);
+        let source;
+        if (definition.scope.kind === "group_local") {
+          source = readableSource(
+            state,
+            "group-local",
+            group.key,
+            featureId,
+            `group-local\u0000${group.key}\u0000${featureId}`
+          );
+        } else {
+          const targetPlatform = group.platform === "discord" ? "twitch" : "discord";
+          const link = resolveDefaultLink(group, targetPlatform);
+          const owner = link
+            ? `integration:${link.integration.id}\u0000${definition.scope.namespace}`
+            : `standalone:${group.key}:g1\u0000${definition.scope.namespace}`;
+          source = readableSource(
+            shareableState,
+            "shareable",
+            owner,
+            featureId,
+            [
+              "effective-shareable",
+              group.key,
+              targetPlatform,
+              owner,
+              featureId,
+              definition.scope.namespace
+            ].join("\u0000")
+          );
+        }
+        sources.set(cacheKey, source);
+        return source;
       }
     });
   }
@@ -528,9 +675,10 @@ function createMemoryServices(clock, registry) {
               storageKey(group.key, featureId, key)
             )
           }),
-          state: stateService(state, () => group.key),
+          state: stateService(state, "group-local", () => group.key),
           integrationState: stateService(
             integrationState,
+            "integration",
             (args) => args[0]?.integration?.id,
             { integrationScoped: true }
           ),
@@ -558,6 +706,7 @@ function createMemoryServices(clock, registry) {
             },
             ...stateService(
               shareableState,
+              "shareable",
               shareableOwnerKey,
               { integrationScoped: true, canonicalReset: true }
             )
@@ -577,6 +726,14 @@ function createMemoryServices(clock, registry) {
           return { allowed: true, retryAfterSeconds: 0 };
         }
       });
+    },
+    sourceRuntime,
+    subscribe(listener) {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
+    },
+    invalidate(reason = "value_changed") {
+      for (const listener of changeListeners) listener(reason);
     },
     config: Object.freeze({
       set(group, featureId, key, nextValue) {
@@ -602,6 +759,9 @@ function createMemoryServices(clock, registry) {
         integrationState.clear();
         shareableState.clear();
         cooldowns.clear();
+        revisions.clear();
+        counterSubjects.clear();
+        for (const listener of changeListeners) listener("value_changed");
       }
     }),
     integrationState: Object.freeze({
@@ -708,19 +868,23 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     return group;
   }
 
+  function resolveDefaultLink(group, targetPlatform) {
+    return configuredDefaultLinks.find((link) =>
+      link.sourceGroup.key === group.key &&
+      link.targetGroup.platform === targetPlatform
+    ) ?? null;
+  }
+
   function routeSet(inputRoutes) {
     return inputRoutes === undefined ? configuredRoutes : inputRoutes;
   }
 
   function runtimeContext(invocation, actor, triggerKind, inputRoutes, onRoute) {
-    const resolveDefaultLink = (targetPlatform) =>
-      configuredDefaultLinks.find((link) =>
-        link.sourceGroup.key === invocation.origin.group.key &&
-        link.targetGroup.platform === targetPlatform
-      ) ?? null;
+    const resolveInvocationDefaultLink = (targetPlatform) =>
+      resolveDefaultLink(invocation.origin.group, targetPlatform);
     const memoryRuntime = memory.runtime(
       invocation.origin.group,
-      resolveDefaultLink
+      resolveInvocationDefaultLink
     );
     return {
       ...memoryRuntime,
@@ -728,7 +892,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
         ...memoryRuntime.featureServices,
         links: Object.freeze({
           async default(_featureId, targetPlatform) {
-            return resolveDefaultLink(targetPlatform);
+            return resolveInvocationDefaultLink(targetPlatform);
           }
         })
       }),
@@ -1041,6 +1205,94 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     return Object.freeze(results);
   }
 
+  async function querySnapshot(query, { reason = "initial" } = {}) {
+    return await evaluateStateQuery(registry, query, {
+      sourceRuntimeFactory: ({ plan }) => memory.sourceRuntime(
+        plan.query.target,
+        resolveDefaultLink
+      ),
+      reason,
+      now: clock.now
+    });
+  }
+
+  async function watchQuery(query) {
+    let current = await querySnapshot(query);
+    let queued = null;
+    let waiting = null;
+    let closed = false;
+    let evaluating = false;
+    let pendingReason = null;
+
+    const deliver = (next) => {
+      if (waiting) {
+        const resolve = waiting;
+        waiting = null;
+        resolve(next);
+      } else {
+        queued = next;
+      }
+    };
+    const reevaluate = async () => {
+      if (evaluating || closed) return;
+      evaluating = true;
+      try {
+        while (pendingReason !== null && !closed) {
+          const reason = pendingReason;
+          pendingReason = null;
+          const next = await querySnapshot(query, { reason });
+          if (next.envelope.resultRevision !== current.envelope.resultRevision) {
+            current = next;
+            deliver(next);
+          }
+        }
+      } finally {
+        evaluating = false;
+        if (pendingReason !== null && !closed) void reevaluate();
+      }
+    };
+    const unsubscribe = memory.subscribe((reason) => {
+      pendingReason = reason === "source_changed" ? reason : "value_changed";
+      void reevaluate();
+    });
+
+    return Object.freeze({
+      initial: current,
+      next() {
+        if (closed) {
+          throw new FeatureTestRuntimeError("The test query subscription is closed.", {
+            code: "feature_test_query_closed"
+          });
+        }
+        if (queued) {
+          const next = queued;
+          queued = null;
+          return Promise.resolve(next);
+        }
+        if (waiting) {
+          throw new FeatureTestRuntimeError(
+            "Only one pending test query read is supported.",
+            { code: "feature_test_query_read_pending" }
+          );
+        }
+        return new Promise((resolve) => {
+          waiting = resolve;
+        });
+      },
+      close() {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        if (waiting) {
+          const resolve = waiting;
+          waiting = null;
+          resolve(null);
+        }
+        queued = null;
+      }
+    });
+  }
+
   return Object.freeze({
     registry,
     inputError: (platform, name, error) => formatCommandInputError(
@@ -1053,6 +1305,10 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }),
     event,
     clock,
+    query: Object.freeze({
+      snapshot: querySnapshot,
+      watch: watchQuery
+    }),
     links: Object.freeze({
       set(nextLinks) {
         const normalized = normalizedDefaultLinks(nextLinks);
@@ -1061,6 +1317,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
           configuredDefaultLinks.length,
           ...normalized
         );
+        memory.invalidate("source_changed");
       },
       all: () => Object.freeze([...configuredDefaultLinks])
     }),

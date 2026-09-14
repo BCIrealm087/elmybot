@@ -9,7 +9,11 @@ import {
   twitchTestGroup,
   twitchTestModerator
 } from "@elmybot/framework/testing";
-import feature, { normalizeGameSubject } from "../src/feature.js";
+import feature, {
+  currentGameDeathsQuery,
+  fixedGameDeathsQuery,
+  normalizeGameSubject
+} from "../src/feature.js";
 
 function linkedRuntime({ integrationId = "deaths-integration" } = {}) {
   const discordGroup = discordTestGroup({ id: "deaths-guild" });
@@ -21,6 +25,25 @@ function linkedRuntime({ integrationId = "deaths-integration" } = {}) {
     ]
   });
   return { runtime, discordGroup, twitchGroup };
+}
+
+function queryTarget(group) {
+  return { platform: group.platform, groupId: group.id };
+}
+
+function read(exportId, args) {
+  return {
+    read: { feature: "fun.deaths", export: exportId, version: 1 },
+    ...(args ? { arguments: args } : {})
+  };
+}
+
+function deathsQuery(group, bindings, select) {
+  return { version: 1, target: queryTarget(group), bindings, select };
+}
+
+function literalGame(game) {
+  return { game: { literal: game } };
 }
 
 describe("fun.deaths", () => {
@@ -49,6 +72,120 @@ describe("fun.deaths", () => {
         order: "canonical_subject",
         legacyCoverage: "explicit"
       });
+  });
+
+  it("composes all five documented query shapes over standalone state", async () => {
+    const group = discordTestGroup({ id: "deaths-query-standalone" });
+    const moderator = discordTestModerator();
+    const runtime = createFeatureTestRuntime(feature);
+    for (const [game, count] of [["Hades", "3"], ["Dark Souls", "2"], ["Sekiro", "1"]]) {
+      await runtime.discord.command("deaths", {
+        group,
+        actor: moderator,
+        args: { operation: count, game }
+      });
+    }
+    await runtime.discord.command("deaths", {
+      group,
+      actor: moderator,
+      args: { operation: "check", game: "Hades" }
+    });
+
+    const one = await runtime.query.snapshot(fixedGameDeathsQuery(
+      queryTarget(group),
+      "Hades"
+    ));
+    expect(one.envelope.data).toEqual({
+      deaths: {
+        state: "present",
+        value: { game: "Hades", count: 3 }
+      }
+    });
+
+    const three = await runtime.query.snapshot(deathsQuery(group, {
+      hades: read("count", literalGame("Hades")),
+      dark_souls: read("count", literalGame("Dark Souls")),
+      sekiro: read("count", literalGame("Sekiro"))
+    }, {
+      hades: { ref: "hades", path: ["count"] },
+      dark_souls: { ref: "dark_souls", path: ["count"] },
+      sekiro: { ref: "sekiro", path: ["count"] }
+    }));
+    expect(three.envelope.data).toEqual({
+      dark_souls: { state: "present", value: 2 },
+      hades: { state: "present", value: 3 },
+      sekiro: { state: "present", value: 1 }
+    });
+
+    const remembered = await runtime.query.snapshot(deathsQuery(group, {
+      remembered: read("remembered_game")
+    }, { game: { ref: "remembered" } }));
+    expect(remembered.envelope.data.game).toEqual({ state: "present", value: "Hades" });
+
+    const currentQuery = currentGameDeathsQuery(queryTarget(group));
+    const current = await runtime.query.snapshot(currentQuery);
+    expect(current.envelope.data.deaths).toEqual({
+      state: "present",
+      value: { game: "Hades", count: 3 }
+    });
+
+    const collectionQuery = deathsQuery(group, {
+      counts: read("counts")
+    }, { games: { ref: "counts" } });
+    const collection = await runtime.query.snapshot(collectionQuery);
+    expect(collection.envelope.data.games).toEqual({
+      state: "present",
+      value: [
+        { game: "Dark Souls", count: 2 },
+        { game: "Hades", count: 3 },
+        { game: "Sekiro", count: 1 }
+      ]
+    });
+
+    const currentWatch = await runtime.query.watch(currentQuery);
+    await runtime.discord.command("deaths", {
+      group,
+      actor: moderator,
+      args: { operation: "plus", game: "Sekiro" }
+    });
+    expect((await currentWatch.next()).envelope.data.deaths).toEqual({
+      state: "present",
+      value: { game: "Sekiro", count: 2 }
+    });
+    currentWatch.close();
+
+    const collectionWatch = await runtime.query.watch(collectionQuery);
+    await runtime.discord.command("deaths", {
+      group,
+      actor: moderator,
+      args: { operation: "reset", game: "Dark Souls" }
+    });
+    expect((await collectionWatch.next()).envelope.data.games.value).toEqual([
+      { game: "Hades", count: 3 },
+      { game: "Sekiro", count: 2 }
+    ]);
+    collectionWatch.close();
+  });
+
+  it("resolves the same composed count through linked Discord and Twitch views", async () => {
+    const { runtime, discordGroup, twitchGroup } = linkedRuntime({
+      integrationId: "deaths-query-shared"
+    });
+    await runtime.discord.command("deaths", {
+      group: discordGroup,
+      actor: discordTestModerator(),
+      args: { operation: "4", game: "Hades" }
+    });
+
+    const makeQuery = (group) => deathsQuery(group, {
+      count: read("count", literalGame("Hades"))
+    }, { deaths: { ref: "count", path: ["count"] } });
+    const [discord, twitch] = await Promise.all([
+      runtime.query.snapshot(makeQuery(discordGroup)),
+      runtime.query.snapshot(makeQuery(twitchGroup))
+    ]);
+    expect(discord.envelope.data.deaths).toEqual({ state: "present", value: 4 });
+    expect(twitch.envelope.data.deaths).toEqual({ state: "present", value: 4 });
   });
 
   it("asks for a moderator-selected game when invoked without arguments", async () => {

@@ -157,6 +157,15 @@ identity without exposing production registry infrastructure. Its Twitch runtime
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
 
+The test runtime also exposes `runtime.query.snapshot(document)` and
+`runtime.query.watch(document)`. Both use the production version-1 query parser
+and evaluator against in-memory local and effective-shareable state. A watch
+returns its initial evaluation, coalesces ordinary mutations to the latest
+different result through `next()`, follows `runtime.links.set()` source changes,
+and releases interest through `close()`. It does not simulate durable grants,
+alarms, HTTP, or network SSE. See the
+[deaths query proof](state-query-deaths-proof.md#contributor-test-workflow).
+
 The additive test-only `runtime.inputError(platform, commandName, error)`
 formats an existing schema or parser failure using the live adapters' correction
 text, or returns `null` for unrelated errors. Command execution still rejects

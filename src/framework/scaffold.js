@@ -194,10 +194,14 @@ function counterFeatureTemplate(identity, frameworkSource, { shareable }) {
   const shareableDeclaration = shareable
     ? `\n  shareableState: [{\n    id: "score",\n    label: "${counterLabel} score",\n    schemaVersion: 1,\n    collisionSummary: { kind: "presence" }\n  }],`
     : "";
+  const readableScope = shareable
+    ? `{ kind: "effective_shareable", namespace: "score" }`
+    : `{ kind: "group_local" }`;
   return `${frameworkImport([
     "access",
     "defineAction",
     "defineFeature",
+    "defineReadableStateExport",
     "discordActionCommand",
     "discordOption",
     "discordTextResult",
@@ -217,6 +221,28 @@ export const feature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "${identity.featureId}",
   description: "Tracks a ${shareable ? "standalone or linked" : "group-local"} score.",${shareableDeclaration}
+  readableState: [
+    defineReadableStateExport({
+      id: "score",
+      version: 1,
+      label: "${counterLabel} score",
+      description: "The current ${shareable ? "standalone or linked" : "group-local"} score.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: ${readableScope},
+      access: { kind: "operator_grant" },
+      result: {
+        schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        absence: { kind: "default" }
+      },
+      async resolve(ctx) {
+        return {
+          state: "present",
+          value: await ctx.state.boundedCounter("score", "shared")
+        };
+      }
+    })
+  ],
   actions: [
     defineAction({
       kind: ${identity.constantName},
@@ -357,6 +383,47 @@ function protectedCounterTest(identity) {
   });`;
 }
 
+function readableCounterTest(identity, { shareable = false } = {}) {
+  const sourceHandoff = shareable ? `
+    const initialRevision = subscription.initial.envelope.resultRevision;
+    runtime.links.set([defaultTestLink({
+      sourceGroup: group,
+      targetGroup: twitchTestGroup()
+    })]);
+    const handoff = await subscription.next();
+    expect(handoff.envelope.reason).toBe("source_changed");
+    expect(handoff.envelope.resultRevision).not.toBe(initialRevision);
+    expect(handoff.envelope.data.score)
+      .toEqual({ state: "present", value: 0 });
+` : "";
+  return `  it("exposes ordinary mutations through its readable state", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const group = discordTestGroup();
+    const query = {
+      version: 1,
+      target: { platform: "discord", groupId: group.id },
+      bindings: {
+        score: {
+          read: { feature: "${identity.featureId}", export: "score", version: 1 }
+        }
+      },
+      select: { score: { ref: "score" } }
+    };
+    const subscription = await runtime.query.watch(query);
+    expect(subscription.initial.envelope.data.score)
+      .toEqual({ state: "present", value: 0 });
+${sourceHandoff}
+    await runtime.discord.command("${identity.commandName}", {
+      group,
+      actor: discordTestModerator(),
+      args: { operation: "plus" }
+    });
+    expect((await subscription.next()).envelope.data.score)
+      .toEqual({ state: "present", value: 1 });
+    subscription.close();
+  });`;
+}
+
 function localCounterTestTemplate(identity, testingSource, featureSource) {
   return `import { describe, expect, it } from "vitest";
 import feature from "${featureSource}";
@@ -416,6 +483,8 @@ describe("${identity.featureId}", () => {
   });
 
 ${protectedCounterTest(identity)}
+
+${readableCounterTest(identity)}
 });
 `;
 }
@@ -503,6 +572,8 @@ describe("${identity.featureId}", () => {
   });
 
 ${protectedCounterTest(identity)}
+
+${readableCounterTest(identity, { shareable: true })}
 });
 `;
 }

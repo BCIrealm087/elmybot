@@ -46,6 +46,41 @@ export function normalizeGameSubject(game) {
   return Object.freeze({ value: gameIdentity(label), label });
 }
 
+function queryTarget(target) {
+  return { platform: target.platform, groupId: target.groupId };
+}
+
+export function fixedGameDeathsQuery(target, game) {
+  return {
+    version: 1,
+    target: queryTarget(target),
+    bindings: {
+      count: {
+        read: { feature: "fun.deaths", export: "count", version: 1 },
+        arguments: { game: { literal: game } }
+      }
+    },
+    select: { deaths: { ref: "count" } }
+  };
+}
+
+export function currentGameDeathsQuery(target) {
+  return {
+    version: 1,
+    target: queryTarget(target),
+    bindings: {
+      remembered: {
+        read: { feature: "fun.deaths", export: "remembered_game", version: 1 }
+      },
+      current: {
+        read: { feature: "fun.deaths", export: "count", version: 1 },
+        arguments: { game: { ref: "remembered" } }
+      }
+    },
+    select: { deaths: { ref: "current" } }
+  };
+}
+
 function countMessage(game, count) {
   return `${game} deaths: ${count}`;
 }

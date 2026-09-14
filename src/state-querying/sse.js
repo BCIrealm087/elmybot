@@ -543,24 +543,37 @@ export async function pollStateQueryStream(state, env, input) {
       subscriptionId
     );
   }
-  const event = state.storage.sql.exec(
+  const events = state.storage.sql.exec(
     `SELECT sequence, event_type, payload_json
      FROM state_query_stream_history
      WHERE subscription_id = ? AND sequence > ?
-     ORDER BY sequence DESC LIMIT 1`,
+     ORDER BY sequence ASC`,
     subscriptionId,
     afterSequence
-  ).toArray()[0];
-  if (!event) return { event: null };
+  ).toArray();
+  if (events.length === 0) return { event: null };
+  const latest = events.at(-1);
+  const latestResults = new Map();
+  let eventType = latest.event_type;
+  let payload = null;
+  for (const event of events) {
+    const candidate = JSON.parse(event.payload_json);
+    payload = candidate;
+    for (const result of candidate.results ?? []) {
+      latestResults.set(result.queryId, result);
+    }
+    if (event.event_type === "status") eventType = "status";
+  }
+  payload = { ...payload, results: [...latestResults.values()] };
   const generation = state.storage.sql.exec(
     "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
   ).one().generation;
   return {
     event: {
-      sequence: Number(event.sequence),
-      cursor: `sq1.${generation}.${subscriptionId}.${event.sequence}`,
-      eventType: event.event_type,
-      payload: JSON.parse(event.payload_json)
+      sequence: Number(latest.sequence),
+      cursor: `sq1.${generation}.${subscriptionId}.${latest.sequence}`,
+      eventType,
+      payload
     }
   };
 }

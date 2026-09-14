@@ -1,8 +1,8 @@
 # Readable state declarations and subject metadata
 
 Status: readable declarations and metadata implemented by roadmap step 3;
-read-only resolver execution implemented by step 4 on 2026-09-12. Grants,
-HTTP access, and live delivery remain later steps.
+read-only resolver execution implemented by step 4 on 2026-09-12; public grants,
+HTTP/SSE access, and the deaths contributor proof completed through step 10.
 
 ## What this step adds
 
@@ -238,9 +238,7 @@ Implemented now:
 Step 4 additionally binds each declaration to a scope-limited `resolve`
 function. See [`state-query-evaluator.md`](state-query-evaluator.md).
 
-Still deferred:
-
-- grants, authorized discovery, and snapshot HTTP endpoints (step 5);
-- revisions and recoverable notifications (step 6);
-- live dependency and lifecycle observation (steps 7–8); and
-- the public SSE endpoint (step 9).
+The remaining contributor-facing proof and test workflow is recorded in
+[`state-query-deaths-proof.md`](state-query-deaths-proof.md). Grants, authorized
+discovery, snapshots, revisions, lifecycle-aware observation, and SSE were
+implemented by roadmap steps 5–9.

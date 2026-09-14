@@ -466,6 +466,7 @@ explicit catalog-regeneration action.
 - [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
 - [Recoverable state-query change notifications](docs/state-query-notifications.md)
 - [Public state-query SSE delivery](docs/state-query-sse.md)
+- [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

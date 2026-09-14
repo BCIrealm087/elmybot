@@ -96,6 +96,8 @@ describe("Feature scaffold templates", () => {
     expect(shared.featureSource).toContain('supportedOrigins: ["discord", "twitch"]');
     expect(shared.testSource).toContain('twitch.commandText("!hype")');
     expect(local.featureSource).toContain('services: ["state"]');
+    expect(local.featureSource).toContain("defineReadableStateExport");
+    expect(local.featureSource).toContain('scope: { kind: "group_local" }');
     expect(local.featureSource).toContain("modePolicy:");
     expect(local.testSource).toContain("runCapabilityCases");
     expect(local.testSource).toContain("keeps scores local while protecting updates");
@@ -103,11 +105,16 @@ describe("Feature scaffold templates", () => {
     expect(shareable.featureSource).toContain(
       'services: ["shareableState"]'
     );
+    expect(shareable.featureSource).toContain(
+      'scope: { kind: "effective_shareable", namespace: "score" }'
+    );
     expect(shareable.featureSource).not.toContain("adoptLegacyIntegrationState");
     expect(shareable.testSource).toContain("defaultTestLink");
     expect(shareable.testSource).toContain(
       "protects updates and floors the counter at zero"
     );
+    expect(local.testSource).toContain("runtime.query.watch(query)");
+    expect(shareable.testSource).toContain("runtime.query.watch(query)");
     expect(local.testSource).toContain(
       "rejects unsupported operations from raw Twitch text"
     );

@@ -77,8 +77,10 @@ evaluate-and-attach handshake. The observer persists:
 
 The Worker adapter polls this durable history only while its response reader is
 requesting another SSE chunk. A slow reader therefore creates no unbounded
-in-memory queue. When it resumes, the observer returns the newest retained
-complete replacement and intermediate events are coalesced.
+in-memory queue. When it resumes, the observer coalesces bounded history by
+client query ID and returns the newest retained complete replacement for every
+changed query. Intermediate values are discarded without allowing a newer
+event for one multiplexed query to hide another query's latest value.
 
 This is a bounded durable-polling fallback, not the provisional
 hibernating-WebSocket relay. Actual streaming
@@ -136,7 +138,8 @@ drops part of a query.
 Object bindings for initial attachment, complete updates, reconnect after a
 disconnected state change, duplicate and older notification suppression,
 revocation status and closure, multiplexing, admission limits, slow-reader
-coalescing, and lease cleanup.
+coalescing, per-query multiplex recovery, the five composed deaths query shapes,
+and lease cleanup.
 
 Local tests cannot establish edge proxy buffering, browser/OBS behavior,
 geographic latency, actual Durable Object duration, or behavior across a

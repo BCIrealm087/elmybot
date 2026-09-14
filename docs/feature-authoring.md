@@ -395,10 +395,14 @@ Use the smallest rows that apply:
 | Bounded counters | The relevant floor, ceiling, or assignment boundary |
 | Local preferences or state | Isolation between the groups that must remember independently |
 | Shareable state | Isolated standalone groups and two origins whose defaults select the same integration |
+| Readable state | A snapshot or watch through `runtime.query`, followed by an ordinary mutation that changes the selected result |
 | Custom routes or platform options | The relevant missing-route result, emitted effect, or platform-specific response |
 
 The test runtime proves feature composition, parsing, authorization decisions,
-state selection, and returned effects. It does not replace platform-ingress or
+state selection, readable query evaluation, and returned effects. Use
+`runtime.query.snapshot(document)` for one evaluation or
+`await runtime.query.watch(document)` for an initial result plus coalesced
+updates. Close every watch when the test is done. It does not replace platform-ingress or
 durability integration tests. Use the existing Worker suites when changing
 signatures, raw Discord or Twitch payload parsing, SQL migrations, alarms,
 coordinator retries, or real delivery adapters.
@@ -408,6 +412,10 @@ changes them. Collision selection, stale-snapshot retries, revocation forks,
 CSRF, and legacy adoption are covered by the
 [shareable-state lifecycle verification](shareable-state-lifecycle-verification.md),
 not by every command package.
+
+The local- and shareable-counter scaffolds demonstrate the supported readable
+counter declaration and query test. The complete deaths composition proof is
+recorded in [state-query-deaths-proof.md](state-query-deaths-proof.md).
 
 Fixture names do not widen that boundary. `defaultTestLink()` records a
 directional default and integration identity so a feature test can prove state

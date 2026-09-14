@@ -9,6 +9,10 @@ import {
   revokeStateQueryCredential
 } from "../src/state-querying/grant-client.js";
 import { grantPermissionsForExportList } from "../src/state-querying/grants.js";
+import {
+  initializeStateQueryStreamTables,
+  pollStateQueryStream
+} from "../src/state-querying/sse.js";
 import { stateQueryObserverObjectName } from "../src/state-querying/source-notifications.js";
 import { shareableStateRealmStub } from "../src/shareable-state/index.js";
 
@@ -42,21 +46,21 @@ function countQuery(target, game = "Hades") {
   };
 }
 
-async function issue(target) {
+async function issue(target, exports = "fun.deaths:count:v1") {
   return await issueStateQueryGrant(streamEnv, featureRegistry, {
     target,
     permissions: grantPermissionsForExportList(
       featureRegistry,
       target.platform,
-      "fun.deaths:count:v1"
+      exports
     ),
     expiresInSeconds: 3600
   }, { actor: { platform: target.platform, id: "operator" } });
 }
 
-async function setCount(target, value) {
+function servicesFor(target) {
   const selectedGroup = group(target);
-  const services = createFeatureServiceRuntime(streamEnv, createCommandInvocation({
+  return createFeatureServiceRuntime(streamEnv, createCommandInvocation({
     kind: "test.state-query.sse.v1",
     origin: {
       group: selectedGroup,
@@ -64,6 +68,10 @@ async function setCount(target, value) {
     },
     sourceEventId: `discord:sse:${++sequence}`
   })).featureServices;
+}
+
+async function setCount(target, value) {
+  const services = servicesFor(target);
   const scope = await services.shareableState.current(
     "fun.deaths",
     "twitch",
@@ -78,6 +86,43 @@ async function setCount(target, value) {
     initial: 0
   }, "set", value);
   return scope;
+}
+
+async function setGameCount(target, game, value, operation = "set") {
+  const services = servicesFor(target);
+  const scope = await services.shareableState.current(
+    "fun.deaths",
+    "twitch",
+    "game_deaths"
+  );
+  await services.shareableState.boundedCounter("fun.deaths", scope, {
+    name: "game",
+    subject: game.toLowerCase(),
+    subjectLabel: game,
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+    initial: 0
+  }, operation, value);
+  return scope;
+}
+
+async function setRememberedGame(target, game) {
+  await servicesFor(target).state.set("fun.deaths", "last_game", game);
+}
+
+function read(exportId, args) {
+  return {
+    read: { feature: "fun.deaths", export: exportId, version: 1 },
+    ...(args ? { arguments: args } : {})
+  };
+}
+
+function query(target, bindings, select) {
+  return { version: 1, target, bindings, select };
+}
+
+function literal(game) {
+  return { game: { literal: game } };
 }
 
 async function openStream(target, credential, options = {}) {
@@ -109,14 +154,23 @@ function frameData(frame) {
   return JSON.parse(line.slice(6));
 }
 
+async function readQueryResult(reader, queryId, maximumFrames = 5) {
+  for (let index = 0; index < maximumFrames; index += 1) {
+    const frame = frameData(await readFrame(reader));
+    const result = frame.results.find((candidate) => candidate.queryId === queryId);
+    if (result) return result;
+  }
+  throw new Error(`Timed out waiting for query result ${queryId}.`);
+}
+
 function observerStub(target) {
   return streamEnv.STATE_QUERY_OBSERVER.get(streamEnv.STATE_QUERY_OBSERVER.idFromName(
     stateQueryObserverObjectName(env.STATE_QUERY_DEPLOYMENT_ENVIRONMENT, group(target))
   ));
 }
 
-async function drainMutation(target, scope) {
-  for (let round = 0; round < 3; round += 1) {
+async function drainMutation(target, scope, rounds = 3) {
+  for (let round = 0; round < rounds; round += 1) {
     await runInDurableObject(shareableStateRealmStub(streamEnv, scope.realm), async (instance) => {
       await instance.alarm();
     });
@@ -127,7 +181,180 @@ async function drainMutation(target, scope) {
   }
 }
 
+async function drainLocalMutation(target) {
+  const stub = streamEnv.CONFIG.get(streamEnv.CONFIG.idFromName(group(target).key));
+  for (let round = 0; round < 3; round += 1) {
+    await runInDurableObject(stub, async (instance) => {
+      await instance.alarm();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await runInDurableObject(observerStub(target), async (instance) => {
+      await instance.alarm();
+    });
+  }
+}
+
 describe("public state-query SSE", () => {
+  it("coalesces adjacent multiplexed history per query ID", async () => {
+    const target = selectedTarget();
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      initializeStateQueryStreamTables(state);
+      const subscriptionId = "a".repeat(32);
+      const nowMs = Date.now();
+      state.storage.sql.exec(
+        `INSERT INTO state_query_stream_subscriptions
+          (subscription_id, grant_id, query_set_digest, next_sequence,
+           expires_at_ms, created_at_ms, updated_at_ms)
+         VALUES (?, 'grant', 'digest', 4, ?, ?, ?)`,
+        subscriptionId,
+        nowMs + 120_000,
+        nowMs,
+        nowMs
+      );
+      for (const [sequence, results] of [
+        [1, [{ queryId: "first", sequence: 2 }]],
+        [2, [{ queryId: "second", sequence: 3 }]],
+        [3, [{ queryId: "first", sequence: 4 }]]
+      ]) {
+        const payload = JSON.stringify({
+          protocol: "state-query-stream/v1",
+          subscriptionId,
+          results
+        });
+        state.storage.sql.exec(
+          `INSERT INTO state_query_stream_history
+            (subscription_id, sequence, event_type, payload_json,
+             encoded_bytes, created_at_ms)
+           VALUES (?, ?, 'update', ?, ?, ?)`,
+          subscriptionId,
+          sequence,
+          payload,
+          new TextEncoder().encode(payload).byteLength,
+          nowMs
+        );
+      }
+
+      const { event } = await pollStateQueryStream(state, streamEnv, {
+        subscriptionId,
+        afterSequence: 0
+      });
+      expect(event.sequence).toBe(3);
+      expect(event.payload.results).toEqual([
+        { queryId: "first", sequence: 4 },
+        { queryId: "second", sequence: 3 }
+      ]);
+    });
+  });
+
+  it("streams all five deaths query shapes and their dynamic updates", async () => {
+    const target = selectedTarget();
+    await setGameCount(target, "Hades", 3);
+    await setGameCount(target, "Dark Souls", 2);
+    await setGameCount(target, "Sekiro", 1);
+    await setRememberedGame(target, "Hades");
+    const grant = await issue(target, [
+      "fun.deaths:remembered_game:v1",
+      "fun.deaths:count:v1",
+      "fun.deaths:counts:v1"
+    ].join(","));
+    const queries = [
+      {
+        id: "one",
+        query: query(target, { count: read("count", literal("Hades")) }, {
+          deaths: { ref: "count", path: ["count"] }
+        })
+      },
+      {
+        id: "three",
+        query: query(target, {
+          hades: read("count", literal("Hades")),
+          dark_souls: read("count", literal("Dark Souls")),
+          sekiro: read("count", literal("Sekiro"))
+        }, {
+          hades: { ref: "hades", path: ["count"] },
+          dark_souls: { ref: "dark_souls", path: ["count"] },
+          sekiro: { ref: "sekiro", path: ["count"] }
+        })
+      },
+      {
+        id: "remembered",
+        query: query(target, { remembered: read("remembered_game") }, {
+          game: { ref: "remembered" }
+        })
+      },
+      {
+        id: "current",
+        query: query(target, {
+          remembered: read("remembered_game"),
+          current: read("count", { game: { ref: "remembered" } })
+        }, { deaths: { ref: "current" } })
+      },
+      {
+        id: "collection",
+        query: query(target, { counts: read("counts") }, {
+          games: { ref: "counts" }
+        })
+      }
+    ];
+    const response = await openStream(target, grant.credential, { queries });
+    expect(response.status).toBe(200);
+    const reader = response.body.getReader();
+    const initial = frameData(await readFrame(reader));
+    expect(initial.results.map(({ queryId }) => queryId)).toEqual([
+      "one", "three", "remembered", "current", "collection"
+    ]);
+    expect(initial.results[0].result.data.deaths).toEqual({
+      state: "present", value: 3
+    });
+    expect(initial.results[1].result.data).toEqual({
+      dark_souls: { state: "present", value: 2 },
+      hades: { state: "present", value: 3 },
+      sekiro: { state: "present", value: 1 }
+    });
+    expect(initial.results[2].result.data.game).toEqual({
+      state: "present", value: "Hades"
+    });
+    expect(initial.results[3].result.data.deaths).toEqual({
+      state: "present", value: { game: "Hades", count: 3 }
+    });
+    expect(initial.results[4].result.data.games.value).toEqual([
+      { game: "Dark Souls", count: 2 },
+      { game: "Hades", count: 3 },
+      { game: "Sekiro", count: 1 }
+    ]);
+
+    await setRememberedGame(target, "Sekiro");
+    await drainLocalMutation(target);
+    const selectionUpdate = await readQueryResult(reader, "current");
+    expect(selectionUpdate).toEqual(expect.objectContaining({
+      queryId: "current",
+      result: expect.objectContaining({
+        data: {
+          deaths: { state: "present", value: { game: "Sekiro", count: 1 } }
+        }
+      })
+    }));
+
+    const scope = await setGameCount(target, "Dark Souls", undefined, "reset");
+    await drainMutation(target, scope, 6);
+    const collectionUpdate = await readQueryResult(reader, "collection");
+    expect(collectionUpdate).toEqual(expect.objectContaining({
+      queryId: "collection",
+      result: expect.objectContaining({
+        data: {
+          games: {
+            state: "present",
+            value: [
+              { game: "Hades", count: 3 },
+              { game: "Sekiro", count: 1 }
+            ]
+          }
+        }
+      })
+    }));
+    await reader.cancel();
+  }, 10_000);
+
   it("performs an authorized snapshot-and-attach handshake and cleans up", async () => {
     const target = selectedTarget();
     await setCount(target, 7);
