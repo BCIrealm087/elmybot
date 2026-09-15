@@ -23,6 +23,10 @@ import sharedCommandFeatureSource from
 import sharedCommandTestSource from
   "./fixtures/feature-scaffold/shared-command/test/feature.spec.js?raw";
 
+function normalizedSource(value) {
+  return value.replace(/\r\n?/g, "\n").trimEnd();
+}
+
 describe("Feature scaffold templates", () => {
   it("derives stable framework identities from a contributor-friendly slug", () => {
     expect(scaffoldIdentity("fun-hype")).toEqual({
