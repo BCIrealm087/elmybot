@@ -1,6 +1,6 @@
 # State-query release verification and operations
 
-Status: Step 12 implementation under validation. No deployment is recorded here.
+Status: Step 12 development complete and CI-verified on 2026-09-15. No deployment is recorded here.
 The version-1 query, grant, snapshot, streaming, contributor, and browser surfaces
 are implemented. Public streaming ships **disabled in both Wrangler environments**
 until the test rollout below is performed.
@@ -134,6 +134,21 @@ rates and larger mixed query/collection documents in the deployed test stage.
 The browser silence threshold implemented in Step 11 is 60 seconds (the Step 2
 proposal used 45); heartbeats remain 20 seconds and reconnect backoff 1–30 seconds.
 
+The same workload in implementation CI, while the full suite ran, produced:
+
+| CI measurement | 1 subscriber | 20 subscribers |
+| --- | ---: | ---: |
+| Registration plus idle polls | 41 ms | 925 ms |
+| Commit-to-coordinator-result median | 99 ms | 1,101 ms |
+| Sample p95 (maximum of 10 samples) | 278 ms | 1,994 ms |
+| Final queries / source edges / history | 0 / 0 / 0 | 0 / 0 / 0 |
+
+The 20-subscriber CI sample exceeds the provisional one-second p95 objective
+even before edge/browser latency is included. This environment-dependent result
+leaves the service objective unverified; the relative contributions of runner
+capacity and concurrent suite work were not isolated. It reinforces the requirement to measure representative
+deployed load before enabling production subscriptions.
+
 ## Implemented transport cost
 
 The shipped adapter uses durable polling, not the proposed hibernating WebSocket
@@ -249,14 +264,17 @@ success is claimed by this repository release checkpoint.
 ## Validation record
 
 Local validation on 2026-09-15 passed all **43 files / 417 tests** at normal
-Vitest concurrency (28.67 seconds). The first full run exposed the new load
+Vitest concurrency (final run: 29.99 seconds). The first full run exposed the new load
 assertion's one-second default wait; its eventual-delivery check now allows
 five seconds and the complete rerun passed. No production timing threshold was
 relaxed. Lint, API boundaries, workspace/generated-document checks, and JavaScript
 syntax are part of the release gate.
 
-CI must confirm the complete suite, Chromium smoke, lint, syntax, and the
-non-deploying Wrangler build before Step 12 is marked complete. Local browser
-execution remains blocked by Chromium download access in this workspace;
-the supported build and browser gates are CI. Implementation commit and CI
-evidence will be recorded after that run succeeds.
+Implementation commit
+[`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63)
+passed [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829),
+job `104334298977`: 43 files / 417 tests (42.48 seconds), lint and repository
+checks, Chromium smoke, JavaScript syntax, and the non-deploying Wrangler build.
+The completed job log confirms the test count, browser scenarios, and dry-run
+exit; no deployment occurred. Local browser execution remains blocked by Chromium
+download access in this workspace; the supported build and browser gates are CI.

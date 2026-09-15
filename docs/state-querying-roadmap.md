@@ -1,6 +1,7 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–11 are complete.
+Status: development steps 1–12 are complete. Deployment and deployed performance
+verification remain separate rollout gates; public subscriptions default to disabled.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -519,7 +520,11 @@ Any hosting or deployment is handled explicitly as a separate rollout action.
 
 ### 12. Verify, document, and stabilize the release
 
-**Status:** implementation and validation in progress. **Depends on:** steps 1–11.
+**Status:** completed on 2026-09-15. **Depends on:** steps 1–11.
+Implementation commit: [`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63).
+Verified by [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829):
+43 test files / 417 tests, lint and project checks, Chromium smoke, JavaScript
+syntax, and the non-deploying Wrangler build passed.
 
 Acceptance evidence, operational controls, local load results, implemented
 polling costs, compatibility, and test-first rollout/rollback are recorded in
@@ -759,3 +764,21 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   Chromium could not be downloaded in the Work workspace; browser execution
   evidence comes from CI. No deployment or actual OBS smoke is claimed.
   Step 12 remains pending.
+- 2026-09-15: Step 12 completed. The acceptance matrix is mapped to behavioral
+  evidence in [the release guide](state-query-release.md). Retention gaps now
+  resynchronize every multiplexed query, aggregate overflow ends explicitly,
+  and closed or expired subscriptions release stream records and watcher work.
+  Public subscriptions have an environment switch and default to disabled;
+  commands and snapshots remain compatible. Aggregate diagnostics cover leases,
+  lag, retries, handoffs, obsolete notifications, and bounded history without
+  recording credentials, values, or raw query exception messages. Local 1/20-client
+  workloads confirm shared interest, no reevaluation on empty polls, and complete
+  cleanup. The cost model now includes the implemented polling path. API policy,
+  legacy metadata limitations, migration preservation, and test-first rollout
+  and rollback guidance are documented. Implementation commit
+  [`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63)
+  passed all 417 tests across 43 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829).
+  No deployment, actual OBS smoke, production latency, or hibernation/cost
+  certification is claimed; those remain explicit operational rollout gates.
