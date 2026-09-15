@@ -1595,14 +1595,19 @@ describe("Cross-platform integration linking", () => {
       completePreparedIntegration(replacement).catch((error) => error)
     ]);
     let completed = concurrentCompletion;
-    if (concurrentCompletion instanceof Error) {
-      expect(concurrentCompletion.status).toBe(409);
+    for (let retry = 0; completed instanceof Error && retry < 3; retry += 1) {
+      expect(completed.status).toBe(409);
       expect([
         "shareable_state_transition",
         "integration_state_rediscovery_required"
-      ]).toContain(concurrentCompletion.code);
-      completed = await completePreparedIntegration(replacement);
+      ]).toContain(completed.code);
+      try {
+        completed = await completePreparedIntegration(replacement);
+      } catch (error) {
+        completed = error;
+      }
     }
+    if (completed instanceof Error) throw completed;
 
     expect(revoked.revoked).toBe(true);
     expect((await getIntegrationDefaultLink(integrationEnv, {

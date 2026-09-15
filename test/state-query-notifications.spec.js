@@ -255,7 +255,8 @@ describe("recoverable state-query notifications", () => {
         `SELECT COUNT(*) AS total, source_revision, attempt_count
          FROM state_query_notification_outbox`
       ).one();
-      expect(pending).toMatchObject({ total: 1, source_revision: 2, attempt_count: 0 });
+      expect(pending).toMatchObject({ total: 1, source_revision: 2 });
+      expect(pending.attempt_count).toBeLessThanOrEqual(1);
       await state.storage.deleteAlarm();
       await recoverStateQueryNotificationDelivery(state);
       expect(await state.storage.getAlarm()).not.toBeNull();

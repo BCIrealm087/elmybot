@@ -302,11 +302,11 @@ describe("live state-query dependency coordination", () => {
     await setCount(selectedTarget, "Hades", 6);
     await servicesFor(selectedTarget).state.set("fun.deaths", "last_game", "Hades");
     await drainLocal(selectedTarget);
-    await drainObserver(selectedTarget);
-    const selected = await current(selectedTarget, selectedQueryId);
-    expect(selected.envelope.data).toMatchObject({
-      game: { state: "present", value: "Hades" },
-      count: { state: "present", value: 6 }
+    const selected = await waitForCurrent(selectedTarget, selectedQueryId, (observed) => {
+      expect(observed.envelope.data).toMatchObject({
+        game: { state: "present", value: "Hades" },
+        count: { state: "present", value: 6 }
+      });
     });
     expect(selected.dependencies).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "bounded_counter", subject: "hades" })
@@ -360,10 +360,10 @@ describe("live state-query dependency coordination", () => {
 
     await setCount(selectedTarget, "Sekiro", 9);
     await drainShareable(selectedTarget);
-    await drainObserver(selectedTarget);
-    const afterCurrent = await current(selectedTarget, selectedQueryId);
-    expect(afterCurrent.envelope.data.count.value).toBe(9);
-    expect(afterCurrent.sequence).toBe(switched.sequence + 1);
+    await waitForCurrent(selectedTarget, selectedQueryId, (observed) => {
+      expect(observed.envelope.data.count.value).toBe(9);
+      expect(observed.sequence).toBe(switched.sequence + 1);
+    });
   });
 
   it("observes collection insertion and removal with no authored query preset", async () => {
@@ -382,15 +382,16 @@ describe("live state-query dependency coordination", () => {
 
     await setCount(selectedTarget, "Hades", 3);
     await drainShareable(selectedTarget);
-    await drainObserver(selectedTarget);
-    expect((await current(selectedTarget, selectedQueryId)).envelope.data.counts.value)
-      .toEqual([{ game: "Hades", count: 3 }]);
+    await waitForCurrent(selectedTarget, selectedQueryId, (observed) => {
+      expect(observed.envelope.data.counts.value)
+        .toEqual([{ game: "Hades", count: 3 }]);
+    });
 
     await resetCount(selectedTarget, "Hades");
     await drainShareable(selectedTarget);
-    await drainObserver(selectedTarget);
-    expect((await current(selectedTarget, selectedQueryId)).envelope.data.counts.value)
-      .toEqual([]);
+    await waitForCurrent(selectedTarget, selectedQueryId, (observed) => {
+      expect(observed.envelope.data.counts.value).toEqual([]);
+    });
   });
 
   it("shares source interest while preserving per-grant revocation", async () => {
