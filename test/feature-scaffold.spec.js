@@ -152,13 +152,18 @@ describe("Feature scaffold templates", () => {
       { template: "shareable-counter" }
     );
 
-    expect(normalizedSource(minimalFeatureSource)).toBe(normalizedSource(minimal.featureSource));
-    expect(normalizedSource(minimalTestSource)).toBe(normalizedSource(minimal.testSource));
+    expect(normalizedSource(minimalFeatureSource))
+      .toBe(normalizedSource(minimal.featureSource));
+    expect(normalizedSource(minimalTestSource))
+      .toBe(normalizedSource(minimal.testSource));
     expect(normalizedSource(sharedCommandFeatureSource))
       .toBe(normalizedSource(shared.featureSource));
-    expect(normalizedSource(sharedCommandTestSource)).toBe(normalizedSource(shared.testSource));
-    expect(normalizedSource(localCounterFeatureSource)).toBe(normalizedSource(local.featureSource));
-    expect(normalizedSource(localCounterTestSource)).toBe(normalizedSource(local.testSource));
+    expect(normalizedSource(sharedCommandTestSource))
+      .toBe(normalizedSource(shared.testSource));
+    expect(normalizedSource(localCounterFeatureSource))
+      .toBe(normalizedSource(local.featureSource));
+    expect(normalizedSource(localCounterTestSource))
+      .toBe(normalizedSource(local.testSource));
     expect(normalizedSource(shareableCounterFeatureSource))
       .toBe(normalizedSource(shareable.featureSource));
     expect(normalizedSource(shareableCounterTestSource))

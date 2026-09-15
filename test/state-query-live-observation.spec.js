@@ -512,7 +512,7 @@ describe("live state-query dependency coordination", () => {
       }
     );
     await drainBindings();
-    const switched = await waitForCurrent(selectedTarget, "source-handoff", (query) => {
+    await waitForCurrent(selectedTarget, "source-handoff", (query) => {
       expect(query.envelope.data.count.value).toBe(7);
       expect(query.sequence).toBe(attached.sequence + 1);
       expect(query.envelope.bindingRevision).not.toBe(attached.envelope.bindingRevision);

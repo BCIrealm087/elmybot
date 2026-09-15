@@ -1770,6 +1770,7 @@ describe("Cross-platform integration linking", () => {
     const groupKey = `discord:guild:${group.id}`;
     const prefix = uniqueId("revocation-batch");
     const nowMs = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(nowMs);
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
       async (instance, state) => {
