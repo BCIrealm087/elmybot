@@ -1,6 +1,6 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: implementation in progress; steps 1–10 are complete.
+Status: implementation in progress; steps 1–11 are complete.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -182,7 +182,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–10 are complete; steps 11–12 remain pending. Complete the relevant
+Steps 1–11 are complete; step 12 remains pending. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -490,7 +490,12 @@ using documented helpers without depending on persistence internals.
 
 ### 11. Deliver the browser client, discovery flow, and widget example
 
-**Status:** pending. **Depends on:** steps 5, 9–10.
+**Status:** completed on 2026-09-15. **Depends on:** steps 5, 9–10.
+Implementation commit: `8622d5c`.
+
+The same-origin browser client, authorized query setup flow, configurable
+widget, and local/CI/deployment verification boundaries are documented in
+[`state-query-browser.md`](state-query-browser.md).
 
 Provide a small client interface for catalog discovery, read, watch, and
 unsubscribe using the same query descriptor. Handle reconnects, replacement
@@ -732,3 +737,20 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   the Wrangler dry run in
   [CI run 34814540622](https://github.com/BCIrealm087/elmybot/actions/runs/34814540622).
   Steps 11–12 remain pending.
+- 2026-09-15: Step 11 completed. Static browser modules now provide catalog,
+  snapshot, shared/multiplexed watch, reconnect, and unsubscribe APIs. The
+  authorized setup page composes literal, dynamic, projected, and combined
+  queries, previews live results, and copies credential-free widget URLs and
+  integration snippets. The deaths widget supports presentation settings,
+  unselected/stale states, safe text rendering, and explicit access termination.
+  A real Worker test follows secure-session access, remembered-game changes,
+  standalone-to-shared handoff, shared mutations, and revocation through the
+  browser client. Chromium smoke coverage separately verifies the actual UI
+  against a deterministic HTTP/SSE fixture. Implementation commit
+  [`8622d5c`](https://github.com/BCIrealm087/elmybot/commit/8622d5c4e24606db9f1ead94f21edd9b419fa484)
+  passed all 412 tests across 43 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax checks, and the Wrangler dry run in
+  [CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459).
+  Chromium could not be downloaded in the Work workspace; browser execution
+  evidence comes from CI. No deployment or actual OBS smoke is claimed.
+  Step 12 remains pending.

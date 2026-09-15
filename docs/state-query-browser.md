@@ -1,6 +1,6 @@
 # Browser client, query setup, and widgets
 
-Implemented for roadmap step 11. These pages and assets become available when
+Completed for roadmap step 11 on 2026-09-15. These pages and assets become available when
 the Worker is deployed; implementation and CI do not constitute deployment.
 
 ## Setup and OBS workflow
@@ -142,6 +142,9 @@ change for this step.
 
 The Work workspace could not download Chromium from the browser CDN; local
 browser execution is therefore not claimed. CI is the browser gate for this
-step. Deployed proxy behavior, actual OBS interaction, cross-region latency,
+step. [CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459)
+passed the Chromium smoke test, all 412 Vitest tests, lint, syntax checks, and
+the Wrangler dry run for implementation commit `8622d5c`.
+Deployed proxy behavior, actual OBS interaction, cross-region latency,
 and load/cost measurements remain rollout and step-12 evidence. No hosting or
 deployment is performed as part of step 11.
