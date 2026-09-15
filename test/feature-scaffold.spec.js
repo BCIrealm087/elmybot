@@ -148,15 +148,16 @@ describe("Feature scaffold templates", () => {
       { template: "shareable-counter" }
     );
 
-    expect(minimalFeatureSource.trimEnd()).toBe(minimal.featureSource.trimEnd());
-    expect(minimalTestSource.trimEnd()).toBe(minimal.testSource.trimEnd());
-    expect(sharedCommandFeatureSource.trimEnd()).toBe(shared.featureSource.trimEnd());
-    expect(sharedCommandTestSource.trimEnd()).toBe(shared.testSource.trimEnd());
-    expect(localCounterFeatureSource.trimEnd()).toBe(local.featureSource.trimEnd());
-    expect(localCounterTestSource.trimEnd()).toBe(local.testSource.trimEnd());
-    expect(shareableCounterFeatureSource.trimEnd())
-      .toBe(shareable.featureSource.trimEnd());
-    expect(shareableCounterTestSource.trimEnd())
-      .toBe(shareable.testSource.trimEnd());
+    expect(normalizedSource(minimalFeatureSource)).toBe(normalizedSource(minimal.featureSource));
+    expect(normalizedSource(minimalTestSource)).toBe(normalizedSource(minimal.testSource));
+    expect(normalizedSource(sharedCommandFeatureSource))
+      .toBe(normalizedSource(shared.featureSource));
+    expect(normalizedSource(sharedCommandTestSource)).toBe(normalizedSource(shared.testSource));
+    expect(normalizedSource(localCounterFeatureSource)).toBe(normalizedSource(local.featureSource));
+    expect(normalizedSource(localCounterTestSource)).toBe(normalizedSource(local.testSource));
+    expect(normalizedSource(shareableCounterFeatureSource))
+      .toBe(normalizedSource(shareable.featureSource));
+    expect(normalizedSource(shareableCounterTestSource))
+      .toBe(normalizedSource(shareable.testSource));
   });
 });

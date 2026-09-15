@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { featureRegistry } from "../src/features/index.js";
@@ -202,6 +202,16 @@ async function current(selectedTarget, selectedQueryId) {
   })).query;
 }
 
+async function waitForCurrent(selectedTarget, selectedQueryId, assertion) {
+  let observed;
+  await vi.waitFor(async () => {
+    await drainObserver(selectedTarget);
+    observed = await current(selectedTarget, selectedQueryId);
+    assertion(observed);
+  }, { timeout: 5_000, interval: 50 });
+  return observed;
+}
+
 function installIntegration(state, registry, {
   integrationId,
   discord,
@@ -331,11 +341,11 @@ describe("live state-query dependency coordination", () => {
 
     await services.state.set("fun.deaths", "last_game", "Sekiro");
     await drainLocal(selectedTarget);
-    await drainObserver(selectedTarget);
-    const switched = await current(selectedTarget, selectedQueryId);
-    expect(switched.envelope.data).toMatchObject({
-      game: { state: "present", value: "Sekiro" },
-      count: { state: "present", value: 8 }
+    const switched = await waitForCurrent(selectedTarget, selectedQueryId, (query) => {
+      expect(query.envelope.data).toMatchObject({
+        game: { state: "present", value: "Sekiro" },
+        count: { state: "present", value: 8 }
+      });
     });
     expect(switched.dependencies).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "bounded_counter", subject: "sekiro" })
@@ -502,12 +512,11 @@ describe("live state-query dependency coordination", () => {
       }
     );
     await drainBindings();
-    await drainObserver(selectedTarget);
-    const switched = await current(selectedTarget, "source-handoff");
-    expect(switched.envelope.data.count.value).toBe(7);
-    expect(switched.sequence).toBe(attached.sequence + 1);
-    expect(switched.envelope.bindingRevision)
-      .not.toBe(attached.envelope.bindingRevision);
+    const switched = await waitForCurrent(selectedTarget, "source-handoff", (query) => {
+      expect(query.envelope.data.count.value).toBe(7);
+      expect(query.sequence).toBe(attached.sequence + 1);
+      expect(query.envelope.bindingRevision).not.toBe(attached.envelope.bindingRevision);
+    });
     await runInDurableObject(observerStub(selectedTarget), async (_instance, state) => {
       const sources = state.storage.sql.exec(
         `SELECT source_kind, attachment_json
