@@ -404,7 +404,7 @@ describe("Cross-platform integration linking", () => {
     }, integrationEnv);
     expect(unlinkResult.content).toContain("Unlinked integration");
     expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
-  });
+  }, 10_000); // Complete OAuth/link/unlink flow across several Durable Objects.
 
   it("requires the OAuth-derived actor to be the Twitch broadcaster", async () => {
     const group = discordGroup();

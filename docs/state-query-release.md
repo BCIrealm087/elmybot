@@ -278,3 +278,13 @@ checks, Chromium smoke, JavaScript syntax, and the non-deploying Wrangler build.
 The completed job log confirms the test count, browser scenarios, and dry-run
 exit; no deployment occurred. Local browser execution remains blocked by Chromium
 download access in this workspace; the supported build and browser gates are CI.
+
+The documentation checkpoint's [CI run 34955166830](https://github.com/BCIrealm087/elmybot/actions/runs/34955166830)
+passed all state-query cases but hit the existing five-second limit in the full
+invitation/OAuth/activation/refresh/unlink test. That same test passed in 808 ms
+in implementation CI and 118 ms in an isolated local rerun. Only that test now
+has a ten-second limit, matching the already scoped treatment of the oversized
+revocation case. Its assertions, production time budgets, and global test limit
+remain unchanged. The final branch CI must pass before this checkpoint is handed
+back as verified. The follow-up passes all 417 tests locally at normal concurrency
+(30.52 seconds), lint and repository checks, syntax, and diff validation.
