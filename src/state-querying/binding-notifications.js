@@ -1,4 +1,5 @@
 import { logError } from "../common.js";
+import { stateQueryErrorForLog } from "./operations.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import {
   parseGroupKey,
@@ -426,7 +427,7 @@ async function deliverOne(state, env, row, nowMs) {
       sourceGroupKey: row.source_group_key,
       targetPlatform: row.target_platform,
       attempt: Number(row.attempt_count) + 1
-    }, error);
+    }, stateQueryErrorForLog(error));
   }
   state.storage.transactionSync(() => {
     if (delivered) {

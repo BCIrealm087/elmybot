@@ -146,5 +146,8 @@ step. [CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/3
 passed the Chromium smoke test, all 412 Vitest tests, lint, syntax checks, and
 the Wrangler dry run for implementation commit `8622d5c`.
 Deployed proxy behavior, actual OBS interaction, cross-region latency,
-and load/cost measurements remain rollout and step-12 evidence. No hosting or
+and deployed load/cost measurements remain rollout gates. Step 12's local
+measurements and `STATE_QUERY_STREAMS_ENABLED` switch are documented in the
+[release guide](state-query-release.md). Streaming defaults to disabled until
+the test rollout enables it. No hosting or
 deployment is performed as part of step 11.

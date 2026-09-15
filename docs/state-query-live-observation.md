@@ -1,7 +1,7 @@
 # Live state-query dependency coordination
 
 Status: implemented for state-querying roadmap step 8 on 2026-09-13.
-Public browser delivery remains step 9.
+Public delivery is implemented in the [SSE layer](state-query-sse.md).
 
 ## Boundary
 
@@ -12,9 +12,9 @@ group-local, shareable, and effective-binding sources that can invalidate that
 result.
 
 The coordinator is internal infrastructure. Its attach, renew, remove, and get
-operations are available only through Durable Object bindings. Step 8 does not
-add a public HTTP subscription endpoint, cursor contract, SSE framing, or
-connection buffering; step 9 will expose the persisted results to browsers.
+operations are available only through Durable Object bindings. The Step 9 layer
+owns the public HTTP subscription endpoint, cursor contract, SSE framing, and
+connection buffering and exposes these persisted results to browsers.
 
 ## Persisted graph
 

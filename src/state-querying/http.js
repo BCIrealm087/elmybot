@@ -4,6 +4,7 @@ import {
   logError
 } from "../common.js";
 import { featureRegistry } from "../features/index.js";
+import { stateQueryErrorForLog } from "./operations.js";
 import {
   revokeStateQueryCredential,
   StateQueryCredentialError,
@@ -28,6 +29,7 @@ import {
 } from "./query.js";
 import {
   createStateQuerySseResponse,
+  requireStateQueryStreamsEnabled,
   STATE_QUERY_SSE_LIMITS,
   StateQueryStreamError
 } from "./sse.js";
@@ -368,6 +370,7 @@ async function snapshotResponse(request, env, registry) {
 
 async function streamResponse(request, env) {
   if (request.method !== "POST") return plain("Method Not Allowed", 405);
+  requireStateQueryStreamsEnabled(env);
   const { grant } = await authorizedRequest(request, env, { mutates: false });
   const input = await readJson(request, Math.min(
     STATE_QUERY_LIMITS.maxDocumentBytes * STATE_QUERY_SSE_LIMITS.maxQueriesPerConnection,
@@ -467,7 +470,7 @@ export async function handleStateQueryRequest(
       correlationId,
       method: request.method,
       route: url.pathname
-    }, error);
+    }, stateQueryErrorForLog(error));
     return json({
       error: {
         code: "query_source_unavailable",

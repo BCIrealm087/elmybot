@@ -22,6 +22,7 @@ import {
   INTEGRATION_PENDING_TTL_MS,
   integrationCoordinatorStub,
   integrationRegistryStub,
+  IntegrationRegistry,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
   resolvePendingIntegrationState,
@@ -465,6 +466,10 @@ describe("Cross-platform integration linking", () => {
 
   it("cancels a verified pending link idempotently without creating an integration", async () => {
     const prepared = await prepareIntegration();
+    const binding = () => runInDurableObject(integrationRegistryStub(integrationEnv), (_instance, state) =>
+      new IntegrationRegistry(state, integrationEnv).stateQueryBinding(prepared.group, "twitch")
+    );
+    const originalBinding = await binding();
     const verification = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: prepared.reservation.invitationId,
       reservationId: prepared.reservation.reservationId,
@@ -503,6 +508,7 @@ describe("Cross-platform integration linking", () => {
       .toBe(verification.pendingIntegration.integrationId);
     expect((await listIntegrationsForGroup(integrationEnv, prepared.group)).total)
       .toBe(0);
+    expect(await binding()).toEqual(originalBinding);
 
     const refreshed = await worker.fetch(
       new Request("https://example.com/twitch/integrations/pending", {

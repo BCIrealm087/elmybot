@@ -225,5 +225,13 @@ describe("state-query transport cost model", () => {
 			durationCostUsd: 0,
 			totalIncrementalUsd: 0
 		});
+		expect(comparison.durablePolling).toMatchObject({
+			pollRequests: 1_728_000_000,
+			requests: 1_728_270_000,
+			requestCostUsd: 259.20,
+			durationGbSeconds: 432_300,
+			durationCostUsd: 12.50,
+			continuousActivityDurationCostUsd: 137.50
+		});
 	});
 });

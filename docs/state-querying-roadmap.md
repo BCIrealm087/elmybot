@@ -519,7 +519,12 @@ Any hosting or deployment is handled explicitly as a separate rollout action.
 
 ### 12. Verify, document, and stabilize the release
 
-**Status:** pending. **Depends on:** steps 1–11.
+**Status:** implementation and validation in progress. **Depends on:** steps 1–11.
+
+Acceptance evidence, operational controls, local load results, implemented
+polling costs, compatibility, and test-first rollout/rollback are recorded in
+[`state-query-release.md`](state-query-release.md). Deployed measurements remain
+explicit rollout gates; no deployment has been performed.
 
 Run the acceptance matrix below, the full repository suite, and CI's lint,
 syntax, and non-deploying Wrangler build. Add behavioral and failure-recovery

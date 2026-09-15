@@ -8,10 +8,12 @@ import {
   getLiveStateQuery,
   removeLiveStateQuery,
   renewLiveStateQuery,
+  scheduleLiveObservationAlarm,
   STATE_QUERY_LIVE_LIMITS
 } from "./live-observation.js";
 import { canonicalStateQueryJson, stateQueryDigest } from "./query.js";
 import { stateQueryObserverObjectName } from "./source-notifications.js";
+import { recordStateQueryMetric, stateQueryStreamsEnabled } from "./operations.js";
 
 const encoder = new TextEncoder();
 const CLIENT_QUERY_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -35,6 +37,7 @@ export const STATE_QUERY_SSE_LIMITS = Object.freeze({
   maxHistoryBytes: MAX_HISTORY_BYTES,
   maxBufferedBytes: MAX_BUFFERED_BYTES,
   historyRetentionMs: HISTORY_RETENTION_MS,
+  pollIntervalMs: 500,
   heartbeatMs: 20_000
 });
 
@@ -49,6 +52,14 @@ export class StateQueryStreamError extends Error {
 
 function fail(message, options) {
   throw new StateQueryStreamError(message, options);
+}
+
+export function requireStateQueryStreamsEnabled(env) {
+  if (!stateQueryStreamsEnabled(env)) {
+    fail("Public state-query subscriptions are disabled.", {
+      status: 403, code: "state_query_subscriptions_disabled"
+    });
+  }
 }
 
 function target(value) {
@@ -201,7 +212,20 @@ function pruneHistory(state, nowMs) {
 }
 
 function storeEvent(state, subscriptionId, eventType, payload, nowMs) {
-  const serialized = canonicalStateQueryJson(payload);
+  let serialized = canonicalStateQueryJson(payload);
+  if (encoder.encode(serialized).byteLength > MAX_BUFFERED_BYTES) {
+    recordStateQueryMetric(state, "oversized");
+    eventType = "status";
+    payload = {
+      protocol: "state-query-stream/v1",
+      subscriptionId,
+      results: payload.results.map(({ queryId }) => ({
+        queryId, status: "unavailable", reason: "query_limit_exceeded",
+        error: { code: "query_limit_exceeded" }
+      }))
+    };
+    serialized = canonicalStateQueryJson(payload);
+  }
   const bytes = encoder.encode(serialized).byteLength;
   const row = state.storage.sql.exec(
     `UPDATE state_query_stream_subscriptions
@@ -287,6 +311,8 @@ async function removeSubscriptionQueries(state, env, subscriptionId) {
 }
 
 async function registerSocket(state, env, socket, input, connections = []) {
+  requireStateQueryStreamsEnabled(env);
+  await cleanupExpiredStateQueryStreams(state, env);
   const retainedConnections = Number(state.storage.sql.exec(
     `SELECT COUNT(*) AS total FROM state_query_stream_subscriptions
      WHERE expires_at_ms > ? AND subscription_id != ?`,
@@ -334,6 +360,16 @@ async function registerSocket(state, env, socket, input, connections = []) {
     await removeSubscriptionQueries(state, env, subscriptionId);
   }
   const expiresAtMs = Math.min(grant.expiresAtMs, nowMs + CONNECTION_LEASE_SECONDS * 1000);
+  // Authorization/digest work yielded to other registrations. Reserve capacity
+  // again immediately before insertion, with no await between check and write.
+  if (Number(state.storage.sql.exec(
+    `SELECT COUNT(*) AS total FROM state_query_stream_subscriptions
+     WHERE expires_at_ms > ? AND subscription_id != ?`, nowMs, subscriptionId
+  ).one().total) >= MAX_CONNECTIONS) {
+    fail("This group observer has too many stream connections.", {
+      status: 429, code: "state_query_stream_capacity"
+    });
+  }
   state.storage.sql.exec(
     `INSERT INTO state_query_stream_subscriptions
       (subscription_id, grant_id, query_set_digest, next_sequence,
@@ -397,6 +433,7 @@ async function registerSocket(state, env, socket, input, connections = []) {
     subscriptionId,
     results
   }, nowMs);
+  recordStateQueryMetric(state, "registrations");
   safeSend(socket, { type: "ready", subscriptionId, event });
 }
 
@@ -505,6 +542,8 @@ export async function registerPolledStateQueryStream(state, env, input) {
 }
 
 export async function pollStateQueryStream(state, env, input) {
+  requireStateQueryStreamsEnabled(env);
+  recordStateQueryMetric(state, "polls");
   const subscriptionId = input?.subscriptionId;
   const afterSequence = input?.afterSequence;
   if (typeof subscriptionId !== "string" || !SUBSCRIPTION_ID.test(subscriptionId) ||
@@ -512,7 +551,7 @@ export async function pollStateQueryStream(state, env, input) {
     fail("State-query stream cursor is invalid.");
   }
   const subscription = state.storage.sql.exec(
-    `SELECT grant_id, expires_at_ms FROM state_query_stream_subscriptions
+    `SELECT grant_id, expires_at_ms, next_sequence FROM state_query_stream_subscriptions
      WHERE subscription_id = ?`,
     subscriptionId
   ).toArray()[0];
@@ -523,6 +562,10 @@ export async function pollStateQueryStream(state, env, input) {
     });
   }
   const nowMs = Date.now();
+  if (Number(subscription.expires_at_ms) <= nowMs) {
+    await removePolledStateQueryStream(state, env, { subscriptionId });
+    fail("State-query stream lease expired.", { status: 404, code: "state_query_stream_not_found" });
+  }
   if (Number(subscription.expires_at_ms) - nowMs < 60_000) {
     const rows = state.storage.sql.exec(
       `SELECT observer_query_id FROM state_query_stream_queries
@@ -551,7 +594,29 @@ export async function pollStateQueryStream(state, env, input) {
     subscriptionId,
     afterSequence
   ).toArray();
-  if (events.length === 0) return { event: null };
+  // A cursor behind pruned/cleared history must receive every current query,
+  // including quiet queries whose latest event has fallen out of the window.
+  if ((events.length > 0 && Number(events[0].sequence) > afterSequence + 1) ||
+      (events.length === 0 && Number(subscription.next_sequence) - 1 > afterSequence)) {
+    recordStateQueryMetric(state, "resynchronized");
+    const results = state.storage.sql.exec(
+      `SELECT client_query_id, observer_query_id FROM state_query_stream_queries
+       WHERE subscription_id = ? ORDER BY client_query_id`, subscriptionId
+    ).toArray().map((row) => {
+      const query = getLiveStateQuery(state, { queryId: row.observer_query_id }).query;
+      return query ? publicResult(row.client_query_id, query, "resynchronized") : {
+        queryId: row.client_query_id, status: "unavailable", reason: "resynchronized"
+      };
+    });
+    const terminal = results.some((result) => !result.result || result.status === "denied");
+    return { event: storeEvent(state, subscriptionId, terminal ? "status" : "snapshot", {
+      protocol: "state-query-stream/v1", subscriptionId, results
+    }, nowMs) };
+  }
+  if (events.length === 0) {
+    recordStateQueryMetric(state, "emptyPolls");
+    return { event: null };
+  }
   const latest = events.at(-1);
   const latestResults = new Map();
   let eventType = latest.event_type;
@@ -565,6 +630,9 @@ export async function pollStateQueryStream(state, env, input) {
     if (event.event_type === "status") eventType = "status";
   }
   payload = { ...payload, results: [...latestResults.values()] };
+  if (encoder.encode(canonicalStateQueryJson(payload)).byteLength > MAX_BUFFERED_BYTES) {
+    return { event: storeEvent(state, subscriptionId, eventType, payload, nowMs) };
+  }
   const generation = state.storage.sql.exec(
     "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
   ).one().generation;
@@ -582,11 +650,24 @@ export async function removePolledStateQueryStream(state, env, input) {
   const subscriptionId = input?.subscriptionId;
   if (typeof subscriptionId !== "string" || !SUBSCRIPTION_ID.test(subscriptionId)) return;
   await removeSubscriptionQueries(state, env, subscriptionId);
-  state.storage.sql.exec(
-    "UPDATE state_query_stream_subscriptions SET expires_at_ms = ? WHERE subscription_id = ?",
-    Date.now(),
-    subscriptionId
-  );
+  state.storage.sql.exec("DELETE FROM state_query_stream_history WHERE subscription_id = ?", subscriptionId);
+  state.storage.sql.exec("DELETE FROM state_query_stream_subscriptions WHERE subscription_id = ?", subscriptionId);
+  recordStateQueryMetric(state, "closed");
+  // Removing the subscription follows per-query cleanup; recompute its alarm
+  // after the final durable lease has gone as well.
+  await scheduleLiveObservationAlarm(state);
+}
+
+export async function cleanupExpiredStateQueryStreams(state, env) {
+  const rows = state.storage.sql.exec(
+    `SELECT subscription_id FROM state_query_stream_subscriptions
+     WHERE expires_at_ms <= ? OR ? = 0 ORDER BY expires_at_ms LIMIT ?`,
+    Date.now(), stateQueryStreamsEnabled(env) ? 1 : 0, MAX_CONNECTIONS
+  ).toArray();
+  for (const row of rows) {
+    await removePolledStateQueryStream(state, env, { subscriptionId: row.subscription_id });
+    recordStateQueryMetric(state, "expired");
+  }
 }
 
 export async function handleStateQueryStreamMessage(state, env, socket, message) {
@@ -667,6 +748,7 @@ function encodeSse(event) {
 }
 
 export async function createStateQuerySseResponse(env, grant, input) {
+  requireStateQueryStreamsEnabled(env);
   const selectedTarget = target(grant.target);
   const selectedGroup = createPlatformGroupRef({
     platform: selectedTarget.platform,
@@ -699,6 +781,7 @@ export async function createStateQuerySseResponse(env, grant, input) {
   let nextEvent = registered.event;
   let afterSequence = 0;
   let lastDeliveryAtMs = Date.now();
+  let nextPollAtMs = 0;
   let closed = false;
   const close = async () => {
     if (closed) return;
@@ -728,6 +811,9 @@ export async function createStateQuerySseResponse(env, grant, input) {
         }
         let polled;
         try {
+          const delayMs = nextPollAtMs - Date.now();
+          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (closed) return;
           polled = await stub.fetch(
             `https://state-query-observer${STATE_QUERY_STREAM_POLL_PATH}`,
             {
@@ -742,18 +828,20 @@ export async function createStateQuerySseResponse(env, grant, input) {
           controller.close();
           return;
         }
+        if (closed) return;
         if (!polled.ok) {
           await close();
           controller.close();
           return;
         }
         nextEvent = (await polled.json()).event;
+        if (closed) return;
+        nextPollAtMs = nextEvent ? 0 : Date.now() + STATE_QUERY_SSE_LIMITS.pollIntervalMs;
         if (!nextEvent && Date.now() - lastDeliveryAtMs >= STATE_QUERY_SSE_LIMITS.heartbeatMs) {
           controller.enqueue(encoder.encode(": keepalive\n\n"));
           lastDeliveryAtMs = Date.now();
           return;
         }
-        if (!nextEvent) await new Promise((resolve) => setTimeout(resolve, 500));
       }
     },
     async cancel(reason) {

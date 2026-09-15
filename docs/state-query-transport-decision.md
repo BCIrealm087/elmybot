@@ -3,6 +3,14 @@
 Status: accepted for the initial implementation direction on 2026-09-12.
 Scope: roadmap step 2; this is a feasibility decision, not a deployment record.
 
+**Implementation update (Step 12):** Step 9 selected the durable-polling fallback,
+not the proposed WebSocket relay below. The cost script now includes that path;
+the [release guide](state-query-release.md#implemented-transport-cost) records its
+idle request load, local budget measurements, and remaining deployment gates.
+The original relay comparison below is retained as design history, not a claim
+about the shipped topology. The browser's implemented stale threshold is 60
+seconds, and history cleanup/resynchronization follows the [SSE guide](state-query-sse.md).
+
 ## Decision
 
 Keep server-sent events as the public browser API. Do not make a long-lived SSE

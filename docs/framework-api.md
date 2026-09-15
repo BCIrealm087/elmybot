@@ -184,6 +184,16 @@ particular, `internal.js`, registry composition, service runtimes, storage
 clients, definition brands, adapter descriptors, and catalog tooling carry no
 compatibility guarantee for feature authors.
 
+The state-query release preserves API v1, including omitted readable declarations
+and the existing command scope semantics. Its browser client and version-1 HTTP
+query/stream protocols are documented in [state-query-browser.md](state-query-browser.md)
+and [state-query-contract.md](state-query-contract.md). Compatible additions may
+add exports or optional fields; removing existing fields, weakening authorization,
+or changing full-result replacement semantics requires a new protocol version.
+Transport cursors are opaque and may expire; resynchronization remains guaranteed.
+Internal operational controls and diagnostics are not feature or test-kit exports.
+See [release and migration guidance](state-query-release.md).
+
 ## Manifest compatibility
 
 Every feature binds itself to the contract it was authored against:

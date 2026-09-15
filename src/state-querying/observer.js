@@ -14,7 +14,9 @@ import {
 } from "./live-observation.js";
 import { StateQueryCredentialError } from "./grant-client.js";
 import { StateQueryError } from "./query.js";
+import { flushStateQueryMetrics, recordStateQueryLag, recordStateQueryMetric, stateQueryErrorForLog } from "./operations.js";
 import {
+  cleanupExpiredStateQueryStreams,
   initializeStateQueryStreamTables,
   pollStateQueryStream,
   publishStateQueryStreamUpdates,
@@ -273,7 +275,10 @@ function receiveNotification(state, input) {
        WHERE notification_id = ?`,
       notification.id
     ).toArray()[0];
-    if (existing) return { accepted: true, duplicate: true };
+    if (existing) {
+      recordStateQueryMetric(state, "duplicates");
+      return { accepted: true, duplicate: true };
+    }
     if (notification.source.kind === "binding") {
       const authority = state.storage.sql.exec(
         `SELECT binding_revision FROM state_query_observer_binding_authority
@@ -285,6 +290,7 @@ function receiveNotification(state, input) {
         authority &&
         Number(authority.binding_revision) >= notification.revision
       ) {
+        recordStateQueryMetric(state, "obsolete");
         return { accepted: true, duplicate: false, stale: true };
       }
       if (!authority) {
@@ -382,7 +388,11 @@ function receiveNotification(state, input) {
       notification.binding?.reason ?? null
     );
     if (notificationAdvances) {
-      invalidateLiveQueriesForNotification(state, notification, nowMs);
+      recordStateQueryLag(state, notification.committedAtMs);
+      const affected = invalidateLiveQueriesForNotification(state, notification, nowMs);
+      if (affected === 0) recordStateQueryMetric(state, "obsolete");
+    } else {
+      recordStateQueryMetric(state, "obsolete");
     }
     return { accepted: true, duplicate: false };
   });
@@ -473,11 +483,29 @@ export class StateQueryObserverBackend {
   }
 
   async alarm() {
+    await cleanupExpiredStateQueryStreams(this.state, this.env);
     await drainLiveStateQueries(this.state, this.env);
     await publishStateQueryStreamUpdates(this.state);
+    flushStateQueryMetrics(this.state, this.env);
   }
 
   async fetch(request) {
+    try {
+      return await this.handleRequest(request);
+    } catch (error) {
+      // Stream routes also need the sanitized error boundary: letting a raw
+      // transport exception escape would hand its message to platform logging.
+      const correlationId = `state-query-observer:${crypto.randomUUID()}`;
+      logError("state_query.observer_request_failed", { platform: "shared", correlationId },
+        stateQueryErrorForLog(error));
+      return noStoreJson({ error: "State-query service is temporarily unavailable.",
+        code: "query_source_unavailable", correlationId }, 503);
+    } finally {
+      flushStateQueryMetrics(this.state, this.env);
+    }
+  }
+
+  async handleRequest(request) {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_PATH) {
       try {
@@ -569,7 +597,7 @@ export class StateQueryObserverBackend {
         platform: "shared",
         correlationId,
         route: url.pathname
-      }, error);
+      }, stateQueryErrorForLog(error));
       return noStoreJson({ error: "Unknown error.", correlationId }, 500);
     }
   }

@@ -1,4 +1,5 @@
 import { logError } from "../common.js";
+import { stateQueryErrorForLog } from "./operations.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import { stateQueryEnvironment } from "./grant-client.js";
 
@@ -610,7 +611,7 @@ async function deliverOne(state, env, row, nowMs) {
       correlationId: `state-query-notification:${row.notification_id}`,
       sourceKind: row.source_kind,
       attempt: Number(row.attempt_count) + 1
-    }, error);
+    }, stateQueryErrorForLog(error));
   }
   state.storage.transactionSync(() => {
     if (delivered) {

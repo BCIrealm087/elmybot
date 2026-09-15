@@ -391,6 +391,12 @@ copy a `/state-query/widget` browser-source URL. OBS uses its own session;
 enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
 documents the client API, setup flow, and credential-free widget URLs.
 
+Public subscriptions default to disabled in both environments. The
+[state-query release guide](docs/state-query-release.md) documents
+`STATE_QUERY_STREAMS_ENABLED`, aggregate diagnostics, measured local limits,
+the durable-polling cost model, and the test-first rollout/rollback procedure.
+Snapshots and existing commands remain available when streaming is disabled.
+
 ## Project layout
 
 ```text
@@ -464,7 +470,8 @@ explicit catalog-regeneration action.
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
-- [Composable state queries and live subscriptions roadmap (proposed)](docs/state-querying-roadmap.md)
+- [Composable state queries and live subscriptions roadmap](docs/state-querying-roadmap.md)
+- [State-query release verification, operations, and rollout](docs/state-query-release.md)
 - [Public state-query contract](docs/state-query-contract.md)
 - [State-query live transport and cost decision](docs/state-query-transport-decision.md)
 - [Readable state declarations and subject metadata](docs/state-query-readable-state.md)

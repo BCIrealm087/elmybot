@@ -1,4 +1,5 @@
 import { createPlatformGroupRef } from "../integrations/contracts.js";
+import { recordStateQueryMetric } from "./operations.js";
 import { featureRegistry } from "../features/index.js";
 import {
   validateStateQueryGrantReference,
@@ -967,6 +968,7 @@ async function checkDueAuthorizations(state, env, nowMs) {
           denyQuery(state, row.query_id, error.code, Date.now());
           return;
         }
+        recordStateQueryMetric(state, "authorizationRetries");
         state.storage.sql.exec(
           `UPDATE state_query_observer_queries
            SET next_authorization_at_ms = ?, updated_at_ms = ?
@@ -1000,6 +1002,7 @@ function denyQuery(state, selectedQueryId, code, nowMs) {
 }
 
 function retryQuery(state, row, nowMs) {
+  recordStateQueryMetric(state, "retries");
   const attempt = Number(row.attempt_count) + 1;
   const delay = Math.min(
     RETRY_MAX_MS,
@@ -1016,6 +1019,7 @@ function retryQuery(state, row, nowMs) {
 }
 
 async function processQuery(state, env, row) {
+  recordStateQueryMetric(state, "evaluations");
   const previousEnvelope = JSON.parse(row.envelope_json);
   const reason = previousEnvelope.status !== "ready"
     ? "transition_completed"
@@ -1028,7 +1032,7 @@ async function processQuery(state, env, row) {
         Math.ceil((Number(row.lease_expires_at_ms) - Date.now()) / 1000)
       )
     );
-    await evaluateAttachAndSwap(state, env, {
+    const replacement = await evaluateAttachAndSwap(state, env, {
       selectedQueryId: row.query_id,
       grantId: row.grant_id,
       query: JSON.parse(row.query_json),
@@ -1036,6 +1040,9 @@ async function processQuery(state, env, row) {
       selectedLeaseSeconds: remainingSeconds,
       fixedLeaseExpiresAtMs: Number(row.lease_expires_at_ms)
     });
+    if (replacement.envelope.bindingRevision !== previousEnvelope.bindingRevision) {
+      recordStateQueryMetric(state, "handoffs");
+    }
   } catch (error) {
     if (
       error instanceof StateQueryCredentialError ||
@@ -1127,6 +1134,7 @@ export async function cleanupDetachedSources(state, env) {
         );
       }
     } catch {
+      recordStateQueryMetric(state, "detachRetries");
       const attempt = Number(row.attempt_count) + 1;
       const delay = Math.min(
         RETRY_MAX_MS,
@@ -1174,6 +1182,9 @@ export async function scheduleLiveObservationAlarm(state) {
        UNION ALL
        SELECT MIN(lease_expires_at_ms) AS next_at_ms
        FROM state_query_observer_queries
+       UNION ALL
+       SELECT MIN(expires_at_ms) AS next_at_ms
+       FROM state_query_stream_subscriptions
        UNION ALL
        SELECT MIN(next_attempt_at_ms) AS next_at_ms
        FROM state_query_observer_sources WHERE source_state = 'detaching'

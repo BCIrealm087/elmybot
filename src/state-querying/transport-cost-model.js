@@ -43,7 +43,9 @@ export function compareStateQueryTransports({
 	days,
 	connectionsPerClientPerDay = 1,
 	stateChangesPerGroupPerHour,
-	handlerMillisecondsPerChange
+	handlerMillisecondsPerChange,
+	pollIntervalMs = 500,
+	handlerMillisecondsPerPoll = 2
 }) {
 	const connectionRequests = groups
 		* connectionsPerGroup
@@ -64,6 +66,19 @@ export function compareStateQueryTransports({
 		requests,
 		activeSeconds: notificationRequests * handlerMillisecondsPerChange / 1000
 	});
+	// The shipped Worker adapter polls once per reader demand, including when no
+	// value changes. This idle baseline excludes extra polls during active output,
+	// grants, lease renewals, alarms, owner fanout, storage, and public Worker CPU.
+	const pollRequests = groups * connectionsPerGroup * hoursActivePerDay * 3600 * days
+		* (1000 / pollIntervalMs);
+	const polling = pricedDurableObjectUsage({
+		requests: requests + pollRequests,
+		activeSeconds: Math.min(
+			groups * hoursActivePerDay * 3600 * days,
+			(pollRequests * handlerMillisecondsPerPoll +
+				notificationRequests * handlerMillisecondsPerChange) / 1000
+		)
+	});
 
 	return {
 		assumptions: {
@@ -73,14 +88,22 @@ export function compareStateQueryTransports({
 			days,
 			connectionsPerClientPerDay,
 			stateChangesPerGroupPerHour,
-			handlerMillisecondsPerChange
+			handlerMillisecondsPerChange,
+			pollIntervalMs,
+			handlerMillisecondsPerPoll
 		},
 		sharedUsage: {
 			connectionRequests,
 			notificationRequests
 		},
 		directSse,
-		hibernatingWebSocketRelay
+		hibernatingWebSocketRelay,
+		durablePolling: {
+			pollRequests,
+			...polling,
+			// Duration while idle between polls needs a deployed measurement.
+			continuousActivityDurationCostUsd: directSse.durationCostUsd
+		}
 	};
 }
 

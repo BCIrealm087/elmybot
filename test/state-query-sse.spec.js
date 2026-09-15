@@ -15,8 +15,14 @@ import {
 import { grantPermissionsForExportList } from "../src/state-querying/grants.js";
 import {
   initializeStateQueryStreamTables,
-  pollStateQueryStream
+  pollStateQueryStream,
+  publishStateQueryStreamUpdates,
+  registerPolledStateQueryStream,
+  removePolledStateQueryStream,
+  STATE_QUERY_SSE_LIMITS
 } from "../src/state-querying/sse.js";
+import { handleStateQueryRequest } from "../src/state-querying/http.js";
+import { flushStateQueryMetrics, stateQueryOperationalSnapshot } from "../src/state-querying/operations.js";
 import { stateQueryObserverObjectName } from "../src/state-querying/source-notifications.js";
 import { createIntegrationRealmIdentity, requestShareableStateRealm, shareableStateRealmStub } from "../src/shareable-state/index.js";
 
@@ -199,6 +205,198 @@ async function drainLocalMutation(target) {
 }
 
 describe("public state-query SSE", () => {
+  it("disables new and existing subscriptions while keeping snapshots and mutations usable", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const response = await openStream(target, grant.credential);
+    const reader = response.body.getReader();
+    await readFrame(reader);
+    const disabledEnv = { ...streamEnv, STATE_QUERY_STREAMS_ENABLED: "false" };
+    const rejected = await handleStateQueryRequest(new Request("https://example.com/state-query/stream", {
+      method: "POST"
+    }), disabledEnv);
+    expect(rejected.status).toBe(403);
+    expect((await rejected.json()).error.code).toBe("state_query_subscriptions_disabled");
+    await setCount(target, 9);
+    const snapshot = await handleStateQueryRequest(new Request("https://example.com/state-query/snapshot", {
+      method: "POST", headers: { authorization: `Bearer ${grant.credential}`, "content-type": "application/json" },
+      body: JSON.stringify(countQuery(target))
+    }), disabledEnv);
+    expect((await snapshot.json()).data.deaths.value).toBe(9);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const failed = await handleStateQueryRequest(new Request("https://example.com/state-query/client.js"), {
+        ...disabledEnv, BROWSER_ASSETS: { fetch() { throw new Error(`${grant.credential} Hades`); } }
+      });
+      expect(failed.status).toBe(503);
+      expect(log.mock.calls).toHaveLength(1);
+      expect(log.mock.calls[0][0]).not.toContain(grant.credential);
+      expect(log.mock.calls[0][0]).not.toContain("Hades");
+    } finally { log.mockRestore(); }
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      const original = instance.env;
+      try {
+        instance.env = disabledEnv;
+        await instance.alarm();
+        expect(stateQueryOperationalSnapshot(state)).toMatchObject({
+          activeSubscriptions: 0, activeQueries: 0, sourceEdges: 0, historyEvents: 0
+        });
+      } finally { instance.env = original; }
+    });
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  it("resynchronizes every query after retention truncates a slow multiplexed stream", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const response = await openStream(target, grant.credential, { queries: [
+      { id: "busy", query: countQuery(target) }, { id: "quiet", query: countQuery(target, "Celeste") }
+    ] });
+    const reader = response.body.getReader();
+    await readFrame(reader);
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      // Inject committed coordinator replacements to exercise real SQL history
+      // retention independently of notification coalescing.
+      const change = async (id, value) => {
+        const row = state.storage.sql.exec(
+          "SELECT query_id, envelope_json FROM state_query_observer_queries WHERE query_id LIKE ?", `%:${id}`
+        ).one();
+        const envelope = JSON.parse(row.envelope_json);
+        envelope.data.deaths.value = value;
+        state.storage.sql.exec(
+          "UPDATE state_query_observer_queries SET result_sequence = result_sequence + 1, envelope_json = ? WHERE query_id = ?",
+          JSON.stringify(envelope), row.query_id
+        );
+        await publishStateQueryStreamUpdates(state);
+      };
+      await change("quiet", 7);
+      for (let index = 1; index <= 70; index += 1) await change("busy", index);
+      expect(stateQueryOperationalSnapshot(state).historyEvents).toBe(64);
+    });
+    const replacement = frameData(await readFrame(reader));
+    expect(replacement.results.map((result) => [result.queryId, result.result.data.deaths.value]))
+      .toEqual([["busy", 70], ["quiet", 7]]);
+    expect(replacement.results.every((result) => result.reason === "resynchronized")).toBe(true);
+    await reader.cancel();
+  });
+
+  it("ends an oversized aggregate result and removes expired stream records", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const response = await openStream(target, grant.credential);
+    const reader = response.body.getReader();
+    await readFrame(reader);
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      const row = state.storage.sql.exec("SELECT query_id, envelope_json FROM state_query_observer_queries").one();
+      const envelope = JSON.parse(row.envelope_json);
+      envelope.data.padding = { state: "present", value: "x".repeat(256 * 1024) };
+      state.storage.sql.exec(
+        "UPDATE state_query_observer_queries SET result_sequence = result_sequence + 1, envelope_json = ?",
+        JSON.stringify(envelope)
+      );
+      await publishStateQueryStreamUpdates(state);
+    });
+    const terminal = frameData(await readFrame(reader));
+    expect(terminal.results[0].error.code).toBe("query_limit_exceeded");
+    expect(JSON.stringify(terminal).length).toBeLessThan(1024);
+    expect((await reader.read()).done).toBe(true);
+    // Abrupt disconnect: no Worker cancellation call reaches the observer.
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      await registerPolledStateQueryStream(state, streamEnv, {
+        target, grantId: grant.grant.id, queries: [{ id: "abandoned", query: countQuery(target) }]
+      });
+      state.storage.sql.exec("UPDATE state_query_stream_subscriptions SET expires_at_ms = 0");
+      await instance.alarm();
+      expect(stateQueryOperationalSnapshot(state)).toMatchObject({
+        activeSubscriptions: 0, activeQueries: 0, sourceEdges: 0, historyEvents: 0
+      });
+      expect(state.storage.sql.exec("SELECT COUNT(*) AS total FROM state_query_stream_queries").one().total).toBe(0);
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+  });
+
+  it.each([1, 20])("measures bounded idle and active work with %i subscribers", async (clients) => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const scope = await setCount(target, 0);
+    const registrations = [];
+    const started = performance.now();
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      for (let index = 0; index < clients; index += 1) {
+        registrations.push(await registerPolledStateQueryStream(state, streamEnv, {
+          target, grantId: grant.grant.id, queries: [{ id: "count", query: countQuery(target) }]
+        }));
+      }
+      const before = stateQueryOperationalSnapshot(state);
+      expect(before).toMatchObject({ activeSubscriptions: clients, activeQueries: clients, sourceEdges: 2 });
+      for (let round = 0; round < 5; round += 1) {
+        for (const registration of registrations) {
+          expect(await pollStateQueryStream(state, streamEnv, {
+            subscriptionId: registration.subscriptionId, afterSequence: registration.event.sequence
+          })).toEqual({ event: null });
+        }
+      }
+      const idle = stateQueryOperationalSnapshot(state);
+      expect(idle.counters.emptyPolls).toBe(5 * clients);
+      expect(idle.counters.evaluations ?? 0).toBe(before.counters.evaluations ?? 0);
+      expect(idle.historyBytes).toBe(before.historyBytes);
+      if (clients === 20) await expect(registerPolledStateQueryStream(state, streamEnv, {
+        target, grantId: grant.grant.id, queries: [{ id: "excess", query: countQuery(target) }]
+      })).rejects.toMatchObject({ code: "state_query_stream_capacity" });
+    });
+    const registrationAndIdleMs = performance.now() - started;
+    const latencies = [];
+    for (let value = 1; value <= 10; value += 1) {
+      await setCount(target, value);
+      const committed = performance.now();
+      await drainMutation(target, scope, 1);
+      await vi.waitFor(async () => {
+        await runInDurableObject(observerStub(target), async (instance, state) => {
+          await instance.alarm();
+          for (const registration of registrations) {
+            const result = await pollStateQueryStream(state, streamEnv, {
+              subscriptionId: registration.subscriptionId, afterSequence: 0
+            });
+            expect(result.event.payload.results[0].result.data.deaths.value).toBe(value);
+          }
+        });
+      }, { timeout: 5000, interval: 50 });
+      latencies.push(performance.now() - committed);
+    }
+    const report = await runInDurableObject(observerStub(target), async (_instance, state) => {
+      const active = stateQueryOperationalSnapshot(state);
+      expect(active.historyEvents).toBeLessThanOrEqual(clients * STATE_QUERY_SSE_LIMITS.maxHistoryEvents);
+      expect(active.historyBytes).toBeLessThanOrEqual(clients * STATE_QUERY_SSE_LIMITS.maxHistoryBytes);
+      // Instrumentation admits only aggregate counters, even if a caller tries
+      // to smuggle private values through the environment.
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+      try {
+        flushStateQueryMetrics(state, { STATE_QUERY_DIAGNOSTICS: "true", credential: grant.credential });
+        const message = log.mock.calls[0][0];
+        expect(message).not.toContain(grant.credential);
+        expect(message).not.toContain(target.groupId);
+        expect(message).not.toContain("Hades");
+        expect(JSON.parse(message).activeSubscriptions).toBe(clients);
+      } finally { clock.mockRestore(); log.mockRestore(); }
+      for (const registration of registrations) {
+        await removePolledStateQueryStream(state, streamEnv, registration);
+      }
+      expect(stateQueryOperationalSnapshot(state)).toMatchObject({
+        activeSubscriptions: 0, activeQueries: 0, sourceEdges: 0, historyBytes: 0
+      });
+      expect(await state.storage.getAlarm()).toBeNull();
+      latencies.sort((a, b) => a - b);
+      return {
+        clients, mutations: 10, idlePolls: clients * 5, registrationAndIdleMs,
+        localDeliveryP50Ms: latencies[4], localDeliveryP95Ms: latencies[9],
+        peakHistoryEvents: active.historyEvents, peakHistoryBytes: active.historyBytes,
+        finalActiveQueries: 0, finalSourceEdges: 0
+      };
+    });
+    console.log("state-query-release-load", JSON.stringify(report));
+  }, 30_000);
+
   it("runs the browser client through secure session, game changes, and a real realm handoff", async () => {
     const target = selectedTarget();
     await setRememberedGame(target, "Hades");

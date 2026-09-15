@@ -4,6 +4,9 @@ Status: implemented for state-querying roadmap step 9 on 2026-09-14.
 
 The supported browser client, query setup page, and OBS widget are documented
 in [state-query-browser.md](state-query-browser.md).
+Public streaming is enabled only with `STATE_QUERY_STREAMS_ENABLED="true"`.
+Both checked-in environments default to false; see the
+[release controls and rollout guide](state-query-release.md).
 
 ## Public surface
 
@@ -83,7 +86,9 @@ requesting another SSE chunk. A slow reader therefore creates no unbounded
 in-memory queue. When it resumes, the observer coalesces bounded history by
 client query ID and returns the newest retained complete replacement for every
 changed query. Intermediate values are discarded without allowing a newer
-event for one multiplexed query to hide another query's latest value.
+event for one multiplexed query to hide another query's latest value. If history
+was truncated or cleared after the reader's cursor, a fresh full snapshot includes
+every query, including quiet queries whose latest update was pruned.
 
 This is a bounded durable-polling fallback, not the provisional
 hibernating-WebSocket relay. Actual streaming
@@ -91,8 +96,8 @@ tests showed that the local Cloudflare runtime delivered the initial relay
 message but did not reliably deliver later observer WebSocket messages through
 the regular Worker's returned SSE stream. The fallback is selected so Step 9
 does not certify an unproven relay. It keeps the same public SSE contract and
-bounds polling to at most two short observer requests per second while a client
-is actively waiting for data, but it can consume materially more requests than
+bounds empty polling to two short observer requests per second while a client
+is waiting for data (active deliveries add requests), but it can consume materially more requests than
 the proposed hibernating relay. A separately deployed experiment may replace
 the internal adapter with hibernating WebSockets or direct observer-owned SSE
 without changing clients.
@@ -104,10 +109,12 @@ sequence. They are ordering hints, never credentials. Invalid, unknown,
 expired, wrong-query, wrong-grant, or obsolete-source recovery input produces a
 new authorized subscription and a `resynchronized` snapshot.
 
-Graceful cancellation requests immediate observer cleanup. If the client or
+Graceful cancellation removes the graph, stream mappings, subscription, and
+history. If the client or
 runtime disappears before that request completes, the active query's durable
 lease expires within 120 seconds; the observer alarm removes its graph edges
-and unregisters orphaned owner watchers. Polling renews a healthy subscription
+and unregisters orphaned owner watchers, then removes expired stream records.
+Polling renews a healthy subscription
 before half of that lease has elapsed. Grant authorization is independently
 rechecked every 30 seconds and on reevaluation.
 
@@ -127,6 +134,7 @@ state is held only in the public Worker.
 | Recovery bytes per subscription | 256 KiB |
 | Event retention | 5 minutes |
 | Buffered public output | No more than one requested complete event |
+| Aggregate payload | 256 KiB; larger output ends with `query_limit_exceeded` |
 | Query lease | 120 seconds, renewed before 60 seconds remain |
 | Heartbeat | 20 seconds |
 | Empty-result polling interval | 500 ms |
@@ -142,7 +150,9 @@ Object bindings for initial attachment, complete updates, reconnect after a
 disconnected state change, duplicate and older notification suppression,
 revocation status and closure, multiplexing, admission limits, slow-reader
 coalescing, per-query multiplex recovery, the five composed deaths query shapes,
-and lease cleanup.
+and lease cleanup. Step 12 adds retention-gap resynchronization, aggregate
+overflow, disabled-stream operation, privacy-safe diagnostics, and measured
+1/20-subscriber workloads; see [release evidence](state-query-release.md).
 
 Local tests cannot establish edge proxy buffering, browser/OBS behavior,
 geographic latency, actual Durable Object duration, or behavior across a

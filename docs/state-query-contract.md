@@ -1,13 +1,13 @@
 # Public state-query contract
 
-Status: completed design contract for state-querying step 1; implementation is
-pending.
+Status: version 1 implemented through state-querying steps 1–11; Step 12 release
+verification and rollout requirements are in [state-query-release.md](state-query-release.md).
 
 This document defines the first-version public meaning of readable state,
 composable queries, snapshots, and live results. It is normative for subsequent
-state-querying work. Exact JavaScript helper names, HTTP route names, storage
-tables, and transport placement may be chosen in later steps, but they must
-preserve this contract.
+state-querying work. The implemented contributor helpers, HTTP routes, and
+browser API are described in their linked guides. Storage tables and transport
+placement remain internal and must preserve this contract.
 
 The existing command, feature-state, and shareable-state contracts remain in
 force. In particular, a query is a read-only observation from one platform
@@ -180,9 +180,9 @@ defaults select the same integration.
 Changing an unrelated route or completing a nondefault link does not change a
 query source. Pending, cancelled, and expired links do not own readable state.
 
-### Proposed deaths exports
+### Implemented deaths exports
 
-The deaths feature is the first proof, with these proposed public semantics:
+The deaths feature is the first proof, with these public semantics:
 
 | Export | Kind and ownership | Present result |
 | --- | --- | --- |
@@ -194,10 +194,10 @@ The `game` parameter uses the deaths feature's existing display and identity
 normalization. Query implementation must reuse that domain policy.
 
 Existing bounded-counter storage hashes subjects and cannot recover their
-original game names. Step 3 must add ownership-preserving subject metadata and
-define legacy coverage. Until that migration exists, the `counts` export is
-proposed rather than available; fixed-game `count` lookups must preserve
-existing counts.
+original game names. Step 3 added ownership-preserving subject metadata and
+explicit legacy coverage. The `counts` export fails explicitly when historical
+rows lack labels; exact `count` lookups preserve those existing counts. See
+[readable state and legacy metadata](state-query-readable-state.md).
 
 For deaths, a game is a member of `counts` exactly while its counter row is
 materialized. A materialized zero remains a member; `reset` removes the row
@@ -577,8 +577,9 @@ operator may return more specific catalog errors.
 
 ## Complete examples
 
-The examples use the proposed deaths exports and omit grant transport. They
-describe logical behavior, not currently available endpoints.
+The examples use the implemented deaths exports and omit grant transport.
+Submit these documents through the [snapshot API](state-query-http.md) or as
+named queries through the [SSE API](state-query-sse.md).
 
 ### 1. Direct local value
 
