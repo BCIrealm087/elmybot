@@ -2,25 +2,32 @@
 export function createStateQueryClient({
   baseUrl = globalThis.location?.origin,
   fetch: request = globalThis.fetch.bind(globalThis),
+  openWebSocket = (url) => new globalThis.WebSocket(url),
   retryMs = 1000,
-  heartbeatTimeoutMs = 60_000
+  heartbeatMs = 30_000,
+  heartbeatTimeoutMs = 90_000
 } = {}) {
   const base = new URL(baseUrl);
   if (base.username || base.password || !/^https?:$/.test(base.protocol)) {
     throw new Error("A valid HTTP origin is required.");
   }
+  const socketUrl = new URL("/state-query/socket", base.origin);
+  socketUrl.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   const entries = new Map();
   let serial = 0;
   let epoch = 0;
-  let controller = null;
-  let activeReader = null;
+  let activeSocket = null;
   let timer = null;
   let cursor = null;
+  let subscriptionId = null;
   let closed = false;
   let scheduled = false;
   let running = Promise.resolve();
   const encoder = new TextEncoder();
   const maxFrameBytes = 300 * 1024;
+  const protocol = "state-query-socket/v1";
+  const ping = "state-query-ping/v1";
+  const pong = "state-query-pong/v1";
   const canonical = (value) => {
     if (Array.isArray(value)) return value.map(canonical);
     if (value && typeof value === "object") {
@@ -55,19 +62,18 @@ export function createStateQueryClient({
   }
   function stop() {
     epoch += 1;
-    const previousController = controller;
-    const previousReader = activeReader;
-    activeReader = null;
-    controller = null;
-    if (previousReader) {
-      void previousReader.cancel().catch(() => {}).then(() => previousController?.abort());
-    } else previousController?.abort();
+    const socket = activeSocket;
+    activeSocket = null;
     clearTimeout(timer);
     timer = null;
+    if (socket && socket.readyState < 2) {
+      try { socket.close(1000, "Client reconfigured"); } catch { /* already disconnected */ }
+    }
   }
   function restart() {
     stop();
     cursor = null;
+    subscriptionId = null;
     if (scheduled || closed || entries.size === 0) return;
     scheduled = true;
     queueMicrotask(() => {
@@ -77,111 +83,178 @@ export function createStateQueryClient({
   }
   async function connect(generation, attempt) {
     if (closed || generation !== epoch || entries.size === 0) return;
-    const active = new AbortController();
-    controller = active;
     status({ state: attempt ? "reconnecting" : "connecting", stale: true });
-    let reader;
+    let socket;
     let watchdog;
+    let heartbeat;
     let receivedSnapshot = false;
-    const armWatchdog = () => {
+    let lastEventSequence = 0;
+    let serverError = null;
+    const sequences = new Map();
+    const armWatchdog = (reject) => {
       clearTimeout(watchdog);
-      watchdog = setTimeout(() => active.abort(), heartbeatTimeoutMs);
+      watchdog = setTimeout(() => {
+        try { socket?.close(1012, "Peer became stale"); } catch { /* already disconnected */ }
+        reject(failure("Socket became stale.", "disconnected", false));
+      }, heartbeatTimeoutMs);
+    };
+    const send = (value) => {
+      if (socket?.readyState !== 1) throw failure("Socket disconnected.", "disconnected", false);
+      socket.send(typeof value === "string" ? value : JSON.stringify(value));
+    };
+    const acknowledge = (event) => send({ protocol, type: "ack", cursor: event.cursor });
+    const acceptEvent = (message) => {
+      if (!message.event || typeof message.event !== "object" || Array.isArray(message.event)) {
+        throw failure("Invalid socket event.", "client_protocol_error");
+      }
+      const event = message.event;
+      if (!Number.isSafeInteger(event.sequence) || event.sequence < 1 ||
+          typeof event.cursor !== "string" || !event.cursor || event.cursor.length > 256 ||
+          !["snapshot", "update", "status"].includes(event.eventType)) {
+        throw failure("Invalid socket event.", "client_protocol_error");
+      }
+      const payload = event.payload;
+      if (!payload || typeof payload !== "object" ||
+          payload.protocol !== "state-query-stream/v1" ||
+          typeof payload.subscriptionId !== "string" || !payload.subscriptionId ||
+          !Array.isArray(payload.results)) {
+        throw failure("Invalid socket result.", "client_protocol_error");
+      }
+      if (!receivedSnapshot && event.eventType !== "snapshot" && event.eventType !== "status") {
+        throw failure("A replacement snapshot is required.", "client_protocol_error");
+      }
+      if (event.sequence <= lastEventSequence) {
+        acknowledge(event);
+        return;
+      }
+      if (event.eventType !== "snapshot" && subscriptionId &&
+          payload.subscriptionId !== subscriptionId) {
+        throw failure("Socket subscription changed without a snapshot.", "client_protocol_error");
+      }
+      if (event.eventType === "snapshot") {
+        const ids = new Set(payload.results.map((result) => result?.queryId));
+        if ([...entries.values()].some((entry) => !ids.has(entry.id))) {
+          throw failure("Incomplete replacement snapshot.", "client_protocol_error");
+        }
+        receivedSnapshot = true;
+        sequences.clear();
+        attempt = 0;
+      }
+      for (const result of payload.results) {
+        if (!result || typeof result !== "object" || typeof result.queryId !== "string") {
+          throw failure("Invalid socket result.", "client_protocol_error");
+        }
+        const entry = [...entries.values()].find((candidate) => candidate.id === result.queryId);
+        if (!entry) continue;
+        if (event.eventType !== "status" &&
+            (!Number.isSafeInteger(result.sequence) || result.sequence < 1)) {
+          throw failure("Invalid result sequence.", "client_protocol_error");
+        }
+        if (event.eventType !== "status" && result.sequence <= (sequences.get(entry.id) ?? 0)) continue;
+        if (event.eventType !== "status") sequences.set(entry.id, result.sequence);
+        entry.result = result;
+        notify(entry, "onResult", result);
+      }
+      lastEventSequence = event.sequence;
+      cursor = event.cursor;
+      subscriptionId = payload.subscriptionId;
+      acknowledge(event);
+      if (event.eventType === "status") {
+        throw failure("Subscription ended. Check or replace the read grant.",
+          payload.results.find((result) => result.error)?.error.code ?? "subscription_ended");
+      }
+      status({ state: "live", stale: false });
     };
     try {
-      armWatchdog();
-      const response = await http("stream", {
-        method: "POST", signal: active.signal,
-        headers: { "content-type": "application/json", ...(cursor ? { "Last-Event-ID": cursor } : {}) },
-        body: JSON.stringify({ queries: [...entries.values()].map(({ id, query }) => ({ id, query })) })
-      });
-      if (generation !== epoch) { await response.body?.cancel(); return; }
-      if (!response.headers.get("content-type")?.startsWith("text/event-stream") || !response.body) {
-        throw failure("Expected an SSE response.", "client_protocol_error");
+      socket = await openWebSocket(socketUrl.href);
+      if (!socket || typeof socket.addEventListener !== "function") {
+        throw failure("A WebSocket connection is unavailable.", "client_protocol_error");
       }
-      reader = response.body.getReader();
-      activeReader = reader;
-      // Some stream implementations report cancellation through closed as well as read().
-      void reader.closed.catch(() => {});
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let line = "";
-      let eventType = "message";
-      let eventId = "";
-      let data = [];
-      let frameBytes = 0;
-      let pendingCR = false;
-      const sequences = new Map();
-      const acceptLine = () => {
-        if (line === "") {
-          if (data.length) {
-            if (!["snapshot", "update", "status"].includes(eventType)) {
-              throw failure("Unknown stream event.", "client_protocol_error");
+      if (closed || generation !== epoch) {
+        try { socket.close(1000, "Obsolete connection"); } catch { /* disconnected */ }
+        return;
+      }
+      activeSocket = socket;
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        let opened = false;
+        const settle = (operation, value) => {
+          if (settled) return;
+          settled = true;
+          operation(value);
+        };
+        const onOpen = () => {
+          if (opened || settled) return;
+          opened = true;
+          try {
+            send({
+              protocol,
+              type: "register",
+              queries: [...entries.values()].map(({ id, query }) => ({ id, query })),
+              ...(subscriptionId ? { subscriptionId } : {}),
+              ...(cursor ? { cursor } : {})
+            });
+            armWatchdog((error) => settle(reject, error));
+            heartbeat = setInterval(() => {
+              try { send(ping); } catch (error) { settle(reject, error); }
+            }, heartbeatMs);
+          } catch (error) { settle(reject, error); }
+        };
+        const onMessage = (event) => {
+          if (settled) return;
+          armWatchdog((error) => settle(reject, error));
+          if (event.data === pong) return;
+          try {
+            if (typeof event.data !== "string" || encoder.encode(event.data).byteLength > maxFrameBytes) {
+              throw failure("Socket frame exceeds the limit.", "client_frame_limit");
             }
-            const payload = JSON.parse(data.join("\n"));
-            if (payload.protocol !== "state-query-stream/v1" || !Array.isArray(payload.results)) {
-              throw failure("Invalid stream result.", "client_protocol_error");
+            const message = JSON.parse(event.data);
+            if (!message || typeof message !== "object" || message.protocol !== protocol) {
+              throw failure("Invalid socket protocol.", "client_protocol_error");
             }
-            if (!receivedSnapshot && eventType !== "snapshot" && eventType !== "status") {
-              throw failure("A replacement snapshot is required.", "client_protocol_error");
+            if (message.type === "error") {
+              serverError = message.error;
+              return;
             }
-            if (eventType === "snapshot") {
-              const ids = new Set(payload.results.map((result) => result.queryId));
-              if ([...entries.values()].some((entry) => !ids.has(entry.id))) {
-                throw failure("Incomplete replacement snapshot.", "client_protocol_error");
-              }
-              receivedSnapshot = true;
-              sequences.clear();
-              attempt = 0;
+            if (message.type !== "event") {
+              throw failure("Unknown socket message.", "client_protocol_error");
             }
-            for (const result of payload.results) {
-              const entry = [...entries.values()].find((candidate) => candidate.id === result.queryId);
-              if (!entry) continue;
-              if (eventType !== "status" && (!Number.isSafeInteger(result.sequence) || result.sequence < 1)) {
-                throw failure("Invalid result sequence.", "client_protocol_error");
-              }
-              if (result.sequence <= (sequences.get(entry.id) ?? 0)) continue;
-              sequences.set(entry.id, result.sequence);
-              entry.result = result;
-              notify(entry, "onResult", result);
-            }
-            if (eventId.length <= 256) cursor = eventId || cursor;
-            if (eventType === "status") {
-              throw failure("Subscription ended. Check or replace the read grant.",
-                payload.results.find((result) => result.error)?.error.code ?? "subscription_ended");
-            }
-            status({ state: "live", stale: false });
+            acceptEvent(message);
+          } catch (error) {
+            const acceptedError = error instanceof SyntaxError
+              ? failure("Invalid socket message.", "client_protocol_error")
+              : error;
+            settle(reject, acceptedError);
+            try {
+              const closeCode = acceptedError.code === "client_frame_limit"
+                ? 1009
+                : acceptedError.code === "client_protocol_error" ? 1002 : 1000;
+              socket.close(closeCode, closeCode === 1009
+                ? "Message too large"
+                : closeCode === 1002 ? "Protocol error" : "Subscription ended");
+            } catch { /* disconnected */ }
           }
-          data = []; eventType = "message"; eventId = ""; frameBytes = 0;
-        } else if (!line.startsWith(":")) {
-          const colon = line.indexOf(":");
-          const field = colon < 0 ? line : line.slice(0, colon);
-          const raw = colon < 0 ? "" : line.slice(colon + 1);
-          const value = raw.startsWith(" ") ? raw.slice(1) : raw;
-          if (field === "data") data.push(value);
-          if (field === "event") eventType = value;
-          if (field === "id" && !value.includes("\0")) eventId = value;
-        }
-        line = "";
-      };
-      while (!closed && generation === epoch) {
-        const chunk = await reader.read();
-        if (generation !== epoch) return;
-        if (chunk.done) throw failure("Stream disconnected.", "disconnected", false);
-        armWatchdog();
-        buffer = decoder.decode(chunk.value, { stream: true });
-        // Process incrementally: neither an unterminated line nor a frame can grow without a bound.
-        for (const character of buffer) {
-          if (pendingCR && character === "\n") { pendingCR = false; continue; }
-          pendingCR = false;
-          frameBytes += encoder.encode(character).byteLength;
-          if (frameBytes > maxFrameBytes) throw failure("Stream frame exceeds the limit.", "client_frame_limit");
-          if (character === "\r" || character === "\n") {
-            acceptLine();
-            pendingCR = character === "\r";
-            if (generation !== epoch) return;
-          } else line += character;
-        }
-      }
+        };
+        const onClose = (event) => {
+          if (closed || generation !== epoch) return settle(resolve);
+          const terminal = [1002, 1008, 1009].includes(event.code);
+          settle(reject, failure(
+            serverError?.message ?? "Socket disconnected.",
+            serverError?.code ?? (terminal ? "socket_policy_violation" : "disconnected"),
+            terminal
+          ));
+        };
+        const onError = () => {
+          settle(reject, failure("Socket disconnected.", "disconnected", false));
+          try { socket.close(); } catch { /* disconnected */ }
+        };
+        socket.addEventListener("open", onOpen, { once: true });
+        socket.addEventListener("message", onMessage);
+        socket.addEventListener("close", onClose, { once: true });
+        socket.addEventListener("error", onError, { once: true });
+        armWatchdog((error) => settle(reject, error));
+        if (socket.readyState === 1) queueMicrotask(onOpen);
+      });
     } catch (error) {
       if (closed || generation !== epoch) return;
       if (error.terminal || error instanceof SyntaxError) {
@@ -194,10 +267,11 @@ export function createStateQueryClient({
       }
     } finally {
       clearTimeout(watchdog);
-      try { await reader?.cancel(); } catch { /* disconnected */ }
-      active.abort();
-      try { reader?.releaseLock(); } catch { /* cancellation already released the reader */ }
-      if (activeReader === reader) activeReader = null;
+      clearInterval(heartbeat);
+      if (activeSocket === socket) activeSocket = null;
+      if (socket?.readyState < 2) {
+        try { socket.close(1000, "Connection finished"); } catch { /* disconnected */ }
+      }
     }
   }
   return Object.freeze({

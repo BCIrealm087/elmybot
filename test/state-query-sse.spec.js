@@ -405,13 +405,31 @@ describe("public state-query SSE", () => {
     const grant = await issue(target, "fun.deaths:count:v1,fun.deaths:remembered_game:v1");
     const origin = "https://elmybot-worker.cutelmy.workers.dev";
     let cookie = "";
-    const client = createStateQueryClient({ baseUrl: origin, fetch: async (url, init) => {
-      const response = await SELF.fetch(url.toString(), { ...init, headers: {
-        ...init.headers, origin, ...(cookie ? { cookie } : {})
-      } });
-      if (response.headers.has("set-cookie")) cookie = response.headers.get("set-cookie").split(";")[0];
-      return response;
-    } });
+    const client = createStateQueryClient({
+      baseUrl: origin,
+      fetch: async (url, init) => {
+        const response = await SELF.fetch(url.toString(), { ...init, headers: {
+          ...init.headers, origin, ...(cookie ? { cookie } : {})
+        } });
+        if (response.headers.has("set-cookie")) cookie = response.headers.get("set-cookie").split(";")[0];
+        return response;
+      },
+      openWebSocket: async (url) => {
+        const requestUrl = new URL(url);
+        requestUrl.protocol = "https:";
+        const response = await handleStateQueryRequest(new Request(requestUrl, {
+          headers: { upgrade: "websocket", origin, cookie }
+        }), {
+          ...streamEnv,
+          STATE_QUERY_PUBLIC_ORIGIN: origin,
+          STATE_QUERY_STREAMS_ENABLED: "true",
+          STATE_QUERY_STREAM_TRANSPORT: "hibernating_websocket"
+        });
+        expect(response.status).toBe(101);
+        response.webSocket.accept();
+        return response.webSocket;
+      }
+    });
     let latest;
     let connectionStatus;
     try {

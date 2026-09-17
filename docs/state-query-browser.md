@@ -1,7 +1,8 @@
 # Browser client, query setup, and widgets
 
-Completed for roadmap step 11 on 2026-09-15. These pages and assets become available when
-the Worker is deployed; implementation and CI do not constitute deployment.
+Created for roadmap step 11 and migrated to the versioned hibernating WebSocket
+protocol in step 15. These pages and assets become available when the Worker is
+deployed; implementation and CI do not constitute deployment.
 
 ## Setup and OBS workflow
 
@@ -99,52 +100,60 @@ Server validation and authorization remain authoritative for all documents.
 
 ## Recovery, security, and bounds
 
-The client parses UTF-8 SSE incrementally, including fragmented multibyte text,
-LF/CRLF/CR framing and comment heartbeats. Frame storage is capped at 300 KiB;
-oversized or invalid protocol data ends the subscription. Client limits are
-20 distinct query documents (16 KiB each) and 100 listeners per document.
-Server and grant limits may be lower and are reported explicitly.
+`watch()` opens one same-origin `/state-query/socket` WebSocket and multiplexes
+all distinct query documents over `state-query-socket/v1`. The secure session
+cookie accompanies the upgrade automatically; the socket URL, registration,
+recovery cursor, widget URL, and copied snippet contain no grant credential.
+The client applies only complete versioned results, acknowledges each accepted
+event cursor, ignores duplicate or older event/result sequences, and requires a
+complete replacement snapshot before accepting updates on every connection.
 
-Network loss, transient server errors, and 60 seconds without stream traffic
-trigger capped exponential reconnect delays (1–30 seconds). A reconnect uses
-the opaque cursor and always accepts the server's newly authorized replacement
-snapshot, including after a realm change or observer restart. Duplicate/older
-per-query result sequences are ignored within a connection; ordering resets
-with the replacement snapshot. Mutating the subscription set discards the old
-cursor. Permanent HTTP errors and terminal grant status stop retrying. Cached
-results are cleared on terminal access failure or session replacement.
+Incoming text frames are capped at 300 KiB; binary, oversized, malformed, or
+invalid protocol data ends the subscription. Client limits remain 20 distinct
+query documents (16 KiB each) and 100 listeners per document. Server and grant
+limits may be lower and are reported explicitly.
 
-`close()` and unsubscribe cancel the reader and request and clear reconnect
-timers. The hosted pages clean up on `pagehide`; a back-forward-cache restore
-reloads to establish fresh authorization. `logout()` closes the active queries
-and removes the local session. The pages use a restrictive same-origin CSP,
-no-referrer policy, and no-store responses. JavaScript/CSS live in `public/`,
-served by the Wrangler static-assets binding `BROWSER_ASSETS`; API and page
-routes remain in the Worker. No migration tags or platform command semantics
-change for this step.
+The client sends the protocol heartbeat every 30 seconds. Network loss,
+transient server errors, and 90 seconds without any server message trigger
+capped exponential reconnect delays (1–30 seconds). A transport reconnect
+registers the prior opaque subscription ID and cursor as recovery hints, then
+accepts only the server's newly authorized complete snapshot, including after a
+realm change or observer restart. The server may replace either hint. Mutating
+the subscription set or replacing the browser session discards both hints.
+Terminal status clears cached results and stops retrying.
+
+`close()` and unsubscribe close the socket and clear heartbeat, stale-peer, and
+reconnect timers. The hosted pages clean up on `pagehide`; a back-forward-cache
+restore reloads to establish fresh authorization. `logout()` closes the active
+queries and removes the local session. The pages use a restrictive same-origin
+CSP, no-referrer policy, and no-store responses. JavaScript/CSS live in
+`public/`, served by the Wrangler static-assets binding `BROWSER_ASSETS`; API
+and page routes remain in the Worker. No migration tags or platform command
+semantics change for this step.
 
 ## Verification and deployment boundary
 
-- Vitest exercises client sharing, byte framing, out-of-order suppression,
-  reconnection, access denial, silent peers, callback isolation, and limits.
+- Vitest exercises socket sharing, acknowledgements, complete-snapshot gating,
+  out-of-order suppression, recovery hints, access denial, silent peers,
+  callback isolation, and limits.
 - A real Worker/DO test drives the browser client through session exchange,
   catalog, snapshot, remembered-game change, standalone-to-integration handoff,
   shared mutations, and grant revocation. Asset-route tests also fetch the
   actual browser modules through the configured Worker asset binding.
-- `npm run test:browser` runs Chromium against a deterministic HTTP/SSE fixture.
+- `npm run test:browser` runs Chromium against a deterministic HTTP/WebSocket fixture.
   It exercises the served setup page, custom composition, an isolated widget
   session, count/game/source replacement events, unselected state, hostile text,
-  reconnect, and access termination. This is UI/protocol evidence; the real
-  lifecycle is covered by the Worker test above.
+  acknowledgements, reconnect, and access termination. This is UI/protocol
+  evidence; the real lifecycle is covered by the Worker test above.
 - CI installs Chromium, runs the smoke test, and saves a setup screenshot as
   `state-query-browser-preview`. Locally, run `npx playwright install chromium`
   once before `npm run test:browser`.
 
-The Work workspace could not download Chromium from the browser CDN; local
-browser execution is therefore not claimed. CI is the browser gate for this
-step. [CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459)
-passed the Chromium smoke test, all 412 Vitest tests, lint, syntax checks, and
-the Wrangler dry run for implementation commit `8622d5c`.
+The Work workspace does not have a Chromium binary, so local browser execution
+is not claimed. CI remains the browser gate for this step. Step 11's original
+polling-SSE browser evidence is retained in
+[CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459);
+Step 15's WebSocket evidence is recorded after its implementation CI succeeds.
 Deployed proxy behavior, actual OBS interaction, cross-region latency,
 and deployed load/cost measurements remain rollout gates. Step 12's local
 measurements and `STATE_QUERY_STREAMS_ENABLED` switch are documented in the

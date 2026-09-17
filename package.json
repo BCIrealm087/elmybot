@@ -34,6 +34,7 @@
 		"playwright": "1.62.1",
 		"tweetnacl": "^1.0.3",
 		"vitest": "^4.1.0",
-		"wrangler": "^4.126.0"
+		"wrangler": "^4.126.0",
+		"ws": "8.21.0"
 	}
 }

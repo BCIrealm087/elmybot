@@ -9,106 +9,208 @@ const target = { platform: "twitch", groupId: "channel" };
 const clients = [];
 afterEach(() => { clients.splice(0).forEach((client) => client.close()); });
 
+class FakeSocket {
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    this.sent = [];
+    this.listeners = new Map();
+    queueMicrotask(() => {
+      if (this.readyState !== 0) return;
+      this.readyState = 1;
+      this.dispatch("open", {});
+    });
+  }
+  addEventListener(type, listener, options = {}) {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push({ listener, once: options.once === true });
+    this.listeners.set(type, listeners);
+  }
+  dispatch(type, event) {
+    const listeners = this.listeners.get(type) ?? [];
+    this.listeners.set(type, listeners.filter(({ once }) => !once));
+    for (const { listener } of listeners) listener(event);
+  }
+  send(value) { this.sent.push(value); }
+  close(code = 1000, reason = "") {
+    if (this.readyState >= 2) return;
+    this.readyState = 3;
+    this.dispatch("close", { code, reason });
+  }
+  serverMessage(value) { this.dispatch("message", { data: value }); }
+  serverClose(code = 1012, reason = "") { this.close(code, reason); }
+}
+
 function harness(options = {}) {
   const connections = [];
-  const fetch = vi.fn(async (_url, init) => {
-    let controller;
-    const stream = new ReadableStream({ start(value) { controller = value; } });
-    init.signal.addEventListener("abort", () => { try { controller.close(); } catch { /* already closed */ } });
-    connections.push({ controller, init });
-    return new Response(stream, { headers: { "content-type": "text/event-stream; charset=utf-8" } });
+  const openWebSocket = vi.fn((url) => {
+    const socket = new FakeSocket(url);
+    connections.push(socket);
+    return socket;
   });
-  const client = createStateQueryClient({ baseUrl: "https://example.com", fetch, retryMs: 5, ...options });
+  const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+  const client = createStateQueryClient({
+    baseUrl: "https://example.com",
+    fetch,
+    openWebSocket,
+    retryMs: 5,
+    ...options
+  });
   clients.push(client);
-  return { client, connections, fetch };
+  return { client, connections, fetch, openWebSocket };
+}
+function registration(connection) {
+  return JSON.parse(connection.sent.find((message) => message !== "state-query-ping/v1"));
 }
 function result(queryId, sequence, value) {
   return { queryId, sequence, status: "ready", result: { status: "ready", data: { value: { state: "present", value } } } };
 }
-function frame(event, results, id = "cursor-1") {
-  return `id: ${id}\r\nevent: ${event}\r\ndata: ${JSON.stringify({ protocol: "state-query-stream/v1", results })}\r\n\r\n`;
+function frame(eventType, results, {
+  sequence = 1,
+  cursor = `sq1.1.${"a".repeat(32)}.${sequence}`,
+  subscriptionId = "a".repeat(32)
+} = {}) {
+  return JSON.stringify({
+    protocol: "state-query-socket/v1",
+    type: "event",
+    event: {
+      sequence,
+      cursor,
+      eventType,
+      payload: { protocol: "state-query-stream/v1", subscriptionId, results }
+    }
+  });
 }
-function send(connection, text) { connection.controller.enqueue(new TextEncoder().encode(text)); }
 
 describe("browser state query client", () => {
-  it("shares a stream, parses split UTF-8/CRLF, suppresses old results, and detaches listeners", async () => {
-    const { client, connections, fetch } = harness();
+  it("shares one socket, acknowledges events, suppresses old results, and detaches listeners", async () => {
+    const { client, connections, openWebSocket } = harness();
     const a = vi.fn(), b = vi.fn(), c = vi.fn();
     const first = client.watch(tools.deaths(target), { onResult: a });
     const duplicate = client.watch(tools.deaths(target), { onResult: b });
     client.watch(tools.deaths(target, "Hades"), { onResult: c });
     await vi.waitFor(() => expect(connections).toHaveLength(1));
-    const registrations = JSON.parse(connections[0].init.body).queries;
+    await vi.waitFor(() => expect(connections[0].sent).toHaveLength(1));
+    const registrations = registration(connections[0]).queries;
     expect(registrations).toHaveLength(2);
-    const text = frame("snapshot", [result(registrations[0].id, 3, "ゲーム 🐈"), result(registrations[1].id, 1, 9)]);
-    const bytes = new TextEncoder().encode(text);
-    for (let index = 0; index < bytes.length; index += 3) connections[0].controller.enqueue(bytes.slice(index, index + 3));
+    expect(connections[0].url).toBe("wss://example.com/state-query/socket");
+    connections[0].serverMessage(frame("snapshot", [
+      result(registrations[0].id, 3, "ゲーム 🐈"),
+      result(registrations[1].id, 1, 9)
+    ]));
     await vi.waitFor(() => expect(a).toHaveBeenCalledTimes(1));
     expect(a.mock.calls[0][0].result.data.value.value).toBe("ゲーム 🐈");
-    expect(b).toHaveBeenCalledTimes(1); expect(c).toHaveBeenCalledTimes(1);
-    send(connections[0], frame("update", [result(registrations[0].id, 2, "old")]));
-    send(connections[0], frame("update", [result(registrations[0].id, 4, "new")]));
+    expect(b).toHaveBeenCalledTimes(1);
+    expect(c).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(connections[0].sent.at(-1))).toMatchObject({
+      protocol: "state-query-socket/v1", type: "ack"
+    });
+    connections[0].serverMessage(frame("update", [result(registrations[0].id, 2, "old")], { sequence: 2 }));
+    connections[0].serverMessage(frame("update", [result(registrations[0].id, 4, "new")], { sequence: 3 }));
     await vi.waitFor(() => expect(a).toHaveBeenCalledTimes(2));
     duplicate.unsubscribe();
-    expect(fetch).toHaveBeenCalledTimes(1);
-    send(connections[0], frame("update", [result(registrations[0].id, 5, "last")]));
+    expect(openWebSocket).toHaveBeenCalledTimes(1);
+    connections[0].serverMessage(frame("update", [result(registrations[0].id, 5, "last")], { sequence: 4 }));
     await vi.waitFor(() => expect(a).toHaveBeenCalledTimes(3));
     expect(b).toHaveBeenCalledTimes(2);
     first.unsubscribe();
     await vi.waitFor(() => expect(connections).toHaveLength(2));
-    expect(connections[0].init.signal.aborted).toBe(true);
-    expect(JSON.parse(connections[1].init.body).queries).toHaveLength(1);
+    expect(connections[0].readyState).toBe(3);
+    await vi.waitFor(() => expect(registration(connections[1]).queries).toHaveLength(1));
+    expect(registration(connections[1])).not.toHaveProperty("cursor");
+    expect(registration(connections[1])).not.toHaveProperty("subscriptionId");
   });
 
-  it("reconnects with the cursor and accepts a fresh snapshot with a lower result sequence", async () => {
+  it("reconnects with recovery hints and accepts a fresh snapshot with a lower result sequence", async () => {
     const { client, connections } = harness();
     const receive = vi.fn(), status = vi.fn();
     client.watch(tools.deaths(target), { onResult: receive, onStatus: status });
-    await vi.waitFor(() => expect(connections).toHaveLength(1));
-    const id = JSON.parse(connections[0].init.body).queries[0].id;
-    send(connections[0], frame("snapshot", [result(id, 12, 12)], "old-cursor"));
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1));
+    const id = registration(connections[0]).queries[0].id;
+    const recoveredId = "b".repeat(32);
+    connections[0].serverMessage(frame("snapshot", [result(id, 12, 12)], {
+      cursor: `sq1.1.${recoveredId}.7`, subscriptionId: recoveredId
+    }));
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
-    connections[0].controller.close();
+    connections[0].serverClose(1012, "Restart");
     await vi.waitFor(() => expect(connections).toHaveLength(2));
-    expect(connections[1].init.headers["Last-Event-ID"]).toBe("old-cursor");
-    send(connections[1], frame("snapshot", [result(id, 1, 99)], "new-cursor"));
+    await vi.waitFor(() => expect(connections[1].sent).toHaveLength(1));
+    expect(registration(connections[1])).toMatchObject({
+      subscriptionId: recoveredId,
+      cursor: `sq1.1.${recoveredId}.7`
+    });
+    connections[1].serverMessage(frame("snapshot", [result(id, 1, 99)], {
+      sequence: 8, cursor: `sq1.1.${recoveredId}.8`, subscriptionId: recoveredId
+    }));
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(2));
     expect(receive.mock.calls[1][0].result.data.value.value).toBe(99);
     expect(status.mock.calls.some(([value]) => value.state === "reconnecting" && value.stale)).toBe(true);
   });
 
   it("stops on revoked access and does not replay a cached value to new listeners", async () => {
-    const { client, connections, fetch } = harness();
+    const { client, connections, openWebSocket } = harness();
     const status = vi.fn();
     client.watch(tools.deaths(target), { onStatus: status });
-    await vi.waitFor(() => expect(connections).toHaveLength(1));
-    const id = JSON.parse(connections[0].init.body).queries[0].id;
-    send(connections[0], frame("snapshot", [result(id, 1, 1)]));
-    send(connections[0], frame("status", [{ queryId: id, status: "denied", error: { code: "query_grant_revoked" } }]));
-    await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith(expect.objectContaining({ state: "ended", code: "query_grant_revoked" })));
-    const receive = vi.fn(); client.watch(tools.deaths(target), { onResult: receive });
-    expect(receive).not.toHaveBeenCalled(); expect(fetch).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1));
+    const id = registration(connections[0]).queries[0].id;
+    connections[0].serverMessage(frame("snapshot", [result(id, 1, 1)]));
+    connections[0].serverMessage(frame("status", [{
+      queryId: id, status: "denied", error: { code: "query_grant_revoked" }
+    }], { sequence: 2 }));
+    await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith(expect.objectContaining({
+      state: "ended", code: "query_grant_revoked"
+    })));
+    const receive = vi.fn();
+    client.watch(tools.deaths(target), { onResult: receive });
+    expect(receive).not.toHaveBeenCalled();
+    expect(openWebSocket).toHaveBeenCalledTimes(1);
   });
 
-  it("bounds malformed frames and stops unauthorized HTTP retry loops", async () => {
-    const unauthorized = vi.fn(async () => new Response(JSON.stringify({ error: { code: "query_grant_expired" } }), { status: 401 }));
-    const one = harness({ fetch: unauthorized });
-    const status = vi.fn(); one.client.watch(tools.deaths(target), { onStatus: status });
-    await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith(expect.objectContaining({ state: "ended", code: "query_grant_expired" })));
-    expect(unauthorized).toHaveBeenCalledTimes(1);
-    const two = harness(); const secondStatus = vi.fn();
+  it("bounds malformed frames and stops terminal socket errors", async () => {
+    const one = harness();
+    const status = vi.fn();
+    one.client.watch(tools.deaths(target), { onStatus: status });
+    await vi.waitFor(() => expect(one.connections[0]?.sent).toHaveLength(1));
+    one.connections[0].serverMessage(JSON.stringify({
+      protocol: "state-query-socket/v1",
+      type: "error",
+      error: { code: "query_grant_expired", message: "Grant expired." }
+    }));
+    one.connections[0].serverClose(1008, "Policy violation");
+    await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith(expect.objectContaining({
+      state: "ended", code: "query_grant_expired"
+    })));
+    expect(one.openWebSocket).toHaveBeenCalledTimes(1);
+
+    const two = harness();
+    const secondStatus = vi.fn();
     two.client.watch(tools.deaths(target), { onStatus: secondStatus });
-    await vi.waitFor(() => expect(two.connections).toHaveLength(1));
-    send(two.connections[0], "data: " + "x".repeat(301 * 1024));
-    await vi.waitFor(() => expect(secondStatus).toHaveBeenLastCalledWith(expect.objectContaining({ state: "ended", code: "client_frame_limit" })));
+    await vi.waitFor(() => expect(two.connections[0]?.sent).toHaveLength(1));
+    two.connections[0].serverMessage("x".repeat(301 * 1024));
+    await vi.waitFor(() => expect(secondStatus).toHaveBeenLastCalledWith(expect.objectContaining({
+      state: "ended", code: "client_frame_limit"
+    })));
   });
 
-  it("recovers a silent stream and aborts all work when its last listener leaves", async () => {
-    const { client, connections } = harness({ heartbeatTimeoutMs: 50 });
+  it("recovers a silent socket and closes all work when its last listener leaves", async () => {
+    const { client, connections } = harness({ heartbeatMs: 10, heartbeatTimeoutMs: 50 });
     const subscription = client.watch(tools.deaths(target));
     await vi.waitFor(() => expect(connections.length).toBeGreaterThanOrEqual(2));
     subscription.unsubscribe();
-    await vi.waitFor(() => expect(connections.every(({ init }) => init.signal.aborted)).toBe(true));
+    await vi.waitFor(() => expect(connections.every(({ readyState }) => readyState === 3)).toBe(true));
+  });
+
+  it("requires a complete replacement snapshot before applying updates", async () => {
+    const { client, connections } = harness();
+    const status = vi.fn(), receive = vi.fn();
+    client.watch(tools.deaths(target), { onStatus: status, onResult: receive });
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1));
+    const id = registration(connections[0]).queries[0].id;
+    connections[0].serverMessage(frame("update", [result(id, 1, 4)]));
+    await vi.waitFor(() => expect(status).toHaveBeenLastCalledWith(expect.objectContaining({
+      state: "ended", code: "client_protocol_error"
+    })));
+    expect(receive).not.toHaveBeenCalled();
   });
 
   it("isolates callback exceptions and bounds distinct queries and listeners", async () => {
@@ -121,8 +223,9 @@ describe("browser state query client", () => {
     expect(() => client.watch(query)).toThrow("100 listeners");
     for (let index = 0; index < 19; index++) client.watch(tools.deaths(target, String(index)));
     expect(() => client.watch(tools.deaths(target, "overflow"))).toThrow("20 distinct");
-    await vi.waitFor(() => expect(connections).toHaveLength(1));
-    send(connections[0], frame("snapshot", JSON.parse(connections[0].init.body).queries.map(({ id }) => result(id, 1, 0))));
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1));
+    connections[0].serverMessage(frame("snapshot",
+      registration(connections[0]).queries.map(({ id }) => result(id, 1, 0))));
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
   });
 

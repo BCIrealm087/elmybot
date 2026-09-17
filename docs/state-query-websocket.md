@@ -1,10 +1,11 @@
 # Hibernating WebSocket state-query transport
 
 Status: transport contract accepted in roadmap step 13; the server-side route
-and hibernating observer lifecycle are implemented in step 14. The checked-in
-runtime remains on polling SSE until the browser migration and deployed
-verification steps pass. Public subscriptions remain disabled by default in
-both checked-in environments.
+and hibernating observer lifecycle are implemented in step 14; the browser and
+OBS client migration is implemented in step 15. The checked-in runtime remains
+on polling SSE until authorization/backpressure hardening and deployed
+verification pass. Public subscriptions remain disabled by default in both
+checked-in environments.
 
 ## Decision and scope
 
@@ -290,10 +291,12 @@ response, and zero polling calls. These tests prove handler reconstruction and
 protocol behavior, not deployed Cloudflare hibernation or cost.
 
 Step 14 records valid acknowledgement cursors in the socket attachment, but does
-not yet gate sends on acknowledgements. The one-outstanding-event backpressure,
-socket-aware lease policy, and durable revocation/expiry refinements remain Step
-16. The repository therefore keeps `polling_sse` selected, and the existing
-browser and OBS clients remain on SSE until Step 15.
+not yet gate sends on acknowledgements. Step 15's browser client sends those
+acknowledgements after applying each complete event. The one-outstanding-event
+server backpressure, socket-aware lease policy, and durable revocation/expiry
+refinements remain Step 16. The repository therefore keeps `polling_sse`
+selected as the deployment rollback default even though the static browser and
+OBS client now speak the socket protocol.
 
 ## Step boundaries
 
