@@ -1,7 +1,7 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–13 are complete. A cost-driven transport transition
-continues in steps 14–18; step 14 implementation is in progress. Deployment and
+Status: development steps 1–14 are complete. A cost-driven transport transition
+continues in steps 15–18; step 15 is next. Deployment and
 deployed performance verification remain separate rollout gates; public
 subscriptions default to disabled.
 Created: 2026-09-11.
@@ -585,7 +585,7 @@ Verified implementation: commit
 
 ### 14. Connect clients directly to hibernating observers
 
-**Status:** implementation in progress. **Depends on:** step 13.
+**Status:** completed. **Depends on:** step 13.
 
 Add authenticated `GET /state-query/socket` upgrade routing to the selected
 group's `StateQueryObserver`. Accept sockets through the Durable Object
@@ -600,6 +600,10 @@ sockets. Keep the polling transport available and selected for rollback.
 **Exit criteria:** focused server tests cover authentication, initial snapshot,
 committed update, reconnect, terminal status, restart reconstruction, capacity,
 and cleanup with zero observer poll calls in socket mode.
+
+Verified implementation: commit
+[`fc012a4`](https://github.com/BCIrealm087/elmybot/commit/fc012a434e51c8a5c2246d8f9073a62b14e9af13),
+[CI run 35191207496](https://github.com/BCIrealm087/elmybot/actions/runs/35191207496).
 
 ### 15. Migrate the browser client and OBS widget
 
@@ -915,3 +919,19 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   smoke, JavaScript syntax, and the Wrangler dry run in
   [CI run 35180162101](https://github.com/BCIrealm087/elmybot/actions/runs/35180162101).
   Step 14 is next.
+- 2026-09-17: Step 14 completed. Authenticated `GET /state-query/socket`
+  upgrades now route directly to the grant target's `StateQueryObserver`, which
+  accepts the server socket through the Durable Object Hibernation API. Bounded
+  serialized attachments, automatic ping/pong, versioned register/event/error/
+  ack messages, complete initial and updated results, idempotent close/error
+  cleanup, terminal access status, capacity admission, and authorized reconnect
+  are implemented without raw credentials, observer polling, or heartbeat
+  timers. Real Miniflare sockets prove live observer eviction/reconstruction;
+  deployed hibernation and cost are not claimed. Both checked-in environments
+  remain on `polling_sse`; browser migration and acknowledgement backpressure
+  remain Steps 15–16. Implementation commit
+  [`fc012a4`](https://github.com/BCIrealm087/elmybot/commit/fc012a434e51c8a5c2246d8f9073a62b14e9af13)
+  passed all 427 tests across 45 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35191207496](https://github.com/BCIrealm087/elmybot/actions/runs/35191207496).
+  Step 15 is next.
