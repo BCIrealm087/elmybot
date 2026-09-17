@@ -150,13 +150,14 @@ semantics change for this step.
   once before `npm run test:browser`.
 
 The Work workspace does not have a Chromium binary, so local browser execution
-is not claimed. CI remains the browser gate for this step. Step 11's original
-polling-SSE browser evidence is retained in
-[CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459);
-Step 15's WebSocket evidence is recorded after its implementation CI succeeds.
+is not claimed. CI is the browser gate for this step. Step 15 implementation
+commit [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a)
+passed 428 tests across 45 files, lint and repository checks, the deterministic
+Chromium WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+[CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
 Deployed proxy behavior, actual OBS interaction, cross-region latency,
 and deployed load/cost measurements remain rollout gates. Step 12's local
 measurements and `STATE_QUERY_STREAMS_ENABLED` switch are documented in the
 [release guide](state-query-release.md). Streaming defaults to disabled until
 the test rollout enables it. No hosting or
-deployment is performed as part of step 11.
+deployment is performed as part of steps 11 or 15.

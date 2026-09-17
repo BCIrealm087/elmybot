@@ -306,7 +306,9 @@ OBS client now speak the socket protocol.
   initial registration, direct event delivery, and focused server tests
   (implemented; deployed hibernation is not yet claimed).
 - **Step 15:** moves the browser client, setup page, and widget to the socket
-  transport without changing their public JavaScript interface.
+  transport without changing their public JavaScript interface (implemented in
+  [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a);
+  verified by [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638)).
 - **Step 16:** completes acknowledgement backpressure, socket-aware leases,
   durable grant invalidation, expiry scheduling, and failure cleanup.
 - **Step 17:** runs parity, load, actual browser/OBS, hibernation, and Cloudflare

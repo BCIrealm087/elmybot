@@ -1,7 +1,7 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–14 are complete. A cost-driven transport transition
-continues in steps 15–18; step 15 is next. Deployment and
+Status: development steps 1–15 are complete. A cost-driven transport transition
+continues in steps 16–18; step 16 is next. Deployment and
 deployed performance verification remain separate rollout gates; public
 subscriptions default to disabled.
 Created: 2026-09-11.
@@ -607,7 +607,7 @@ Verified implementation: commit
 
 ### 15. Migrate the browser client and OBS widget
 
-**Status:** pending. **Depends on:** step 14.
+**Status:** completed. **Depends on:** step 14.
 
 Replace the browser client's internal fetch/SSE parser with the versioned socket
 protocol while preserving its public API and same-origin session workflow.
@@ -622,6 +622,10 @@ remain unchanged.
 **Exit criteria:** setup, preview, widget, sharing, unsubscribe, reconnection,
 handoff, and terminal-access browser cases pass over WebSockets without exposing
 credentials or changing the developer-facing `watch()` contract.
+
+Verified implementation: commit
+[`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a),
+[CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
 
 ### 16. Harden authorization, leases, and backpressure
 
@@ -935,3 +939,19 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   smoke, JavaScript syntax, and the Wrangler dry run in
   [CI run 35191207496](https://github.com/BCIrealm087/elmybot/actions/runs/35191207496).
   Step 15 is next.
+- 2026-09-17: Step 15 completed. The browser client's stable `watch()` API now
+  multiplexes active queries over one versioned WebSocket, applies only complete
+  replacement snapshots before updates, acknowledges accepted cursors, ignores
+  duplicate and old sequences, detects stale peers, and reconnects with bounded
+  backoff plus opaque recovery hints. Query-set or session changes discard old
+  recovery identity. The unchanged setup and OBS widget workflows retain secure
+  same-origin sessions, credential-free copied URLs, presentation behavior, and
+  explicit terminal-access handling. The deterministic Chromium fixture and
+  real Worker lifecycle test now exercise the socket path. Both checked-in
+  environments remain on `polling_sse` for rollback, and server backpressure and
+  socket-aware authorization/leases remain Step 16. Implementation commit
+  [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a)
+  passed all 428 tests across 45 files, lint and repository checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
+  Step 16 is next.
