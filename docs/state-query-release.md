@@ -10,6 +10,7 @@ until the test rollout below is performed.
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
 | `STATE_QUERY_STREAMS_ENABLED` | `"false"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
+| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects the current implementation. The accepted alternative is `"hibernating_websocket"`, which remains unavailable until roadmap step 14. Missing preserves polling; malformed values fail closed. |
 | `STATE_QUERY_DIAGNOSTICS` | `"false"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
@@ -22,6 +23,13 @@ observer rejects a poll; the browser's reconnect receives the terminal 403 and
 clears its cached values. Observer alarms retire remaining stream graphs and
 watchers. Deploying a setting is subject to Worker rollout propagation; this is
 not a claim that every old isolate changes configuration instantaneously.
+
+Roadmap step 13 adds the transport selector without activating a new runtime
+path. With subscriptions enabled, an invalid selector or a premature
+`hibernating_websocket` selection returns HTTP 503 with
+`state_query_transport_unavailable`; it never silently falls back. The accepted
+socket contract and transition stages are documented in
+[`state-query-websocket.md`](state-query-websocket.md).
 
 Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
 commands continue to operate with subscriptions disabled. Snapshot previews
@@ -199,6 +207,11 @@ replace those messages with a fixed description and optional HTTP status.
 There is no public metrics endpoint exposing another group's activity.
 
 ## Compatibility and migrations
+
+The Worker compatibility date is `2026-09-01`, established and live-tested as
+the baseline before the hibernating-WebSocket transition. It includes the
+runtime's automatic WebSocket close-frame reply behavior. Application close and
+error cleanup must nevertheless remain explicit and idempotent.
 
 Framework API v1 remains additive and stable. Production exports and test-kit
 exports are unchanged in Step 12; the exact public API tests, feature-boundary

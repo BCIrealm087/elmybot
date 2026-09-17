@@ -1,7 +1,9 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–12 are complete. Deployment and deployed performance
-verification remain separate rollout gates; public subscriptions default to disabled.
+Status: development steps 1–12 are complete. A cost-driven transport transition
+is planned in steps 13–18; step 13 is in progress. Deployment and deployed
+performance verification remain separate rollout gates; public subscriptions
+default to disabled.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -554,6 +556,119 @@ deployment has occurred merely because implementation is complete.
 **Exit criteria:** the agreed query surface is documented as implemented, all
 required checks pass, budget results and legacy limitations are explicit, and
 the release has an operational rollout path.
+
+### 13. Specify the hibernating WebSocket transport and rollout contract
+
+**Status:** implementation in progress. **Depends on:** steps 2, 5, 8–12.
+
+The accepted protocol, security boundary, hibernation constraints, message
+vocabulary, acknowledgement rule, close codes, and staged rollout are recorded
+in [`state-query-websocket.md`](state-query-websocket.md). Add an exact
+`STATE_QUERY_STREAM_TRANSPORT` selector with `polling_sse` and
+`hibernating_websocket` values while retaining `STATE_QUERY_STREAMS_ENABLED` as
+the master switch. Missing configuration preserves polling for backward
+compatibility; malformed or prematurely selected transports fail closed.
+
+Keep both checked-in environments on `polling_sse`. Record compatibility date
+`2026-09-01`, but do not activate the socket route or claim hibernation in this
+step. Freeze reusable protocol constants and verify the configuration boundary
+without changing the working stream path.
+
+**Exit criteria:** protocol and rollback decisions are unambiguous; invalid
+configuration cannot select an unintended transport; existing SSE behavior and
+tests remain unchanged under `polling_sse`; and the repository passes its full
+validation path.
+
+### 14. Connect clients directly to hibernating observers
+
+**Status:** pending. **Depends on:** step 13.
+
+Add authenticated `GET /state-query/socket` upgrade routing to the selected
+group's `StateQueryObserver`. Accept sockets through the Durable Object
+Hibernation API, restore bounded attachments after constructor restart, and
+implement message, close, and error handlers. Reuse the existing atomic query
+attachment, current results, history, cursors, and source-notification fanout.
+
+Configure automatic ping/pong responses without observer timers. Deliver the
+initial complete snapshot and later complete updates directly to attached
+sockets. Keep the polling transport available and selected for rollback.
+
+**Exit criteria:** focused server tests cover authentication, initial snapshot,
+committed update, reconnect, terminal status, restart reconstruction, capacity,
+and cleanup with zero observer poll calls in socket mode.
+
+### 15. Migrate the browser client and OBS widget
+
+**Status:** pending. **Depends on:** step 14.
+
+Replace the browser client's internal fetch/SSE parser with the versioned socket
+protocol while preserving its public API and same-origin session workflow.
+Multiplex active queries, require a replacement snapshot before updates,
+acknowledge applied events, ignore duplicate or old sequences, detect stale
+connections, and reconnect with bounded backoff and recovery hints.
+
+Update the deterministic browser fixture and real Worker tests. The setup page,
+widget URL, query tools, presentation behavior, and credential-free copied URLs
+remain unchanged.
+
+**Exit criteria:** setup, preview, widget, sharing, unsubscribe, reconnection,
+handoff, and terminal-access browser cases pass over WebSockets without exposing
+credentials or changing the developer-facing `watch()` contract.
+
+### 16. Harden authorization, leases, and backpressure
+
+**Status:** pending. **Depends on:** steps 14–15.
+
+Allow at most one unacknowledged event per connection and durably coalesce newer
+complete replacements. Replace poll-driven subscription renewal with
+socket-aware interest, bounded group-level lease maintenance, and idempotent
+close/error cleanup. Retain expiry as recovery protection for lost disconnects.
+
+Replace periodic socket-grant polling with atomic durable revocation intent,
+retrying observer invalidation, and an alarm for the earliest known grant
+expiry. Reauthorize on registration, reconnect, reevaluation, and binding
+handoff. Fail closed if invalidation or attachment cannot safely converge.
+
+**Exit criteria:** slow/non-acknowledging clients, revocation, expiry, abrupt
+disconnect, notification duplication, oversize output, observer restart, and
+cleanup remain bounded and recover without transport polling.
+
+### 17. Verify deployed hibernation, parity, and cost
+
+**Status:** pending. **Depends on:** steps 14–16.
+
+Run the full lifecycle, recovery, authorization, backpressure, multiplexing, and
+1/20-subscriber matrix locally and in CI. Then deploy only to the test
+environment and verify Chromium, an actual OBS Browser Source, network loss,
+version replacement, revocation, at least 15 minutes idle, and a later update.
+
+Use Cloudflare analytics to measure requests, CPU, duration, alarms, SQL, error
+rates, and commit-to-widget latency. Confirm there are no poll calls, idle
+connections do not create query evaluations, and observer duration does not grow
+linearly with connected idle time. Local Miniflare behavior is not hibernation
+evidence.
+
+**Exit criteria:** deployed measurements demonstrate correct recovery and a
+material request/duration reduction at representative load; accepted deviations
+and exact Worker/browser/OBS versions are recorded.
+
+### 18. Make WebSockets authoritative and retire polling
+
+**Status:** pending. **Depends on:** step 17.
+
+Select `hibernating_websocket` in the test environment, complete the rollback
+drill, enable a bounded live-worker rollout, and observe it through an agreed
+soak period. The immediate rollback remains `polling_sse`, while the master
+switch can disable all subscriptions without affecting snapshots or commands.
+
+After successful evidence and soak, remove the public/internal polling routes,
+poll/empty-poll metrics, SSE adapter loop, polling-specific tests, and obsolete
+cost guidance. Preserve transport-neutral query/history logic and rename the
+remaining module boundaries where useful.
+
+**Exit criteria:** production uses direct hibernating WebSockets, polling code is
+absent, all release checks pass, rollback and operational documentation are
+current, and commands/snapshots remain compatible with subscriptions disabled.
 
 ## Acceptance matrix
 

@@ -2,6 +2,12 @@
 
 Status: implemented for state-querying roadmap step 9 on 2026-09-14.
 
+Roadmap step 13 accepts a direct hibernating-WebSocket successor documented in
+[`state-query-websocket.md`](state-query-websocket.md). This page continues to
+describe the active `polling_sse` implementation. Both checked-in environments
+remain on it until the later socket implementation and deployed verification
+steps pass.
+
 The supported browser client, query setup page, and OBS widget are documented
 in [state-query-browser.md](state-query-browser.md).
 Public streaming is enabled only with `STATE_QUERY_STREAMS_ENABLED="true"`.

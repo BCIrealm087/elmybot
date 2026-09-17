@@ -14,6 +14,10 @@ import {
 import { canonicalStateQueryJson, stateQueryDigest } from "./query.js";
 import { stateQueryObserverObjectName } from "./source-notifications.js";
 import { recordStateQueryMetric, stateQueryStreamsEnabled } from "./operations.js";
+import {
+  STATE_QUERY_STREAM_TRANSPORTS,
+  stateQueryStreamTransport
+} from "./stream-contract.js";
 
 const encoder = new TextEncoder();
 const CLIENT_QUERY_ID = /^[A-Za-z0-9._:-]{1,64}$/;
@@ -58,6 +62,15 @@ export function requireStateQueryStreamsEnabled(env) {
   if (!stateQueryStreamsEnabled(env)) {
     fail("Public state-query subscriptions are disabled.", {
       status: 403, code: "state_query_subscriptions_disabled"
+    });
+  }
+}
+
+export function requireStateQueryPollingTransport(env) {
+  if (stateQueryStreamTransport(env) !== STATE_QUERY_STREAM_TRANSPORTS.pollingSse) {
+    fail("The configured state-query subscription transport is unavailable.", {
+      status: 503,
+      code: "state_query_transport_unavailable"
     });
   }
 }
@@ -523,6 +536,7 @@ export async function acceptDirectStateQueryStream(state, env, input, connection
 }
 
 export async function registerPolledStateQueryStream(state, env, input) {
+  requireStateQueryPollingTransport(env);
   let message = null;
   let attachment = null;
   const socket = {
@@ -543,6 +557,7 @@ export async function registerPolledStateQueryStream(state, env, input) {
 
 export async function pollStateQueryStream(state, env, input) {
   requireStateQueryStreamsEnabled(env);
+  requireStateQueryPollingTransport(env);
   recordStateQueryMetric(state, "polls");
   const subscriptionId = input?.subscriptionId;
   const afterSequence = input?.afterSequence;
@@ -749,6 +764,7 @@ function encodeSse(event) {
 
 export async function createStateQuerySseResponse(env, grant, input) {
   requireStateQueryStreamsEnabled(env);
+  requireStateQueryPollingTransport(env);
   const selectedTarget = target(grant.target);
   const selectedGroup = createPlatformGroupRef({
     platform: selectedTarget.platform,

@@ -6,7 +6,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "elmybot-worker",
 	"main": "src/index.js",
-	"compatibility_date": "2026-01-11",
+	"compatibility_date": "2026-09-01",
 	"assets": {
 		"directory": "./public",
 		"binding": "BROWSER_ASSETS"
@@ -16,6 +16,7 @@
 	},
 	"vars": {
 		"STATE_QUERY_STREAMS_ENABLED": "false",
+		"STATE_QUERY_STREAM_TRANSPORT": "polling_sse",
 		"STATE_QUERY_DIAGNOSTICS": "false",
 		"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "production",
 		"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev",
@@ -113,6 +114,7 @@
 		"test": {
 			"vars": {
 				"STATE_QUERY_STREAMS_ENABLED": "false",
+				"STATE_QUERY_STREAM_TRANSPORT": "polling_sse",
 				"STATE_QUERY_DIAGNOSTICS": "false",
 				"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "test",
 				"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",

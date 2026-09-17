@@ -29,6 +29,7 @@ import {
 } from "./query.js";
 import {
   createStateQuerySseResponse,
+  requireStateQueryPollingTransport,
   requireStateQueryStreamsEnabled,
   STATE_QUERY_SSE_LIMITS,
   StateQueryStreamError
@@ -371,6 +372,7 @@ async function snapshotResponse(request, env, registry) {
 async function streamResponse(request, env) {
   if (request.method !== "POST") return plain("Method Not Allowed", 405);
   requireStateQueryStreamsEnabled(env);
+  requireStateQueryPollingTransport(env);
   const { grant } = await authorizedRequest(request, env, { mutates: false });
   const input = await readJson(request, Math.min(
     STATE_QUERY_LIMITS.maxDocumentBytes * STATE_QUERY_SSE_LIMITS.maxQueriesPerConnection,

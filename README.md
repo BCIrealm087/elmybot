@@ -393,8 +393,11 @@ documents the client API, setup flow, and credential-free widget URLs.
 
 Public subscriptions default to disabled in both environments. The
 [state-query release guide](docs/state-query-release.md) documents
-`STATE_QUERY_STREAMS_ENABLED`, aggregate diagnostics, measured local limits,
-the durable-polling cost model, and the test-first rollout/rollback procedure.
+`STATE_QUERY_STREAMS_ENABLED`, the `STATE_QUERY_STREAM_TRANSPORT` rollout
+selector, aggregate diagnostics, measured local limits, the durable-polling
+cost model, and the test-first rollout/rollback procedure. The accepted
+[hibernating WebSocket contract](docs/state-query-websocket.md) remains behind
+the polling transport until its implementation and deployed verification pass.
 Snapshots and existing commands remain available when streaming is disabled.
 
 ## Project layout
