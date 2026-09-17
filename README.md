@@ -396,8 +396,9 @@ Public subscriptions default to disabled in both environments. The
 `STATE_QUERY_STREAMS_ENABLED`, the `STATE_QUERY_STREAM_TRANSPORT` rollout
 selector, aggregate diagnostics, measured local limits, the durable-polling
 cost model, and the test-first rollout/rollback procedure. The accepted
-[hibernating WebSocket contract](docs/state-query-websocket.md) remains behind
-the polling transport until its implementation and deployed verification pass.
+[hibernating WebSocket contract](docs/state-query-websocket.md) now has a tested
+server implementation, but remains behind the polling transport until browser
+migration, hardening, and deployed verification pass.
 Snapshots and existing commands remain available when streaming is disabled.
 
 ## Project layout

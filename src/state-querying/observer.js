@@ -16,17 +16,26 @@ import { StateQueryCredentialError } from "./grant-client.js";
 import { StateQueryError } from "./query.js";
 import { flushStateQueryMetrics, recordStateQueryLag, recordStateQueryMetric, stateQueryErrorForLog } from "./operations.js";
 import {
+  acceptStateQueryStream,
+  closeStateQueryStream,
   cleanupExpiredStateQueryStreams,
+  handleStateQueryStreamMessage,
   initializeStateQueryStreamTables,
   pollStateQueryStream,
   publishStateQueryStreamUpdates,
   registerPolledStateQueryStream,
   removePolledStateQueryStream,
+  STATE_QUERY_SOCKET_INTERNAL_PATH,
   STATE_QUERY_STREAM_CLOSE_PATH,
   STATE_QUERY_STREAM_PATH,
   STATE_QUERY_STREAM_POLL_PATH,
   StateQueryStreamError
 } from "./sse.js";
+import {
+  STATE_QUERY_SOCKET_CLOSE_CODES,
+  STATE_QUERY_SOCKET_PING,
+  STATE_QUERY_SOCKET_PONG
+} from "./stream-contract.js";
 
 const DELIVERY_PATH = "/internal/state-query/notifications/deliver";
 const LIST_PATH = "/internal/state-query/notifications/list";
@@ -477,6 +486,10 @@ export class StateQueryObserverBackend {
     this.state = state;
     this.env = env;
     initializeTables(state);
+    state.setWebSocketAutoResponse(new globalThis.WebSocketRequestResponsePair(
+      STATE_QUERY_SOCKET_PING,
+      STATE_QUERY_SOCKET_PONG
+    ));
     state.blockConcurrencyWhile(async () => {
       await scheduleLiveObservationAlarm(state);
     });
@@ -487,6 +500,38 @@ export class StateQueryObserverBackend {
     await drainLiveStateQueries(this.state, this.env);
     await publishStateQueryStreamUpdates(this.state);
     flushStateQueryMetrics(this.state, this.env);
+  }
+
+  async webSocketMessage(socket, message) {
+    try {
+      await handleStateQueryStreamMessage(this.state, this.env, socket, message);
+    } finally {
+      flushStateQueryMetrics(this.state, this.env);
+    }
+  }
+
+  async webSocketClose(socket, code, reason, wasClean) {
+    void code;
+    void reason;
+    void wasClean;
+    try {
+      await closeStateQueryStream(this.state, this.env, socket);
+    } finally {
+      flushStateQueryMetrics(this.state, this.env);
+    }
+  }
+
+  async webSocketError(socket, error) {
+    void error;
+    try {
+      await closeStateQueryStream(this.state, this.env, socket);
+    } finally {
+      try {
+        socket.close(STATE_QUERY_SOCKET_CLOSE_CODES.internalError,
+          "State-query stream unavailable");
+      } catch { /* already closed */ }
+      flushStateQueryMetrics(this.state, this.env);
+    }
   }
 
   async fetch(request) {
@@ -507,6 +552,9 @@ export class StateQueryObserverBackend {
 
   async handleRequest(request) {
     const url = new URL(request.url);
+    if (request.method === "GET" && url.pathname === STATE_QUERY_SOCKET_INTERNAL_PATH) {
+      return await acceptStateQueryStream(this.state, this.env, request);
+    }
     if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_PATH) {
       try {
         return noStoreJson(await registerPolledStateQueryStream(

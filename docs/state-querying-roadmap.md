@@ -1,9 +1,9 @@
 # Composable state queries and live subscriptions: development roadmap
 
 Status: development steps 1–13 are complete. A cost-driven transport transition
-continues in steps 14–18; step 14 is next. Deployment and deployed
-performance verification remain separate rollout gates; public subscriptions
-default to disabled.
+continues in steps 14–18; step 14 implementation is in progress. Deployment and
+deployed performance verification remain separate rollout gates; public
+subscriptions default to disabled.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -585,7 +585,7 @@ Verified implementation: commit
 
 ### 14. Connect clients directly to hibernating observers
 
-**Status:** pending. **Depends on:** step 13.
+**Status:** implementation in progress. **Depends on:** step 13.
 
 Add authenticated `GET /state-query/socket` upgrade routing to the selected
 group's `StateQueryObserver`. Accept sockets through the Durable Object

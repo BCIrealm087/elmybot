@@ -15,6 +15,12 @@ import { canonicalStateQueryJson, stateQueryDigest } from "./query.js";
 import { stateQueryObserverObjectName } from "./source-notifications.js";
 import { recordStateQueryMetric, stateQueryStreamsEnabled } from "./operations.js";
 import {
+  STATE_QUERY_SOCKET_CLOSE_CODES,
+  STATE_QUERY_SOCKET_LIMITS,
+  STATE_QUERY_SOCKET_MESSAGE_TYPES,
+  STATE_QUERY_SOCKET_PING,
+  STATE_QUERY_SOCKET_PONG,
+  STATE_QUERY_SOCKET_PROTOCOL,
   STATE_QUERY_STREAM_TRANSPORTS,
   stateQueryStreamTransport
 } from "./stream-contract.js";
@@ -33,6 +39,13 @@ const CONNECTION_LEASE_SECONDS = STATE_QUERY_LIVE_LIMITS.defaultLeaseSeconds;
 export const STATE_QUERY_STREAM_PATH = "/internal/state-query/stream";
 export const STATE_QUERY_STREAM_POLL_PATH = "/internal/state-query/stream/poll";
 export const STATE_QUERY_STREAM_CLOSE_PATH = "/internal/state-query/stream/close";
+export const STATE_QUERY_SOCKET_INTERNAL_PATH = "/internal/state-query/socket";
+
+const SOCKET_TAG = "state-query";
+const SOCKET_TRANSPORT = STATE_QUERY_STREAM_TRANSPORTS.hibernatingWebSocket;
+const SOCKET_GRANT_HEADER = "x-elmybot-state-query-grant";
+const SOCKET_PLATFORM_HEADER = "x-elmybot-state-query-platform";
+const SOCKET_GROUP_HEADER = "x-elmybot-state-query-group";
 
 export const STATE_QUERY_SSE_LIMITS = Object.freeze({
   maxQueriesPerConnection: MAX_QUERIES_PER_CONNECTION,
@@ -68,6 +81,15 @@ export function requireStateQueryStreamsEnabled(env) {
 
 export function requireStateQueryPollingTransport(env) {
   if (stateQueryStreamTransport(env) !== STATE_QUERY_STREAM_TRANSPORTS.pollingSse) {
+    fail("The configured state-query subscription transport is unavailable.", {
+      status: 503,
+      code: "state_query_transport_unavailable"
+    });
+  }
+}
+
+export function requireStateQuerySocketTransport(env) {
+  if (stateQueryStreamTransport(env) !== SOCKET_TRANSPORT) {
     fail("The configured state-query subscription transport is unavailable.", {
       status: 503,
       code: "state_query_transport_unavailable"
@@ -170,11 +192,6 @@ function socketAttachment(socket) {
   }
 }
 
-function activeConnectionCount(state, connections) {
-  return streamSockets(state, connections)
-    .filter((socket) => socketAttachment(socket)?.registered).length;
-}
-
 function safeSend(socket, value) {
   try {
     socket.send(JSON.stringify(value));
@@ -183,6 +200,24 @@ function safeSend(socket, value) {
     try { socket.close(1011, "State-query stream unavailable"); } catch { /* closed */ }
     return false;
   }
+}
+
+function socketEventMessage(socket, event) {
+  return socketAttachment(socket)?.transport === SOCKET_TRANSPORT
+    ? {
+        protocol: STATE_QUERY_SOCKET_PROTOCOL,
+        type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
+        event
+      }
+    : { type: "event", ...event };
+}
+
+function closeSocket(socket, code, reason) {
+  try { socket.close(code, reason); } catch { /* already closed */ }
+}
+
+function hasOnlyKeys(value, allowed) {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function bindingRevision(envelope) {
@@ -304,7 +339,11 @@ function sendEventToSubscription(state, connections, subscriptionId, event) {
   for (const socket of streamSockets(state, connections)) {
     const attachment = socketAttachment(socket);
     if (attachment?.registered && attachment.subscriptionId === subscriptionId) {
-      safeSend(socket, { type: "event", ...event });
+      safeSend(socket, socketEventMessage(socket, event));
+      if (attachment.transport === SOCKET_TRANSPORT && event.eventType === "status") {
+        closeSocket(socket, STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation,
+          "State-query access ended");
+      }
     }
   }
 }
@@ -323,7 +362,7 @@ async function removeSubscriptionQueries(state, env, subscriptionId) {
   );
 }
 
-async function registerSocket(state, env, socket, input, connections = []) {
+async function registerSocket(state, env, socket, input, _connections = []) {
   requireStateQueryStreamsEnabled(env);
   await cleanupExpiredStateQueryStreams(state, env);
   const retainedConnections = Number(state.storage.sql.exec(
@@ -332,7 +371,7 @@ async function registerSocket(state, env, socket, input, connections = []) {
     Date.now(),
     typeof input?.subscriptionId === "string" ? input.subscriptionId : ""
   ).one().total);
-  if (activeConnectionCount(state, connections) + retainedConnections >= MAX_CONNECTIONS) {
+  if (retainedConnections >= MAX_CONNECTIONS) {
     fail("This group observer has too many stream connections.", {
       status: 429,
       code: "state_query_stream_capacity"
@@ -355,6 +394,12 @@ async function registerSocket(state, env, socket, input, connections = []) {
     }
   }
   const querySetDigest = await stateQueryDigest(queries);
+  if (input?.cursor !== undefined && (
+    typeof input.cursor !== "string" ||
+    input.cursor.length > STATE_QUERY_SOCKET_LIMITS.maxCursorCharacters
+  )) {
+    fail("State-query stream recovery cursor is invalid.");
+  }
   const nowMs = Date.now();
   pruneHistory(state, nowMs);
   let subscriptionId = input?.subscriptionId;
@@ -433,12 +478,14 @@ async function registerSocket(state, env, socket, input, connections = []) {
     );
     throw error;
   }
+  const priorAttachment = socketAttachment(socket);
   const attachment = {
     registered: true,
     subscriptionId,
     grantId: grant.id,
     target: selectedTarget,
-    querySetDigest
+    querySetDigest,
+    ...(priorAttachment?.transport ? { transport: priorAttachment.transport } : {})
   };
   socket.serializeAttachment?.(attachment);
   const event = storeEvent(state, subscriptionId, "snapshot", {
@@ -447,19 +494,47 @@ async function registerSocket(state, env, socket, input, connections = []) {
     results
   }, nowMs);
   recordStateQueryMetric(state, "registrations");
-  safeSend(socket, { type: "ready", subscriptionId, event });
+  safeSend(socket, attachment.transport === SOCKET_TRANSPORT
+    ? socketEventMessage(socket, event)
+    : { type: "ready", subscriptionId, event });
 }
 
-export async function acceptStateQueryStream(state, request, connections = []) {
+function socketHandshakeTarget(request) {
+  const grantId = request.headers.get(SOCKET_GRANT_HEADER);
+  if (typeof grantId !== "string" || grantId.length === 0 || grantId.length > 80) {
+    fail("State-query socket authentication is invalid.", {
+      status: 401,
+      code: "query_credential_invalid"
+    });
+  }
+  return {
+    grantId,
+    target: target({
+      platform: request.headers.get(SOCKET_PLATFORM_HEADER),
+      groupId: request.headers.get(SOCKET_GROUP_HEADER)
+    })
+  };
+}
+
+export async function acceptStateQueryStream(state, env, request, connections = []) {
+  requireStateQueryStreamsEnabled(env);
   if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
     return new Response("WebSocket upgrade required", { status: 426 });
   }
-  if (activeConnectionCount(state, connections) >= MAX_CONNECTIONS) {
+  if (streamSockets(state, connections).length >= MAX_CONNECTIONS) {
     return new Response("State-query stream capacity reached", { status: 429 });
   }
+  const authenticated = socketHandshakeTarget(request);
   const pair = new globalThis.WebSocketPair();
   const [client, server] = Object.values(pair);
-  state.acceptWebSocket(server, ["state-query"]);
+  server.serializeAttachment({
+    version: 1,
+    transport: SOCKET_TRANSPORT,
+    registered: false,
+    grantId: authenticated.grantId,
+    target: authenticated.target
+  });
+  state.acceptWebSocket(server, [SOCKET_TAG]);
   return new Response(null, { status: 101, webSocket: client });
 }
 
@@ -686,19 +761,108 @@ export async function cleanupExpiredStateQueryStreams(state, env) {
 }
 
 export async function handleStateQueryStreamMessage(state, env, socket, message) {
+  const attachment = socketAttachment(socket);
+  const hibernating = attachment?.transport === SOCKET_TRANSPORT;
   try {
-    if (typeof message !== "string" || encoder.encode(message).byteLength > 64 * 1024) {
-      fail("State-query stream registration is invalid.", { status: 413 });
+    if (!hibernating) {
+      fail("State-query stream connection is invalid.", { status: 403 });
     }
-    const attachment = socketAttachment(socket);
-    if (attachment?.registered) fail("State-query stream is already registered.", { status: 409 });
-    await registerSocket(state, env, socket, JSON.parse(message));
+    if (typeof message !== "string") {
+      fail("State-query socket messages must be UTF-8 text.", { status: 413 });
+    }
+    if (message === STATE_QUERY_SOCKET_PING) {
+      // The runtime normally answers this without waking the object. This
+      // fallback keeps explicit handler tests and older local runtimes correct.
+      socket.send(STATE_QUERY_SOCKET_PONG);
+      return;
+    }
+    const maximumBytes = attachment.registered
+      ? STATE_QUERY_SOCKET_LIMITS.maxControlFrameBytes
+      : STATE_QUERY_SOCKET_LIMITS.maxRegistrationFrameBytes;
+    if (encoder.encode(message).byteLength > maximumBytes) {
+      fail("State-query socket message exceeds its size limit.", { status: 413 });
+    }
+    let input;
+    try {
+      input = JSON.parse(message);
+    } catch (cause) {
+      throw new StateQueryStreamError("State-query socket message is invalid.", { cause });
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input) ||
+        input.protocol !== STATE_QUERY_SOCKET_PROTOCOL) {
+      fail("State-query socket protocol is invalid.");
+    }
+    if (!attachment.registered) {
+      if (input.type !== STATE_QUERY_SOCKET_MESSAGE_TYPES.register) {
+        fail("The first state-query socket message must register queries.");
+      }
+      if (!hasOnlyKeys(input, new Set([
+        "protocol", "type", "queries", "subscriptionId", "cursor"
+      ]))) {
+        fail("State-query socket registration contains unsupported fields.");
+      }
+      await registerSocket(state, env, socket, {
+        grantId: attachment.grantId,
+        target: attachment.target,
+        queries: input.queries,
+        ...(input.subscriptionId !== undefined
+          ? { subscriptionId: input.subscriptionId }
+          : {}),
+        ...(input.cursor !== undefined ? { cursor: input.cursor } : {})
+      });
+      return;
+    }
+    if (input.type !== STATE_QUERY_SOCKET_MESSAGE_TYPES.acknowledge ||
+        !hasOnlyKeys(input, new Set(["protocol", "type", "cursor"])) ||
+        typeof input.cursor !== "string" ||
+        input.cursor.length > STATE_QUERY_SOCKET_LIMITS.maxCursorCharacters) {
+      fail("State-query socket control message is invalid.");
+    }
+    const generation = state.storage.sql.exec(
+      "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
+    ).one().generation;
+    const match = input.cursor.match(
+      new RegExp(`^sq1\\.${generation}\\.${attachment.subscriptionId}\\.(\\d+)$`)
+    );
+    const acknowledgedSequence = match ? Number(match[1]) : NaN;
+    const currentSequence = Number(state.storage.sql.exec(
+      `SELECT next_sequence - 1 AS sequence FROM state_query_stream_subscriptions
+       WHERE subscription_id = ?`, attachment.subscriptionId
+    ).toArray()[0]?.sequence ?? -1);
+    if (Number.isSafeInteger(acknowledgedSequence) && acknowledgedSequence >= 1 &&
+        acknowledgedSequence <= currentSequence &&
+        acknowledgedSequence > Number(attachment.acknowledgedSequence ?? 0)) {
+      socket.serializeAttachment({
+        ...attachment,
+        acknowledgedSequence,
+        acknowledgedCursor: input.cursor
+      });
+    }
   } catch (error) {
     const code = error?.code ?? "state_query_stream_invalid";
-    safeSend(socket, { type: "error", error: { code, message: error.message } });
-    try {
-      socket.close(error?.status === 401 || error?.status === 403 ? 1008 : 1011, code);
-    } catch { /* closed */ }
+    safeSend(socket, {
+      protocol: STATE_QUERY_SOCKET_PROTOCOL,
+      type: STATE_QUERY_SOCKET_MESSAGE_TYPES.error,
+      error: {
+        code,
+        message: "State-query socket registration is invalid."
+      }
+    });
+    const closeCode = error?.status === 413
+      ? STATE_QUERY_SOCKET_CLOSE_CODES.messageTooLarge
+      : error?.status === 429 || error?.status === 503
+        ? STATE_QUERY_SOCKET_CLOSE_CODES.tryAgainLater
+        : error?.status >= 400 && error?.status < 500 ||
+          error instanceof StateQueryStreamError
+          ? STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation
+          : STATE_QUERY_SOCKET_CLOSE_CODES.internalError;
+    closeSocket(socket, closeCode, closeCode === STATE_QUERY_SOCKET_CLOSE_CODES.messageTooLarge
+      ? "Message too large"
+      : closeCode === STATE_QUERY_SOCKET_CLOSE_CODES.tryAgainLater
+        ? "Try again later"
+        : closeCode === STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation
+          ? "Policy violation"
+          : "Internal error");
   }
 }
 
@@ -753,7 +917,10 @@ export async function closeStateQueryStream(state, env, socket, connections = []
   const stillConnected = streamSockets(state, connections).some((candidate) =>
     candidate !== socket && socketAttachment(candidate)?.subscriptionId === attachment.subscriptionId
   );
-  if (!stillConnected) await removeSubscriptionQueries(state, env, attachment.subscriptionId);
+  if (!stillConnected) {
+    await removeSubscriptionQueries(state, env, attachment.subscriptionId);
+    await scheduleLiveObservationAlarm(state);
+  }
 }
 
 function encodeSse(event) {
@@ -870,6 +1037,28 @@ export async function createStateQuerySseResponse(env, grant, input) {
       "cache-control": "no-store, no-transform",
       "content-type": "text/event-stream; charset=utf-8",
       "x-accel-buffering": "no"
+    }
+  });
+}
+
+export async function createStateQuerySocketResponse(env, grant) {
+  requireStateQueryStreamsEnabled(env);
+  requireStateQuerySocketTransport(env);
+  const selectedTarget = target(grant.target);
+  const selectedGroup = createPlatformGroupRef({
+    platform: selectedTarget.platform,
+    kind: selectedTarget.platform === "discord" ? "guild" : "channel",
+    id: selectedTarget.groupId
+  });
+  const name = stateQueryObserverObjectName(stateQueryEnvironment(env), selectedGroup);
+  const stub = env.STATE_QUERY_OBSERVER.get(env.STATE_QUERY_OBSERVER.idFromName(name));
+  return await stub.fetch(`https://state-query-observer${STATE_QUERY_SOCKET_INTERNAL_PATH}`, {
+    method: "GET",
+    headers: {
+      upgrade: "websocket",
+      [SOCKET_GRANT_HEADER]: grant.id,
+      [SOCKET_PLATFORM_HEADER]: selectedTarget.platform,
+      [SOCKET_GROUP_HEADER]: selectedTarget.groupId
     }
   });
 }

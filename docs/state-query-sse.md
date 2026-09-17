@@ -2,11 +2,11 @@
 
 Status: implemented for state-querying roadmap step 9 on 2026-09-14.
 
-Roadmap step 13 accepts a direct hibernating-WebSocket successor documented in
-[`state-query-websocket.md`](state-query-websocket.md). This page continues to
-describe the active `polling_sse` implementation. Both checked-in environments
-remain on it until the later socket implementation and deployed verification
-steps pass.
+Roadmap steps 13–14 specify and implement the direct hibernating-WebSocket
+server documented in [`state-query-websocket.md`](state-query-websocket.md).
+This page continues to describe the selected `polling_sse` implementation. Both
+checked-in environments remain on it until browser migration, hardening, and
+deployed verification pass.
 
 The supported browser client, query setup page, and OBS widget are documented
 in [state-query-browser.md](state-query-browser.md).
@@ -106,7 +106,8 @@ bounds empty polling to two short observer requests per second while a client
 is waiting for data (active deliveries add requests), but it can consume materially more requests than
 the proposed hibernating relay. A separately deployed experiment may replace
 the internal adapter with hibernating WebSockets or direct observer-owned SSE
-without changing clients.
+without changing query semantics. Step 14 implements the direct public socket;
+the browser client remains on this SSE path until Step 15.
 
 ## Recovery and cleanup
 

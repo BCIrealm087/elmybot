@@ -10,7 +10,7 @@ until the test rollout below is performed.
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
 | `STATE_QUERY_STREAMS_ENABLED` | `"false"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
-| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects the current implementation. The accepted alternative is `"hibernating_websocket"`, which remains unavailable until roadmap step 14. Missing preserves polling; malformed values fail closed. |
+| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects one exact route. `"hibernating_websocket"` enables the Step 14 server endpoint, but remains an implementation-only option until browser migration and hardening. Missing preserves polling; malformed values fail closed. |
 | `STATE_QUERY_DIAGNOSTICS` | `"false"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
@@ -24,12 +24,17 @@ clears its cached values. Observer alarms retire remaining stream graphs and
 watchers. Deploying a setting is subject to Worker rollout propagation; this is
 not a claim that every old isolate changes configuration instantaneously.
 
-Roadmap step 13 adds the transport selector without activating a new runtime
-path. With subscriptions enabled, an invalid selector or a premature
-`hibernating_websocket` selection returns HTTP 503 with
-`state_query_transport_unavailable`; it never silently falls back. The accepted
-socket contract and transition stages are documented in
-[`state-query-websocket.md`](state-query-websocket.md).
+Roadmap step 14 implements the server-side socket path. With subscriptions
+enabled, each public endpoint requires its matching selector: polling rejects
+`/state-query/socket`, socket mode rejects `/state-query/stream`, and an invalid
+selector returns HTTP 503 with `state_query_transport_unavailable`. It never
+silently falls back. The accepted socket contract and transition stages are
+documented in [`state-query-websocket.md`](state-query-websocket.md).
+
+Do not select `hibernating_websocket` for a user-facing environment yet. The
+current browser and OBS clients still open `/state-query/stream`; Step 15 moves
+them to the socket protocol, and Step 16 completes acknowledgement backpressure
+and socket-aware authorization/lease hardening.
 
 Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
 commands continue to operate with subscriptions disabled. Snapshot previews
@@ -87,6 +92,9 @@ than repeating the entire OAuth lifecycle in every streaming test.
 | Oversized query/collection | Evaluator/grant/realm limits; terminal aggregate SSE overflow test |
 | Slow/duplicate delivery stays bounded and current | Per-query history coalescing, 70-update retention-gap regression, obsolete-notification SSE test |
 | Last client disconnects | SSE cleanup/load cases; explicit abrupt-disconnect lease regression; owner no-interest test |
+| Direct socket snapshot/update without polling | `state-query-websocket.spec.js`: real upgrade, complete snapshot/update, and zero poll counter |
+| Socket observer restart and reconnect | `state-query-websocket.spec.js`: hibernatable eviction recovery and authorized resynchronization |
+| Socket authentication, capacity, terminal access, cleanup | `state-query-websocket.spec.js`: transport/origin boundary, 20-connection cap, revocation status, bounded attachment, final graph removal |
 | Test credential in production | `state-query-http.spec.js`: environment mismatch before owner lookup |
 | Feature omits readable declarations | `readable-state.spec.js`: frozen empty default; full existing command/storage suite |
 

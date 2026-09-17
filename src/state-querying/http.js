@@ -28,8 +28,10 @@ import {
   StateQueryError
 } from "./query.js";
 import {
+  createStateQuerySocketResponse,
   createStateQuerySseResponse,
   requireStateQueryPollingTransport,
+  requireStateQuerySocketTransport,
   requireStateQueryStreamsEnabled,
   STATE_QUERY_SSE_LIMITS,
   StateQueryStreamError
@@ -398,6 +400,31 @@ async function streamResponse(request, env) {
   return await createStateQuerySseResponse(env, grant, input);
 }
 
+async function socketResponse(request, env) {
+  if (request.method !== "GET") return plain("Method Not Allowed", 405);
+  requireStateQueryStreamsEnabled(env);
+  requireStateQuerySocketTransport(env);
+  const url = new URL(request.url);
+  if (url.search.length > 0) {
+    throw new StateQueryStreamError("State-query socket URLs must not contain parameters.", {
+      status: 400
+    });
+  }
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return plain("WebSocket upgrade required", 426);
+  }
+  if (request.headers.has("sec-websocket-protocol")) {
+    throw new StateQueryStreamError(
+      "State-query socket subprotocol negotiation is not supported.",
+      { status: 400 }
+    );
+  }
+  const selected = requestCredential(request);
+  if (selected.transport === "cookie") requireSameOrigin(request, env);
+  const grant = await validateStateQueryCredential(env, selected.credential);
+  return await createStateQuerySocketResponse(env, grant);
+}
+
 async function sessionResponse(request, env) {
   if (request.method === "DELETE") {
     requireSameOrigin(request, env);
@@ -455,6 +482,9 @@ export async function handleStateQueryRequest(
     }
     if (url.pathname === "/state-query/stream") {
       return await streamResponse(request, env);
+    }
+    if (url.pathname === "/state-query/socket") {
+      return await socketResponse(request, env);
     }
     if (url.pathname === "/state-query/session") {
       return await sessionResponse(request, env);

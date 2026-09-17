@@ -1,9 +1,10 @@
 # Hibernating WebSocket state-query transport
 
-Status: transport contract accepted for state-querying roadmap step 13.
-The runtime remains on the tested polling SSE transport until step 14 wires the
-socket route and observer lifecycle. Public subscriptions remain disabled by
-default in both checked-in environments.
+Status: transport contract accepted in roadmap step 13; the server-side route
+and hibernating observer lifecycle are implemented in step 14. The checked-in
+runtime remains on polling SSE until the browser migration and deployed
+verification steps pass. Public subscriptions remain disabled by default in
+both checked-in environments.
 
 ## Decision and scope
 
@@ -41,14 +42,15 @@ affecting catalog or snapshot reads.
 | Value | Meaning |
 | --- | --- |
 | `polling_sse` | Existing `POST /state-query/stream` adapter and observer polling |
-| `hibernating_websocket` | Planned `GET /state-query/socket` WebSocket upgrade |
+| `hibernating_websocket` | Direct `GET /state-query/socket` WebSocket upgrade |
 
 An omitted selector preserves `polling_sse` for backward compatibility. Any
 other value is invalid and fails closed with
-`state_query_transport_unavailable` when subscriptions are enabled. During step
-13, selecting `hibernating_websocket` deliberately produces that failure because
-the new route is not active yet. Both Wrangler environments explicitly select
-`polling_sse` until the step-14 implementation is verified.
+`state_query_transport_unavailable` when subscriptions are enabled. The SSE
+route rejects the socket selection, and the socket route rejects the polling
+selection; neither silently falls back. Both Wrangler environments explicitly
+select `polling_sse` until browser migration and deployed verification are
+complete.
 
 The Worker compatibility-date baseline is `2026-09-01`. This is new enough for
 the runtime's automatic WebSocket close-frame reply behavior; handlers must
@@ -271,12 +273,35 @@ current snapshot. A cursor can optimize recovery only within the same authorized
 subscription and effective binding. A source handoff invalidates earlier realm
 history even when the visible value is unchanged.
 
+## Step 14 implementation evidence and remaining gates
+
+The public Worker now authenticates `GET /state-query/socket`, enforces exact
+cookie origin, rejects URL parameters, selects the observer only from the
+validated grant target, and forwards no raw credential. The observer accepts
+the server socket with `state.acceptWebSocket()`, uses serialized bounded
+attachments, configures automatic ping/pong, and implements message, close, and
+error handlers without in-memory correctness state or observer timers.
+
+Real Miniflare socket tests cover the initial complete snapshot, committed
+replacement delivery, same-subscription reconnect, observer eviction with a
+live hibernatable socket, terminal revocation, admission capacity, graceful
+cleanup, bounded protocol errors, attachment contents, automatic heartbeat
+response, and zero polling calls. These tests prove handler reconstruction and
+protocol behavior, not deployed Cloudflare hibernation or cost.
+
+Step 14 records valid acknowledgement cursors in the socket attachment, but does
+not yet gate sends on acknowledgements. The one-outstanding-event backpressure,
+socket-aware lease policy, and durable revocation/expiry refinements remain Step
+16. The repository therefore keeps `polling_sse` selected, and the existing
+browser and OBS clients remain on SSE until Step 15.
+
 ## Step boundaries
 
 - **Step 13:** freezes this contract, adds the validated dual-transport selector,
   records the compatibility baseline, and keeps polling selected.
 - **Step 14:** wires the authenticated upgrade, hibernating observer handlers,
-  initial registration, direct event delivery, and focused server tests.
+  initial registration, direct event delivery, and focused server tests
+  (implemented; deployed hibernation is not yet claimed).
 - **Step 15:** moves the browser client, setup page, and widget to the socket
   transport without changing their public JavaScript interface.
 - **Step 16:** completes acknowledgement backpressure, socket-aware leases,
