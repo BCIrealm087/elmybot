@@ -1,7 +1,7 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–12 are complete. A cost-driven transport transition
-is planned in steps 13–18; step 13 is in progress. Deployment and deployed
+Status: development steps 1–13 are complete. A cost-driven transport transition
+continues in steps 14–18; step 14 is next. Deployment and deployed
 performance verification remain separate rollout gates; public subscriptions
 default to disabled.
 Created: 2026-09-11.
@@ -559,7 +559,7 @@ the release has an operational rollout path.
 
 ### 13. Specify the hibernating WebSocket transport and rollout contract
 
-**Status:** implementation in progress. **Depends on:** steps 2, 5, 8–12.
+**Status:** completed. **Depends on:** steps 2, 5, 8–12.
 
 The accepted protocol, security boundary, hibernation constraints, message
 vocabulary, acknowledgement rule, close codes, and staged rollout are recorded
@@ -578,6 +578,10 @@ without changing the working stream path.
 configuration cannot select an unintended transport; existing SSE behavior and
 tests remain unchanged under `polling_sse`; and the repository passes its full
 validation path.
+
+Verified implementation: commit
+[`bfd360c`](https://github.com/BCIrealm087/elmybot/commit/bfd360ce8075ef4484e284b164b3ce3d1435bf2b),
+[CI run 35180162101](https://github.com/BCIrealm087/elmybot/actions/runs/35180162101).
 
 ### 14. Connect clients directly to hibernating observers
 
@@ -897,3 +901,17 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829).
   No deployment, actual OBS smoke, production latency, or hibernation/cost
   certification is claimed; those remain explicit operational rollout gates.
+- 2026-09-17: Step 13 completed. The hibernating WebSocket protocol now has a
+  normative security, message, acknowledgement, close-code, recovery, and
+  rollout contract. An exact `STATE_QUERY_STREAM_TRANSPORT` selector preserves
+  `polling_sse` by default and fails closed for invalid or prematurely selected
+  hibernating transport, while `STATE_QUERY_STREAMS_ENABLED` remains the master
+  switch. Both checked-in environments retain polling for rollback, and the
+  compatibility date is `2026-09-01`. Reusable protocol constants and focused
+  boundary tests are in place; no socket route or deployment is claimed.
+  Implementation commit
+  [`bfd360c`](https://github.com/BCIrealm087/elmybot/commit/bfd360ce8075ef4484e284b164b3ce3d1435bf2b)
+  passed all 422 tests across 44 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35180162101](https://github.com/BCIrealm087/elmybot/actions/runs/35180162101).
+  Step 14 is next.
