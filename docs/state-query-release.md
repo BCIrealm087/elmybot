@@ -10,7 +10,7 @@ production; the isolated test environment enables the WebSocket transport.
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
 | `STATE_QUERY_STREAMS_ENABLED` | production: `"false"`; test: `"true"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
-| `STATE_QUERY_STREAM_TRANSPORT` | production: `"polling_sse"`; test: `"hibernating_websocket"` | Selects one exact route. Missing preserves polling; malformed values fail closed. |
+| `STATE_QUERY_STREAM_TRANSPORT` | production/test: `"hibernating_websocket"` | Selects one exact route. Missing preserves polling; malformed values fail closed. Production remains inert while its master switch is disabled. |
 | `STATE_QUERY_DIAGNOSTICS` | production: `"false"`; test: `"true"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
@@ -18,11 +18,11 @@ production; the isolated test environment enables the WebSocket transport.
 
 The streaming switch gates both the public registration and observer polling
 paths. A disabled registration returns HTTP 403 with
-`state_query_subscriptions_disabled`. An already open adapter closes when its
-observer rejects a poll; the browser's reconnect receives the terminal 403 and
-clears its cached values. Observer alarms retire remaining stream graphs and
-watchers. Deploying a setting is subject to Worker rollout propagation; this is
-not a claim that every old isolate changes configuration instantaneously.
+`state_query_subscriptions_disabled`. An already open polling adapter closes when its observer rejects a poll.
+Observer alarms apply both release controls before socket lease renewal, send a
+terminal error to affected WebSockets, and retire their stream graphs. Deploying
+a setting is subject to Worker rollout propagation; this is not a claim that
+every old isolate changes configuration instantaneously.
 
 Roadmap step 14 implements the server-side socket path. With subscriptions
 enabled, each public endpoint requires its matching selector: polling rejects
@@ -31,10 +31,10 @@ selector returns HTTP 503 with `state_query_transport_unavailable`. It never
 silently falls back. The accepted socket contract and transition stages are
 documented in [`state-query-websocket.md`](state-query-websocket.md).
 
-The deployed test environment now selects `hibernating_websocket`; Step 17
-verified actual hibernation and real Chrome/OBS delivery there. Production
-remains disabled and keeps `polling_sse` only as the immediate rollback
-transport until Step 18 completes its controlled rollout and soak.
+The deployed test environment selects `hibernating_websocket`; Step 17 verified
+actual hibernation and real Chrome/OBS delivery there. Production now checks in
+the same selector while its master switch remains disabled. Step 18 must still
+complete the controlled production rollout and soak before polling is removed.
 
 Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
 commands continue to operate with subscriptions disabled. Snapshot previews

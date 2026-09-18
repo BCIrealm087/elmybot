@@ -7,6 +7,8 @@ export default defineConfig({
       miniflare: {
         bindings: {
           STATE_QUERY_STREAMS_ENABLED: "true",
+          // Keep the legacy adapter explicit until Step 18 removes its tests.
+          STATE_QUERY_STREAM_TRANSPORT: "polling_sse",
           TWITCH_CLIENT_ID: "client-id",
           TWITCH_CLIENT_SECRET: "test-client-secret",
           TWITCH_BOT_USER_ID: "bot-user-id",

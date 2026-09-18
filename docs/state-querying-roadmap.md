@@ -682,12 +682,19 @@ measurement window and accepted deviations are recorded here and in
 
 ### 18. Make WebSockets authoritative and retire polling
 
-**Status:** pending. **Depends on:** step 17.
+**Status:** in progress since 2026-09-18. **Depends on:** step 17.
 
-Keep `hibernating_websocket` selected in the test environment, complete the
-rollback drill, enable a bounded production rollout, and observe it through an
-agreed soak period. The immediate rollback remains `polling_sse`, while the master
-switch can disable all subscriptions without affecting snapshots or commands.
+Test keeps `hibernating_websocket` selected. Production now selects the same
+transport while its subscription master switch remains disabled, making the
+selector change inert until a reviewed deployment enables subscriptions.
+Automated rollback coverage proves that either disabling the master switch or
+selecting `polling_sse` terminates existing sockets, drains their query graphs,
+and rejects new socket upgrades. Snapshots and commands remain independent.
+
+Next, deploy the disabled production selection, enable a bounded production
+cohort, and observe it through an agreed soak period. The master switch is the
+first rollback; `polling_sse` remains a temporary code rollback until the soak
+allows its removal.
 
 After successful evidence and soak, remove the public/internal polling routes,
 poll/empty-poll metrics, SSE adapter loop, polling-specific tests, and obsolete
@@ -1004,3 +1011,12 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   baseline was reused. Exact client patch versions, regional percentiles, and
   non-critical repetitions of automated failure variants are accepted
   deviations under the operator-testing policy. Step 18 is next.
+
+- 2026-09-18: Step 18 started. Production's checked-in transport selection moved
+  to `hibernating_websocket` while `STATE_QUERY_STREAMS_ENABLED` remains
+  `"false"`. Observer alarms now apply the master switch and transport selector
+  before lease renewal, send a bounded terminal error to affected sockets, close
+  them, and remove their live query graphs. Automated cases cover both the
+  disabled-switch rollback and the temporary `polling_sse` selector rollback.
+  Legacy polling remains explicitly selected only in its test runtime until the
+  production rollout and soak authorize code removal.

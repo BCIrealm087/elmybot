@@ -313,6 +313,64 @@ describe("hibernating state-query WebSockets", () => {
     closeQuietly(socket);
   });
 
+  it.each([
+    {
+      label: "the master switch",
+      override: { STATE_QUERY_STREAMS_ENABLED: "false" },
+      code: "state_query_subscriptions_disabled",
+      status: 403
+    },
+    {
+      label: "the polling rollback selector",
+      override: { STATE_QUERY_STREAM_TRANSPORT: "polling_sse" },
+      code: "state_query_transport_unavailable",
+      status: 503
+    }
+  ])("retires existing sockets when $label is deployed", async ({ override, code, status }) => {
+    const target = selectedTarget();
+    await setCount(target, 3);
+    const grant = await issue(target);
+    const active = await openSocket(target, grant.credential);
+    const initial = await register(active.socket, target);
+    await acknowledge(active.socket, target, initial.event);
+
+    const terminal = nextMessage(active.socket);
+    const closed = nextSocketEvent(active.socket, "close");
+    const rollbackEnv = { ...socketEnv, ...override };
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      const original = instance.env;
+      try {
+        instance.env = rollbackEnv;
+        await instance.alarm();
+        expect(stateQueryOperationalSnapshot(state)).toMatchObject({
+          activeSubscriptions: 0,
+          activeQueries: 0,
+          sourceEdges: 0,
+          historyEvents: 0
+        });
+      } finally {
+        instance.env = original;
+      }
+    });
+
+    expect(await terminal).toMatchObject({
+      protocol: STATE_QUERY_SOCKET_PROTOCOL,
+      type: STATE_QUERY_SOCKET_MESSAGE_TYPES.error,
+      error: { code }
+    });
+    expect((await closed).code).toBe(STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation);
+    await vi.waitFor(async () => {
+      expect(await runInDurableObject(observerStub(target), async (_instance, state) =>
+        state.getWebSockets().length)).toBe(0);
+    });
+
+    const rejected = await openSocket(target, grant.credential, {
+      selectedEnv: rollbackEnv
+    });
+    expect(rejected.response.status).toBe(status);
+    expect((await rejected.response.json()).error.code).toBe(code);
+  });
+
   it("delivers a snapshot and committed replacement without observer polling", async () => {
     const target = selectedTarget();
     await setCount(target, 7);

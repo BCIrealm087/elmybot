@@ -499,10 +499,12 @@ export class StateQueryObserverBackend {
   }
 
   async alarm() {
+    // Apply release controls before renewing leases so a rollback cannot extend
+    // a socket subscription that the current deployment has disabled.
+    await cleanupExpiredStateQueryStreams(this.state, this.env);
     await maintainStateQuerySocketLeases(this.state, this.env);
     await drainLiveStateQueries(this.state, this.env);
     await publishStateQueryStreamUpdates(this.state);
-    await cleanupExpiredStateQueryStreams(this.state, this.env);
     flushStateQueryMetrics(this.state, this.env);
   }
 

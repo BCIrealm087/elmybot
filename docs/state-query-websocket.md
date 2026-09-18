@@ -4,9 +4,9 @@ Status: transport contract accepted in roadmap step 13; the server-side route
 and hibernating observer lifecycle are implemented in step 14; the browser and
 OBS client migration is implemented in step 15; authorization, leases, and
 backpressure are implemented in step 16; deployed hibernation and actual OBS
-delivery are verified in step 17. Test selects the WebSocket transport with
-subscriptions enabled. Production remains disabled and retains polling as the
-rollback transport until step 18.
+delivery are verified in step 17. Both environments select the WebSocket
+transport; test enables subscriptions, while production remains disabled during
+the first phase of step 18. Polling remains temporary rollback code.
 
 ## Decision and scope
 
@@ -50,9 +50,9 @@ An omitted selector preserves `polling_sse` for backward compatibility. Any
 other value is invalid and fails closed with
 `state_query_transport_unavailable` when subscriptions are enabled. The SSE
 route rejects the socket selection, and the socket route rejects the polling
-selection; neither silently falls back. Production explicitly selects
-`polling_sse` with subscriptions disabled. The isolated test environment
-selects `hibernating_websocket` with subscriptions and diagnostics enabled.
+selection; neither silently falls back. Both environments explicitly select
+`hibernating_websocket`. Production keeps subscriptions disabled during the
+first Step 18 rollout phase; test enables subscriptions and diagnostics.
 
 The Worker compatibility-date baseline is `2026-09-01`. This is new enough for
 the runtime's automatic WebSocket close-frame reply behavior; handlers must
@@ -342,8 +342,12 @@ as its disabled rollback selection.
   non-hibernatable inbound messages, 1.47 GB-seconds, 113 requests, and no
   internal or resource-limit error. Its live tail contained no polling route.
   The full automated suite retained the lifecycle and 1/20-subscriber matrix.
-- **Step 18:** selects WebSockets in production, completes a rollback soak, and
-  removes the polling endpoints and implementation.
+- **Step 18:** in progress since 2026-09-18. Production now checks in the
+  WebSocket selector with subscriptions disabled. Automated rollback closes
+  existing sockets before lease renewal and drains their graphs when either the
+  master switch disables subscriptions or the selector returns to polling.
+  After the bounded production rollout and soak, remove the polling endpoints
+  and implementation.
 
 Actual hibernation cannot be claimed from local or CI tests alone. Step 17's
 deployed duration and connection classification now provide that evidence for
