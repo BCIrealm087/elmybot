@@ -14,7 +14,13 @@ import {
 } from "./live-observation.js";
 import { StateQueryCredentialError } from "./grant-client.js";
 import { StateQueryError } from "./query.js";
-import { flushStateQueryMetrics, recordStateQueryLag, recordStateQueryMetric, stateQueryErrorForLog } from "./operations.js";
+import {
+  flushStateQueryMetrics,
+  recordStateQueryLag,
+  recordStateQueryMetric,
+  stateQueryErrorForLog,
+  stateQueryStreamsEnabled
+} from "./operations.js";
 import {
   acceptStateQueryStream,
   closeStateQueryStream,
@@ -499,12 +505,16 @@ export class StateQueryObserverBackend {
   }
 
   async alarm() {
-    // Apply release controls before renewing leases so a rollback cannot extend
-    // a socket subscription that the current deployment has disabled.
-    await cleanupExpiredStateQueryStreams(this.state, this.env);
+    // A disabled release switch must drain before lease renewal. During normal
+    // operation, maintenance publishes terminal grant-expiry state first and
+    // the regular cleanup pass then removes the expired subscription.
+    if (!stateQueryStreamsEnabled(this.env)) {
+      await cleanupExpiredStateQueryStreams(this.state, this.env);
+    }
     await maintainStateQuerySocketLeases(this.state, this.env);
     await drainLiveStateQueries(this.state, this.env);
     await publishStateQueryStreamUpdates(this.state);
+    await cleanupExpiredStateQueryStreams(this.state, this.env);
     flushStateQueryMetrics(this.state, this.env);
   }
 
