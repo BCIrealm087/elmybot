@@ -1,9 +1,8 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–15 are complete. A cost-driven transport transition
-continues in steps 16–18; step 16 is next. Deployment and
-deployed performance verification remain separate rollout gates; public
-subscriptions default to disabled.
+Status: development steps 1–17 are complete. The deployed test environment now
+uses direct hibernating WebSockets; step 18 is next. Production subscriptions
+remain disabled, and production retains polling only as the rollback transport.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -185,7 +184,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–11 are complete; step 12 remains pending. Complete the relevant
+Steps 1–17 are complete; step 18 remains pending. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -653,30 +652,41 @@ cleanup remain bounded and recover without transport polling.
 
 ### 17. Verify deployed hibernation, parity, and cost
 
-**Status:** pending. **Depends on:** steps 14–16.
+**Status:** completed 2026-09-18. **Depends on:** steps 14–16.
 
-Run the full lifecycle, recovery, authorization, backpressure, multiplexing, and
-1/20-subscriber matrix locally and in CI. Then deploy only to the test
-environment and verify Chromium, an actual OBS Browser Source, network loss,
-version replacement, revocation, at least 15 minutes idle, and a later update.
+The lifecycle, recovery, authorization, backpressure, multiplexing, and
+1/20-subscriber matrix passed locally and in CI. Test Worker version
+`ba1faa66-b2cf-487a-84a7-acf18ffa78ac` then ran the selected
+`hibernating_websocket` transport with streaming and diagnostics enabled.
 
-Use Cloudflare analytics to measure requests, CPU, duration, alarms, SQL, error
-rates, and commit-to-widget latency. Confirm there are no poll calls, idle
-connections do not create query evaluations, and observer duration does not grow
-linearly with connected idle time. Local Miniflare behavior is not hibernation
-evidence.
+Chrome and an actual OBS Browser Source both received live command updates. OBS
+also received the next update immediately after roughly 30 minutes idle.
+Cloudflare reported 10 hibernatable inbound WebSocket messages, zero
+non-hibernatable inbound messages, 1.47 GB-seconds, 113 requests, 97 alarms, 6
+HTTP requests, 5k rows read, and 580 rows written over the approximately
+74-minute captured window. The only two errors were client disconnects; CPU,
+memory, internal, and thrown-exception limits recorded no failures. The live
+tail showed notification-driven reevaluation and no state-query poll route.
 
-**Exit criteria:** deployed measurements demonstrate correct recovery and a
-material request/duration reduction at representative load; accepted deviations
-and exact Worker/browser/OBS versions are recorded.
+The operator's existing polling measurements were reused instead of repeating a
+manual polling deployment. Exact Chrome and OBS patch versions, region
+percentiles, and manual repetitions of network-loss, replacement, and
+revocation variants were not collected. Those variants and the 1/20-subscriber
+load boundary remain covered by automated lifecycle tests; manual work was
+limited to the critical deployed hibernation and real OBS boundary.
+
+**Exit criteria:** satisfied. Deployed behavior demonstrated recovery after idle
+and a material request/duration reduction without transport polling; the
+measurement window and accepted deviations are recorded here and in
+`state-query-release.md`.
 
 ### 18. Make WebSockets authoritative and retire polling
 
 **Status:** pending. **Depends on:** step 17.
 
-Select `hibernating_websocket` in the test environment, complete the rollback
-drill, enable a bounded live-worker rollout, and observe it through an agreed
-soak period. The immediate rollback remains `polling_sse`, while the master
+Keep `hibernating_websocket` selected in the test environment, complete the
+rollback drill, enable a bounded production rollout, and observe it through an
+agreed soak period. The immediate rollback remains `polling_sse`, while the master
 switch can disable all subscriptions without affecting snapshots or commands.
 
 After successful evidence and soak, remove the public/internal polling routes,
@@ -978,3 +988,19 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
   [CI run 35303983738](https://github.com/BCIrealm087/elmybot/actions/runs/35303983738).
   Step 17 is next.
+- 2026-09-18: Step 17 completed. Commit
+  [`31a9872`](https://github.com/BCIrealm087/elmybot/commit/31a9872f753e024cc24ae0a01eb3c77281462bb8)
+  passed all 435 tests and the lifecycle/load matrix in
+  [CI run 35326114263](https://github.com/BCIrealm087/elmybot/actions/runs/35326114263).
+  Test Worker version `ba1faa66-b2cf-487a-84a7-acf18ffa78ac` selected direct
+  hibernating WebSockets. Chrome and an actual OBS Browser Source received live
+  Discord-driven updates; OBS was already current after roughly 30 minutes idle.
+  The approximately 74-minute Durable Object window recorded 10 hibernatable
+  inbound messages, zero non-hibernatable messages, 113 requests, 97 alarms,
+  1.47 GB-seconds, 5k rows read, 580 rows written, 32.91 ms median wall time,
+  1.68 ms median CPU, and 4.18 MB median memory. Two client disconnects were the
+  only reported errors; no internal, exception, CPU-limit, or memory-limit error
+  occurred, and the live tail contained no polling route. The existing polling
+  baseline was reused. Exact client patch versions, regional percentiles, and
+  non-critical repetitions of automated failure variants are accepted
+  deviations under the operator-testing policy. Step 18 is next.

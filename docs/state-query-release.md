@@ -1,17 +1,17 @@
 # State-query release verification and operations
 
-Status: Step 12 development complete and CI-verified on 2026-09-15. No deployment is recorded here.
-The version-1 query, grant, snapshot, streaming, contributor, and browser surfaces
-are implemented. Public streaming ships **disabled in both Wrangler environments**
-until the test rollout below is performed.
+Status: Step 17 completed and CI/deployment-verified on 2026-09-18.
+The version-1 query, grant, snapshot, streaming, contributor, browser, and
+hibernating WebSocket surfaces are implemented. Streaming remains disabled in
+production; the isolated test environment enables the WebSocket transport.
 
 ## Release controls
 
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
-| `STATE_QUERY_STREAMS_ENABLED` | `"false"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
-| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects one exact route. `"hibernating_websocket"` enables the hardened socket endpoint, but remains a pre-rollout option until Step 17's deployed verification. Missing preserves polling; malformed values fail closed. |
-| `STATE_QUERY_DIAGNOSTICS` | `"false"` | `"true"` enables aggregate observer log windows. |
+| `STATE_QUERY_STREAMS_ENABLED` | production: `"false"`; test: `"true"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
+| `STATE_QUERY_STREAM_TRANSPORT` | production: `"polling_sse"`; test: `"hibernating_websocket"` | Selects one exact route. Missing preserves polling; malformed values fail closed. |
+| `STATE_QUERY_DIAGNOSTICS` | production: `"false"`; test: `"true"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
 | `STATE_QUERY_PUBLIC_ORIGIN` | Environment's Worker origin | Same-origin session and OAuth boundary. |
@@ -31,10 +31,10 @@ selector returns HTTP 503 with `state_query_transport_unavailable`. It never
 silently falls back. The accepted socket contract and transition stages are
 documented in [`state-query-websocket.md`](state-query-websocket.md).
 
-Do not select `hibernating_websocket` for a user-facing environment yet. The
-browser and OBS clients, acknowledgement backpressure, socket-aware leases, and
-event-driven grant invalidation are implemented, but Step 17 must still verify
-actual hibernation, parity, latency, and cost in the deployed test environment.
+The deployed test environment now selects `hibernating_websocket`; Step 17
+verified actual hibernation and real Chrome/OBS delivery there. Production
+remains disabled and keeps `polling_sse` only as the immediate rollback
+transport until Step 18 completes its controlled rollout and soak.
 
 Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
 commands continue to operate with subscriptions disabled. Snapshot previews
@@ -282,10 +282,54 @@ classes, persisted kinds, and compatible storage readers. A pre-state-query
 Worker is not an automatic safe rollback target. Keep state and audit records;
 do not reset or delete data as part of this procedure.
 
-No deployed latency, hibernation, cost, actual OBS interaction, or deployment
-success is claimed by this repository release checkpoint.
+The test deployment evidence below satisfies Step 17; it does not authorize a
+production rollout or retire the polling rollback path.
 
 ## Validation record
+
+### Step 17 deployed validation
+
+Commit [`31a9872`](https://github.com/BCIrealm087/elmybot/commit/31a9872f753e024cc24ae0a01eb3c77281462bb8)
+passed all **435 tests** and the lifecycle/load matrix in
+[CI run 35326114263](https://github.com/BCIrealm087/elmybot/actions/runs/35326114263).
+Test Worker version `ba1faa66-b2cf-487a-84a7-acf18ffa78ac` was deployed with
+streams and diagnostics enabled and `hibernating_websocket` selected.
+Chrome and an actual OBS Browser Source both received Discord-driven changes.
+After roughly 30 minutes idle, OBS was already current when revisited.
+
+The approximately 74-minute Durable Object dashboard sample reported:
+
+| Metric | Observed |
+| --- | ---: |
+| Requests | 113 |
+| Request types | 97 alarms; 6 HTTP; 10 inbound WebSocket messages |
+| WebSocket classification | 10 hibernatable; 0 non-hibernatable; 6 outbound |
+| Billable duration | 1.47 GB-seconds |
+| Wall time | p50 32.91 ms; p90 185 ms; p99 268 ms |
+| CPU time | p50 1.68 ms; p90 6.38 ms; p99 10.72 ms |
+| Storage operations | approximately 5k rows read; 580 rows written |
+| Stored data | 135.17 kB |
+| Memory | p50 4.18 MB; p90/p99 4.47 MB |
+| Errors | 2 client disconnects; 0 internal, thrown, CPU-limit, or memory-limit errors |
+
+The live tail showed source-watch registration, notification delivery, and
+event-driven reevaluation, with no request to the state-query polling route.
+Against the documented polling adapter's maximum idle rate of two polls per
+second per client, two clients for 74 minutes would produce 17,760 poll calls;
+113 total invocations is a 99.36% lower sample count. This is an illustrative
+comparison, not a billing forecast: the window includes setup and mutation work,
+dashboard figures are rounded, and the alarm schedule contributes most requests.
+The prior operator polling measurements were reused rather than repeated.
+
+Accepted deviations are exact Chrome/OBS patch versions, regional latency
+percentiles, and manual repetitions of network loss, Worker replacement,
+revocation, and the full 20-client load. The current releases were reported by
+the operator, while those lifecycle and scale variants remain covered by the
+automated suite. Manual testing was limited to the critical boundaries that
+automation cannot establish: deployed Cloudflare hibernation and actual OBS
+behavior.
+
+### Earlier release validation
 
 Local validation on 2026-09-15 passed all **43 files / 417 tests** at normal
 Vitest concurrency (final run: 29.99 seconds). The first full run exposed the new load

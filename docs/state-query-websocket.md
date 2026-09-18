@@ -3,9 +3,10 @@
 Status: transport contract accepted in roadmap step 13; the server-side route
 and hibernating observer lifecycle are implemented in step 14; the browser and
 OBS client migration is implemented in step 15; authorization, leases, and
-backpressure are implemented in step 16. The checked-in runtime remains on
-polling SSE until deployed verification passes. Public subscriptions remain
-disabled by default in both checked-in environments.
+backpressure are implemented in step 16; deployed hibernation and actual OBS
+delivery are verified in step 17. Test selects the WebSocket transport with
+subscriptions enabled. Production remains disabled and retains polling as the
+rollback transport until step 18.
 
 ## Decision and scope
 
@@ -49,9 +50,9 @@ An omitted selector preserves `polling_sse` for backward compatibility. Any
 other value is invalid and fails closed with
 `state_query_transport_unavailable` when subscriptions are enabled. The SSE
 route rejects the socket selection, and the socket route rejects the polling
-selection; neither silently falls back. Both Wrangler environments explicitly
-select `polling_sse` until browser migration and deployed verification are
-complete.
+selection; neither silently falls back. Production explicitly selects
+`polling_sse` with subscriptions disabled. The isolated test environment
+selects `hibernating_websocket` with subscriptions and diagnostics enabled.
 
 The Worker compatibility-date baseline is `2026-09-01`. This is new enough for
 the runtime's automatic WebSocket close-frame reply behavior; handlers must
@@ -316,8 +317,9 @@ renewal dependency.
 Focused Miniflare tests additionally cover atomic revocation intent and retry,
 future acknowledgement rejection, two-update coalescing, no-ack revocation,
 grant expiry, attached-only renewal, lost-interest expiry, and restart recovery.
-They still do not prove deployed Cloudflare hibernation or cost. The repository
-therefore keeps `polling_sse` selected as the rollback default until Step 17.
+Those tests alone do not prove deployed Cloudflare hibernation or cost. Step 17
+adds that evidence from the test Worker while production keeps `polling_sse`
+as its disabled rollback selection.
 
 ## Step boundaries
 
@@ -333,10 +335,16 @@ therefore keeps `polling_sse` selected as the rollback default until Step 17.
 - **Step 16:** completes acknowledgement backpressure, socket-aware leases,
   durable grant invalidation, expiry scheduling, and failure cleanup
   (implemented; deployed behavior remains a Step 17 gate).
-- **Step 17:** runs parity, load, actual browser/OBS, hibernation, and Cloudflare
-  cost verification in the deployed test environment.
+- **Step 17:** completed 2026-09-18. Test Worker version
+  `ba1faa66-b2cf-487a-84a7-acf18ffa78ac` delivered live updates to Chrome and
+  an actual OBS Browser Source, including after roughly 30 minutes idle. The
+  approximately 74-minute dashboard sample recorded 10 hibernatable and zero
+  non-hibernatable inbound messages, 1.47 GB-seconds, 113 requests, and no
+  internal or resource-limit error. Its live tail contained no polling route.
+  The full automated suite retained the lifecycle and 1/20-subscriber matrix.
 - **Step 18:** selects WebSockets in production, completes a rollback soak, and
   removes the polling endpoints and implementation.
 
-No step may claim actual hibernation from local or CI tests. That requires the
-deployed duration and connection evidence specified in step 17.
+Actual hibernation cannot be claimed from local or CI tests alone. Step 17's
+deployed duration and connection classification now provide that evidence for
+the isolated test environment only.
