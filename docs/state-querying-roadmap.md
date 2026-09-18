@@ -687,14 +687,14 @@ measurement window and accepted deviations are recorded here and in
 Test keeps `hibernating_websocket` selected. Production now selects the same
 transport while its subscription master switch remains disabled, making the
 selector change inert until a reviewed deployment enables subscriptions.
-Automated rollback coverage proves that either disabling the master switch or
-selecting `polling_sse` terminates existing sockets, drains their query graphs,
-and rejects new socket upgrades. Snapshots and commands remain independent.
+Automated rollback coverage proves that disabling the master switch terminates
+existing sockets before lease renewal, drains their query graphs, and rejects
+new socket upgrades. Snapshots and commands remain independent.
 
 Next, deploy the disabled production selection, enable a bounded production
-cohort, and observe it through an agreed soak period. The master switch is the
-first rollback; `polling_sse` remains a temporary code rollback until the soak
-allows its removal.
+cohort, and observe it through an agreed soak period. The master switch is always
+the first rollback. Only after sockets drain may `polling_sse` be selected as a
+temporary code rollback; the soak must succeed before that code is removed.
 
 After successful evidence and soak, remove the public/internal polling routes,
 poll/empty-poll metrics, SSE adapter loop, polling-specific tests, and obsolete
@@ -1016,7 +1016,8 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   to `hibernating_websocket` while `STATE_QUERY_STREAMS_ENABLED` remains
   `"false"`. Observer alarms now apply the master switch and transport selector
   before lease renewal, send a bounded terminal error to affected sockets, close
-  them, and remove their live query graphs. Automated cases cover both the
-  disabled-switch rollback and the temporary `polling_sse` selector rollback.
-  Legacy polling remains explicitly selected only in its test runtime until the
+  them, and remove their live query graphs. The automated case covers the
+  disabled-switch rollback; operational guidance requires that drain to finish
+  before any temporary `polling_sse` selector rollback. Legacy polling remains
+  explicitly selected only in its test runtime until the
   production rollout and soak authorize code removal.

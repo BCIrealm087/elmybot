@@ -344,9 +344,9 @@ as its disabled rollback selection.
   The full automated suite retained the lifecycle and 1/20-subscriber matrix.
 - **Step 18:** in progress since 2026-09-18. Production now checks in the
   WebSocket selector with subscriptions disabled. Automated rollback closes
-  existing sockets before lease renewal and drains their graphs when either the
-  master switch disables subscriptions or the selector returns to polling.
-  After the bounded production rollout and soak, remove the polling endpoints
+  existing sockets before lease renewal and drains their graphs when the master
+  switch disables subscriptions. Only after that drain may an incident rollback
+  select polling. After the bounded production rollout and soak, remove the polling endpoints
   and implementation.
 
 Actual hibernation cannot be claimed from local or CI tests alone. Step 17's

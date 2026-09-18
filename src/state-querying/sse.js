@@ -928,15 +928,12 @@ export async function removePolledStateQueryStream(state, env, input) {
 
 export async function cleanupExpiredStateQueryStreams(state, env) {
   const streamsEnabled = stateQueryStreamsEnabled(env);
-  const socketTransportEnabled = stateQueryStreamTransport(env) === SOCKET_TRANSPORT;
   const rows = state.storage.sql.exec(
-    `SELECT subscription_id, transport FROM state_query_stream_subscriptions
-     WHERE expires_at_ms <= ? OR ? = 0 OR (transport = ? AND ? = 0)
+    `SELECT subscription_id FROM state_query_stream_subscriptions
+     WHERE expires_at_ms <= ? OR ? = 0
      ORDER BY expires_at_ms LIMIT ?`,
     Date.now(),
     streamsEnabled ? 1 : 0,
-    SOCKET_TRANSPORT,
-    socketTransportEnabled ? 1 : 0,
     MAX_CONNECTIONS
   ).toArray();
   for (const row of rows) {
@@ -945,12 +942,7 @@ export async function cleanupExpiredStateQueryStreams(state, env) {
           code: "state_query_subscriptions_disabled",
           message: "Public state-query subscriptions are disabled."
         }
-      : row.transport === SOCKET_TRANSPORT && !socketTransportEnabled
-        ? {
-            code: "state_query_transport_unavailable",
-            message: "The configured state-query subscription transport is unavailable."
-          }
-        : null;
+      : null;
     for (const socket of streamSockets(state)) {
       if (socketAttachment(socket)?.subscriptionId === row.subscription_id) {
         if (rollbackError) {

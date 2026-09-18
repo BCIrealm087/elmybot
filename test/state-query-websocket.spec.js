@@ -313,20 +313,7 @@ describe("hibernating state-query WebSockets", () => {
     closeQuietly(socket);
   });
 
-  it.each([
-    {
-      label: "the master switch",
-      override: { STATE_QUERY_STREAMS_ENABLED: "false" },
-      code: "state_query_subscriptions_disabled",
-      status: 403
-    },
-    {
-      label: "the polling rollback selector",
-      override: { STATE_QUERY_STREAM_TRANSPORT: "polling_sse" },
-      code: "state_query_transport_unavailable",
-      status: 503
-    }
-  ])("retires existing sockets when $label is deployed", async ({ override, code, status }) => {
+  it("retires existing sockets when the master switch is disabled", async () => {
     const target = selectedTarget();
     await setCount(target, 3);
     const grant = await issue(target);
@@ -336,11 +323,11 @@ describe("hibernating state-query WebSockets", () => {
 
     const terminal = nextMessage(active.socket);
     const closed = nextSocketEvent(active.socket, "close");
-    const rollbackEnv = { ...socketEnv, ...override };
+    const disabledEnv = { ...socketEnv, STATE_QUERY_STREAMS_ENABLED: "false" };
     await runInDurableObject(observerStub(target), async (instance, state) => {
       const original = instance.env;
       try {
-        instance.env = rollbackEnv;
+        instance.env = disabledEnv;
         await instance.alarm();
         expect(stateQueryOperationalSnapshot(state)).toMatchObject({
           activeSubscriptions: 0,
@@ -356,7 +343,7 @@ describe("hibernating state-query WebSockets", () => {
     expect(await terminal).toMatchObject({
       protocol: STATE_QUERY_SOCKET_PROTOCOL,
       type: STATE_QUERY_SOCKET_MESSAGE_TYPES.error,
-      error: { code }
+      error: { code: "state_query_subscriptions_disabled" }
     });
     expect((await closed).code).toBe(STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation);
     await vi.waitFor(async () => {
@@ -365,10 +352,11 @@ describe("hibernating state-query WebSockets", () => {
     });
 
     const rejected = await openSocket(target, grant.credential, {
-      selectedEnv: rollbackEnv
+      selectedEnv: disabledEnv
     });
-    expect(rejected.response.status).toBe(status);
-    expect((await rejected.response.json()).error.code).toBe(code);
+    expect(rejected.response.status).toBe(403);
+    expect((await rejected.response.json()).error.code)
+      .toBe("state_query_subscriptions_disabled");
   });
 
   it("delivers a snapshot and committed replacement without observer polling", async () => {

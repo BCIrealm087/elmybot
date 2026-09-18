@@ -19,8 +19,8 @@ production; the isolated test environment enables the WebSocket transport.
 The streaming switch gates both the public registration and observer polling
 paths. A disabled registration returns HTTP 403 with
 `state_query_subscriptions_disabled`. An already open polling adapter closes when its observer rejects a poll.
-Observer alarms apply both release controls before socket lease renewal, send a
-terminal error to affected WebSockets, and retire their stream graphs. Deploying
+Observer alarms apply the disabled master switch before socket lease renewal,
+send a terminal error to affected WebSockets, and retire their stream graphs. Deploying
 a setting is subject to Worker rollout propagation; this is not a claim that
 every old isolate changes configuration instantaneously.
 
@@ -276,7 +276,9 @@ metadata. There is no safe automatic reversal of historical hashed subjects.
    same telemetry remains acceptable; admission limits are not a throughput SLA.
 
 For a production incident, disabling subscriptions is the first rollback.
-Revoke a compromised grant independently when needed. If a code rollback is
+Wait for active socket graphs to drain before changing the selector to
+`polling_sse` if a code-level fallback is still required. Revoke a compromised
+grant independently when needed. If a code rollback is
 also necessary, use a reviewed version that retains current migrations, DO
 classes, persisted kinds, and compatible storage readers. A pre-state-query
 Worker is not an automatic safe rollback target. Keep state and audit records;
