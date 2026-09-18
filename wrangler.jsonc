@@ -114,7 +114,7 @@
 		"test": {
 			"vars": {
 				"STATE_QUERY_STREAMS_ENABLED": "true",
-				"STATE_QUERY_STREAM_TRANSPORT": "polling_sse",
+				"STATE_QUERY_STREAM_TRANSPORT": "hibernating_websocket",
 				"STATE_QUERY_DIAGNOSTICS": "true",
 				"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "test",
 				"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",
