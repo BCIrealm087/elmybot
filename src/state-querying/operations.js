@@ -3,7 +3,8 @@ const windows = new WeakMap();
 const COUNTERS = new Set([
   "registrations", "polls", "emptyPolls", "closed", "expired", "resynchronized",
   "oversized", "notifications", "duplicates", "obsolete", "handoffs", "retries",
-  "authorizationRetries", "detachRetries", "evaluations"
+  "authorizationRetries", "detachRetries", "evaluations", "backpressureCoalesced",
+  "grantInvalidations", "leaseRetries"
 ]);
 
 export function stateQueryStreamsEnabled(env) {

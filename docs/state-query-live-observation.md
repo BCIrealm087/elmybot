@@ -88,12 +88,15 @@ query sequence or create a user-visible update.
 
 ## Authorization, leases, and recovery
 
-Authorization is checked during every evaluation and independently every 30
-seconds. The periodic check validates only the stored grant reference; it does
-not reevaluate an unchanged query. Expired or revoked grants move that query to
-`denied`, preserve a safe error code for the future transport, and release its
-source relationships. Dynamic values are authorized again after every change,
-so a newly selected argument outside the grant policy cannot be delivered.
+Authorization is checked during every evaluation. Polling-SSE and direct
+internal live queries also validate their stored grant reference every 30
+seconds without reevaluating an unchanged query. Hibernating-WebSocket queries
+instead use durable revocation invalidations and their exact stored grant-expiry
+deadline; their lease-maintenance alarm does not poll grant storage. Expired or
+revoked grants move only matching queries to `denied`, preserve a safe error
+code, and release their source relationships. Dynamic values are authorized
+again after every change, so a newly selected argument outside the grant policy
+cannot be delivered.
 
 Client query leases last 30–300 seconds and default to 120 seconds. Renewal also
 renews every underlying source watcher. A shared watcher is renewed through the
@@ -122,7 +125,8 @@ does not replay obsolete intermediate values.
 | External-call concurrency | 4 |
 | Attempt lease | 30 seconds |
 | Retry delay | 1–30 seconds |
-| Independent grant check | Every 30 seconds or at grant expiry |
+| Polling/direct grant check | Every 30 seconds or at grant expiry |
+| Socket grant check | Durable revocation push and exact grant expiry |
 
 Query-parser, evaluator, result-size, collection-size, grant-permission, and
 source-owner watcher limits continue to apply in addition to this table. Limit

@@ -2,10 +2,10 @@
 
 Status: transport contract accepted in roadmap step 13; the server-side route
 and hibernating observer lifecycle are implemented in step 14; the browser and
-OBS client migration is implemented in step 15. The checked-in runtime remains
-on polling SSE until authorization/backpressure hardening and deployed
-verification pass. Public subscriptions remain disabled by default in both
-checked-in environments.
+OBS client migration is implemented in step 15; authorization, leases, and
+backpressure are implemented in step 16. The checked-in runtime remains on
+polling SSE until deployed verification passes. Public subscriptions remain
+disabled by default in both checked-in environments.
 
 ## Decision and scope
 
@@ -274,7 +274,7 @@ current snapshot. A cursor can optimize recovery only within the same authorized
 subscription and effective binding. A source handoff invalidates earlier realm
 history even when the visible value is unchanged.
 
-## Step 14 implementation evidence and remaining gates
+## Step 14–16 implementation evidence and remaining gates
 
 The public Worker now authenticates `GET /state-query/socket`, enforces exact
 cookie origin, rejects URL parameters, selects the observer only from the
@@ -290,13 +290,34 @@ cleanup, bounded protocol errors, attachment contents, automatic heartbeat
 response, and zero polling calls. These tests prove handler reconstruction and
 protocol behavior, not deployed Cloudflare hibernation or cost.
 
-Step 14 records valid acknowledgement cursors in the socket attachment, but does
-not yet gate sends on acknowledgements. Step 15's browser client sends those
-acknowledgements after applying each complete event. The one-outstanding-event
-server backpressure, socket-aware lease policy, and durable revocation/expiry
-refinements remain Step 16. The repository therefore keeps `polling_sse`
-selected as the deployment rollback default even though the static browser and
-OBS client now speak the socket protocol.
+Step 16 now gates sends on the last event actually sent, rejects acknowledgements
+for future or unsent cursors, and durably retains bounded newer replacements
+until one coalesced current event can be sent. A terminal event closes an
+acknowledged connection; a non-acknowledging connection cannot accumulate sends
+and is closed when its bounded subscription lease expires.
+
+Socket subscriptions use event-driven authorization. Grant revocation commits a
+group-local invalidation outbox row in the same transaction as the revocation,
+then retries delivery to the observer. The observer records a durable tombstone
+before denying matching queries, closing the registration/revocation race.
+Grant expiry is stored with the subscription and query and becomes an exact
+observer alarm deadline. Registration, reconnect, invalidated reevaluation, and
+binding handoff still validate the current grant against its issuing group;
+routine socket lease maintenance does not poll grant storage.
+
+One due socket subscription is maintained per alarm turn. Only an attached
+hibernatable socket renews its query and source leases. Close/error cleanup
+removes active query interest idempotently, while the retained bounded
+subscription/history window supports authorized reconnect. If a disconnect is
+lost, expiry closes the socket record and removes its graph. Retry state and the
+next maintenance deadline are durable, so restart does not create an in-memory
+renewal dependency.
+
+Focused Miniflare tests additionally cover atomic revocation intent and retry,
+future acknowledgement rejection, two-update coalescing, no-ack revocation,
+grant expiry, attached-only renewal, lost-interest expiry, and restart recovery.
+They still do not prove deployed Cloudflare hibernation or cost. The repository
+therefore keeps `polling_sse` selected as the rollback default until Step 17.
 
 ## Step boundaries
 
@@ -310,7 +331,8 @@ OBS client now speak the socket protocol.
   [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a);
   verified by [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638)).
 - **Step 16:** completes acknowledgement backpressure, socket-aware leases,
-  durable grant invalidation, expiry scheduling, and failure cleanup.
+  durable grant invalidation, expiry scheduling, and failure cleanup
+  (implemented; deployed behavior remains a Step 17 gate).
 - **Step 17:** runs parity, load, actual browser/OBS, hibernation, and Cloudflare
   cost verification in the deployed test environment.
 - **Step 18:** selects WebSockets in production, completes a rollback soak, and

@@ -33,6 +33,7 @@ const ATTEMPT_LEASE_MS = 30 * 1000;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 30 * 1000;
 const AUTHORIZATION_CHECK_MS = 30 * 1000;
+const AUTHORIZATION_MODES = new Set(["periodic", "event_driven"]);
 
 export const STATE_QUERY_LIVE_PATHS = Object.freeze({
   attach: "/internal/state-query/live/attach",
@@ -169,6 +170,27 @@ export function initializeLiveObservationTables(state) {
     CREATE INDEX IF NOT EXISTS state_query_observer_query_sources_edge
       ON state_query_observer_query_sources(edge_key, query_id);
   `);
+  const queryColumns = new Set(state.storage.sql.exec(
+    "PRAGMA table_info(state_query_observer_queries)"
+  ).toArray().map((column) => column.name));
+  if (!queryColumns.has("authorization_mode")) {
+    state.storage.sql.exec(
+      "ALTER TABLE state_query_observer_queries ADD COLUMN authorization_mode TEXT NOT NULL DEFAULT 'periodic'"
+    );
+  }
+  if (!queryColumns.has("grant_expires_at_ms")) {
+    state.storage.sql.exec(
+      "ALTER TABLE state_query_observer_queries ADD COLUMN grant_expires_at_ms INTEGER NOT NULL DEFAULT 0"
+    );
+  }
+}
+
+function authorizationMode(value) {
+  const selected = value ?? "periodic";
+  if (!AUTHORIZATION_MODES.has(selected)) {
+    fail("Live-query authorization mode is invalid.");
+  }
+  return selected;
 }
 
 function bindObserver(state, environment, target, nowMs) {
@@ -493,6 +515,7 @@ function storeEvaluation(
     descriptors,
     attached,
     selectedLeaseSeconds,
+    selectedAuthorizationMode,
     nowMs,
     keepPending = false,
     fixedLeaseExpiresAtMs = null
@@ -509,10 +532,9 @@ function storeEvaluation(
     : 1;
   const leaseExpiresAtMs = fixedLeaseExpiresAtMs ??
     nowMs + selectedLeaseSeconds * 1000;
-  const nextAuthorizationAtMs = Math.min(
-    grant.expiresAtMs,
-    nowMs + AUTHORIZATION_CHECK_MS
-  );
+  const nextAuthorizationAtMs = selectedAuthorizationMode === "event_driven"
+    ? grant.expiresAtMs
+    : Math.min(grant.expiresAtMs, nowMs + AUTHORIZATION_CHECK_MS);
   state.storage.transactionSync(() => {
     const queryTotal = Number(state.storage.sql.exec(
       "SELECT COUNT(*) AS total FROM state_query_observer_queries"
@@ -561,8 +583,8 @@ function storeEvaluation(
          dependencies_json, result_revision, result_sequence, query_state,
          error_code, pending_reason, attempt_count, next_attempt_at_ms,
          next_authorization_at_ms, lease_expires_at_ms, created_at_ms,
-         updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, 0, ?, ?, ?, ?, ?)
+         updated_at_ms, authorization_mode, grant_expires_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, 0, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(query_id) DO UPDATE SET
          envelope_json = excluded.envelope_json,
          dependencies_json = excluded.dependencies_json,
@@ -574,6 +596,8 @@ function storeEvaluation(
          next_attempt_at_ms = excluded.next_attempt_at_ms,
          next_authorization_at_ms = excluded.next_authorization_at_ms,
          lease_expires_at_ms = excluded.lease_expires_at_ms,
+         authorization_mode = excluded.authorization_mode,
+         grant_expires_at_ms = excluded.grant_expires_at_ms,
          updated_at_ms = excluded.updated_at_ms`,
       selectedQueryId,
       grantId,
@@ -588,7 +612,9 @@ function storeEvaluation(
       nextAuthorizationAtMs,
       leaseExpiresAtMs,
       nowMs,
-      nowMs
+      nowMs,
+      selectedAuthorizationMode,
+      grant.expiresAtMs
     );
     for (const { descriptor, result: registration } of attached) {
       state.storage.sql.exec(
@@ -646,6 +672,7 @@ async function evaluateAttachAndSwap(
     query,
     reason,
     selectedLeaseSeconds,
+    selectedAuthorizationMode,
     fixedLeaseExpiresAtMs = null
   }
 ) {
@@ -688,6 +715,7 @@ async function evaluateAttachAndSwap(
       descriptors,
       attached: registration.attached,
       selectedLeaseSeconds,
+      selectedAuthorizationMode,
       nowMs: Date.now(),
       keepPending: evaluated.result.envelope.status === "unavailable",
       fixedLeaseExpiresAtMs
@@ -703,7 +731,8 @@ function existingQuery(state, selectedQueryId) {
   return state.storage.sql.exec(
     `SELECT query_id, grant_id, query_digest, query_json, envelope_json,
             dependencies_json, result_revision, result_sequence, query_state,
-            error_code, pending_reason, lease_expires_at_ms
+            error_code, pending_reason, lease_expires_at_ms,
+            authorization_mode, grant_expires_at_ms
      FROM state_query_observer_queries WHERE query_id = ?`,
     selectedQueryId
   ).toArray()[0] ?? null;
@@ -726,6 +755,7 @@ function publicQuery(row) {
 export async function attachLiveStateQuery(state, env, input) {
   const selectedQueryId = queryId(input?.queryId);
   const selectedLeaseSeconds = leaseSeconds(input?.leaseSeconds);
+  const selectedAuthorizationMode = authorizationMode(input?.authorizationMode);
   const target = normalizedTarget(input?.query?.target);
   const environment = stateQueryEnvironment(env);
   const nowMs = Date.now();
@@ -745,14 +775,15 @@ export async function attachLiveStateQuery(state, env, input) {
     grantId: input?.grantId,
     query: input?.query,
     reason: existing ? "resynchronized" : "initial",
-    selectedLeaseSeconds
+    selectedLeaseSeconds,
+    selectedAuthorizationMode
   });
   await cleanupDetachedSources(state, env);
   await scheduleLiveObservationAlarm(state);
   return result;
 }
 
-export async function renewLiveStateQuery(state, env, input) {
+export async function renewLiveStateQuery(state, env, input, options = {}) {
   const selectedQueryId = queryId(input?.queryId);
   const selectedLeaseSeconds = leaseSeconds(input?.leaseSeconds);
   const row = existingQuery(state, selectedQueryId);
@@ -763,9 +794,11 @@ export async function renewLiveStateQuery(state, env, input) {
     });
   }
   const target = observerTarget(state)?.target;
-  const grant = await validateStateQueryGrantReference(env, {
-    target,
-    grantId: row.grant_id
+  const selectedAuthorizationMode = authorizationMode(
+    input?.authorizationMode ?? row.authorization_mode
+  );
+  const grant = options.grant ?? await validateStateQueryGrantReference(env, {
+    target, grantId: row.grant_id
   });
   const sourceRows = state.storage.sql.exec(
     `SELECT source.edge_key, source.watcher_id, source.source_kind,
@@ -807,10 +840,19 @@ export async function renewLiveStateQuery(state, env, input) {
            updated_at_ms = ?
        WHERE query_id = ?`,
       expiresAtMs,
-      Math.min(grant.expiresAtMs, nowMs + AUTHORIZATION_CHECK_MS),
+      selectedAuthorizationMode === "event_driven"
+        ? grant.expiresAtMs
+        : Math.min(grant.expiresAtMs, nowMs + AUTHORIZATION_CHECK_MS),
       mismatch ? 1 : 0,
       mismatch ? 1 : 0,
       nowMs,
+      selectedQueryId
+    );
+    state.storage.sql.exec(
+      `UPDATE state_query_observer_queries
+       SET authorization_mode = ?, grant_expires_at_ms = ? WHERE query_id = ?`,
+      selectedAuthorizationMode,
+      grant.expiresAtMs,
       selectedQueryId
     );
     for (const { source, registration } of registrations) {
@@ -909,7 +951,7 @@ function claimDueQueries(state, nowMs) {
   return state.storage.transactionSync(() => {
     const rows = state.storage.sql.exec(
       `SELECT query_id, grant_id, query_json, envelope_json, pending_reason,
-              attempt_count, lease_expires_at_ms
+              attempt_count, lease_expires_at_ms, authorization_mode
        FROM state_query_observer_queries
        WHERE query_state = 'active' AND pending_reason IS NOT NULL
          AND next_attempt_at_ms <= ?
@@ -935,7 +977,7 @@ async function checkDueAuthorizations(state, env, nowMs) {
   const selected = observerTarget(state);
   if (!selected) return 0;
   const rows = state.storage.sql.exec(
-    `SELECT query_id, grant_id
+    `SELECT query_id, grant_id, authorization_mode, grant_expires_at_ms
      FROM state_query_observer_queries
      WHERE query_state = 'active' AND pending_reason IS NULL
        AND next_authorization_at_ms <= ? AND lease_expires_at_ms > ?
@@ -947,6 +989,19 @@ async function checkDueAuthorizations(state, env, nowMs) {
   ).toArray();
   for (let index = 0; index < rows.length; index += DRAIN_CONCURRENCY) {
     await Promise.all(rows.slice(index, index + DRAIN_CONCURRENCY).map(async (row) => {
+      if (row.authorization_mode === "event_driven") {
+        if (Number(row.grant_expires_at_ms) <= nowMs) {
+          denyQuery(state, row.query_id, "query_grant_expired", nowMs);
+        } else {
+          state.storage.sql.exec(
+            `UPDATE state_query_observer_queries SET next_authorization_at_ms = ?
+             WHERE query_id = ? AND query_state = 'active'`,
+            row.grant_expires_at_ms,
+            row.query_id
+          );
+        }
+        return;
+      }
       try {
         const grant = await validateStateQueryGrantReference(env, {
           target: selected.target,
@@ -1001,6 +1056,24 @@ function denyQuery(state, selectedQueryId, code, nowMs) {
   });
 }
 
+export function invalidateLiveQueriesForGrant(state, {
+  grantId,
+  code,
+  nowMs = Date.now()
+}) {
+  if (typeof grantId !== "string" || grantId.length === 0 || grantId.length > 80 ||
+      !new Set(["query_grant_revoked", "query_grant_expired"]).has(code)) {
+    fail("Grant invalidation is invalid.");
+  }
+  const rows = state.storage.sql.exec(
+    `SELECT query_id FROM state_query_observer_queries
+     WHERE grant_id = ? AND query_state = 'active' ORDER BY query_id`,
+    grantId
+  ).toArray();
+  for (const row of rows) denyQuery(state, row.query_id, code, nowMs);
+  return { invalidated: rows.length };
+}
+
 function retryQuery(state, row, nowMs) {
   recordStateQueryMetric(state, "retries");
   const attempt = Number(row.attempt_count) + 1;
@@ -1038,6 +1111,7 @@ async function processQuery(state, env, row) {
       query: JSON.parse(row.query_json),
       reason,
       selectedLeaseSeconds: remainingSeconds,
+      selectedAuthorizationMode: row.authorization_mode,
       fixedLeaseExpiresAtMs: Number(row.lease_expires_at_ms)
     });
     if (replacement.envelope.bindingRevision !== previousEnvelope.bindingRevision) {
@@ -1185,6 +1259,10 @@ export async function scheduleLiveObservationAlarm(state) {
        UNION ALL
        SELECT MIN(expires_at_ms) AS next_at_ms
        FROM state_query_stream_subscriptions
+       UNION ALL
+       SELECT MIN(next_maintenance_at_ms) AS next_at_ms
+       FROM state_query_stream_subscriptions
+       WHERE transport = 'hibernating_websocket'
        UNION ALL
        SELECT MIN(next_attempt_at_ms) AS next_at_ms
        FROM state_query_observer_sources WHERE source_state = 'detaching'

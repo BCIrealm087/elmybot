@@ -6,6 +6,7 @@ import {
 import {
   attachLiveStateQuery,
   getLiveStateQuery,
+  invalidateLiveQueriesForGrant,
   removeLiveStateQuery,
   renewLiveStateQuery,
   scheduleLiveObservationAlarm,
@@ -35,11 +36,16 @@ const MAX_HISTORY_BYTES = 256 * 1024;
 const MAX_BUFFERED_BYTES = 256 * 1024;
 const HISTORY_RETENTION_MS = 5 * 60 * 1000;
 const CONNECTION_LEASE_SECONDS = STATE_QUERY_LIVE_LIMITS.defaultLeaseSeconds;
+const SOCKET_LEASE_RENEW_AFTER_MS = 60 * 1000;
+const SOCKET_LEASE_RETRY_MS = 5 * 1000;
+const SOCKET_LEASE_BATCH_SIZE = 1;
 
 export const STATE_QUERY_STREAM_PATH = "/internal/state-query/stream";
 export const STATE_QUERY_STREAM_POLL_PATH = "/internal/state-query/stream/poll";
 export const STATE_QUERY_STREAM_CLOSE_PATH = "/internal/state-query/stream/close";
 export const STATE_QUERY_SOCKET_INTERNAL_PATH = "/internal/state-query/socket";
+export const STATE_QUERY_GRANT_INVALIDATION_PATH =
+  "/internal/state-query/grant-invalidation";
 
 const SOCKET_TAG = "state-query";
 const SOCKET_TRANSPORT = STATE_QUERY_STREAM_TRANSPORTS.hibernatingWebSocket;
@@ -162,7 +168,28 @@ export function initializeStateQueryStreamTables(state) {
     );
     CREATE INDEX IF NOT EXISTS state_query_stream_history_created
       ON state_query_stream_history(created_at_ms);
+    CREATE TABLE IF NOT EXISTS state_query_stream_grant_invalidations (
+      grant_id TEXT PRIMARY KEY,
+      error_code TEXT NOT NULL,
+      invalidated_at_ms INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL
+    );
   `);
+  const subscriptionColumns = new Set(state.storage.sql.exec(
+    "PRAGMA table_info(state_query_stream_subscriptions)"
+  ).toArray().map((column) => column.name));
+  for (const [name, definition] of [
+    ["transport", "TEXT NOT NULL DEFAULT 'polling_sse'"],
+    ["grant_expires_at_ms", "INTEGER NOT NULL DEFAULT 0"],
+    ["next_maintenance_at_ms", "INTEGER NOT NULL DEFAULT 0"],
+    ["maintenance_attempt_count", "INTEGER NOT NULL DEFAULT 0"]
+  ]) {
+    if (!subscriptionColumns.has(name)) {
+      state.storage.sql.exec(
+        `ALTER TABLE state_query_stream_subscriptions ADD COLUMN ${name} ${definition}`
+      );
+    }
+  }
   let row = state.storage.sql.exec(
     "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
   ).toArray()[0];
@@ -257,6 +284,55 @@ function pruneHistory(state, nowMs) {
      )`,
     nowMs
   );
+  state.storage.sql.exec(
+    "DELETE FROM state_query_stream_grant_invalidations WHERE expires_at_ms <= ?",
+    nowMs
+  );
+}
+
+function grantInvalidation(state, grantId, nowMs = Date.now()) {
+  return state.storage.sql.exec(
+    `SELECT error_code, expires_at_ms
+     FROM state_query_stream_grant_invalidations
+     WHERE grant_id = ? AND expires_at_ms > ?`,
+    grantId,
+    nowMs
+  ).toArray()[0] ?? null;
+}
+
+function requireActiveGrant(state, grantId, nowMs = Date.now()) {
+  const invalidation = grantInvalidation(state, grantId, nowMs);
+  if (invalidation) {
+    fail("The state-query grant is no longer active.", {
+      status: 401,
+      code: invalidation.error_code
+    });
+  }
+}
+
+function normalizedGrantInvalidation(input) {
+  const grantId = input?.grantId;
+  const code = input?.code;
+  const invalidatedAtMs = input?.invalidatedAtMs;
+  const expiresAtMs = input?.expiresAtMs;
+  const environment = input?.environment;
+  const selectedTarget = target(input?.target);
+  if (input?.version !== 1 || typeof grantId !== "string" ||
+      grantId.length === 0 || grantId.length > 80 ||
+      typeof environment !== "string" || !/^[a-z0-9_-]{1,40}$/.test(environment) ||
+      !new Set(["query_grant_revoked", "query_grant_expired"]).has(code) ||
+      !Number.isSafeInteger(invalidatedAtMs) || invalidatedAtMs < 0 ||
+      !Number.isSafeInteger(expiresAtMs) || expiresAtMs < invalidatedAtMs) {
+    fail("State-query grant invalidation is invalid.");
+  }
+  return {
+    grantId,
+    code,
+    invalidatedAtMs,
+    expiresAtMs,
+    environment,
+    target: selectedTarget
+  };
 }
 
 function storeEvent(state, subscriptionId, eventType, payload, nowMs) {
@@ -335,14 +411,97 @@ function storeEvent(state, subscriptionId, eventType, payload, nowMs) {
   return { sequence, cursor, eventType, payload };
 }
 
+function replacementSnapshot(state, subscriptionId, nowMs) {
+  const results = state.storage.sql.exec(
+    `SELECT client_query_id, observer_query_id FROM state_query_stream_queries
+     WHERE subscription_id = ? ORDER BY client_query_id`,
+    subscriptionId
+  ).toArray().map((row) => {
+    const query = getLiveStateQuery(state, { queryId: row.observer_query_id }).query;
+    return query ? publicResult(row.client_query_id, query, "resynchronized") : {
+      queryId: row.client_query_id,
+      status: "unavailable",
+      reason: "resynchronized"
+    };
+  });
+  const terminal = results.some((result) => !result.result || result.status === "denied");
+  recordStateQueryMetric(state, "resynchronized");
+  return storeEvent(state, subscriptionId, terminal ? "status" : "snapshot", {
+    protocol: "state-query-stream/v1",
+    subscriptionId,
+    results
+  }, nowMs);
+}
+
+function eventAfterSequence(state, subscriptionId, afterSequence, nowMs = Date.now()) {
+  const subscription = state.storage.sql.exec(
+    `SELECT next_sequence FROM state_query_stream_subscriptions
+     WHERE subscription_id = ?`,
+    subscriptionId
+  ).toArray()[0];
+  if (!subscription) return null;
+  const events = state.storage.sql.exec(
+    `SELECT sequence, event_type, payload_json
+     FROM state_query_stream_history
+     WHERE subscription_id = ? AND sequence > ? ORDER BY sequence ASC`,
+    subscriptionId,
+    afterSequence
+  ).toArray();
+  if ((events.length > 0 && Number(events[0].sequence) > afterSequence + 1) ||
+      (events.length === 0 && Number(subscription.next_sequence) - 1 > afterSequence)) {
+    return replacementSnapshot(state, subscriptionId, nowMs);
+  }
+  if (events.length === 0) return null;
+  const latest = events.at(-1);
+  const latestResults = new Map();
+  let eventType = latest.event_type;
+  let payload = null;
+  for (const event of events) {
+    const candidate = JSON.parse(event.payload_json);
+    payload = candidate;
+    for (const result of candidate.results ?? []) latestResults.set(result.queryId, result);
+    if (event.event_type === "status") eventType = "status";
+  }
+  payload = { ...payload, results: [...latestResults.values()] };
+  if (encoder.encode(canonicalStateQueryJson(payload)).byteLength > MAX_BUFFERED_BYTES) {
+    return storeEvent(state, subscriptionId, eventType, payload, nowMs);
+  }
+  const generation = state.storage.sql.exec(
+    "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
+  ).one().generation;
+  return {
+    sequence: Number(latest.sequence),
+    cursor: `sq1.${generation}.${subscriptionId}.${latest.sequence}`,
+    eventType,
+    payload
+  };
+}
+
+function sendSocketEvent(socket, attachment, event) {
+  const acknowledged = Number(attachment.acknowledgedSequence ?? 0);
+  const sent = Number(attachment.sentSequence ?? 0);
+  if (sent > acknowledged) return false;
+  if (!safeSend(socket, socketEventMessage(socket, event))) return false;
+  socket.serializeAttachment?.({
+    ...attachment,
+    sentSequence: event.sequence,
+    sentCursor: event.cursor
+  });
+  if (event.eventType === "status") {
+    closeSocket(socket, STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation,
+      "State-query access ended");
+  }
+  return true;
+}
+
 function sendEventToSubscription(state, connections, subscriptionId, event) {
   for (const socket of streamSockets(state, connections)) {
     const attachment = socketAttachment(socket);
     if (attachment?.registered && attachment.subscriptionId === subscriptionId) {
-      safeSend(socket, socketEventMessage(socket, event));
-      if (attachment.transport === SOCKET_TRANSPORT && event.eventType === "status") {
-        closeSocket(socket, STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation,
-          "State-query access ended");
+      if (attachment.transport === SOCKET_TRANSPORT) {
+        sendSocketEvent(socket, attachment, event);
+      } else {
+        safeSend(socket, socketEventMessage(socket, event));
       }
     }
   }
@@ -365,6 +524,10 @@ async function removeSubscriptionQueries(state, env, subscriptionId) {
 async function registerSocket(state, env, socket, input, _connections = []) {
   requireStateQueryStreamsEnabled(env);
   await cleanupExpiredStateQueryStreams(state, env);
+  const priorAttachment = socketAttachment(socket);
+  const transport = priorAttachment?.transport === SOCKET_TRANSPORT
+    ? SOCKET_TRANSPORT
+    : STATE_QUERY_STREAM_TRANSPORTS.pollingSse;
   const retainedConnections = Number(state.storage.sql.exec(
     `SELECT COUNT(*) AS total FROM state_query_stream_subscriptions
      WHERE expires_at_ms > ? AND subscription_id != ?`,
@@ -383,6 +546,7 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     target: selectedTarget,
     grantId: input?.grantId
   });
+  requireActiveGrant(state, grant.id);
   for (const entry of queries) {
     const queryTarget = target(entry.query?.target);
     if (queryTarget.platform !== selectedTarget.platform ||
@@ -418,6 +582,9 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     await removeSubscriptionQueries(state, env, subscriptionId);
   }
   const expiresAtMs = Math.min(grant.expiresAtMs, nowMs + CONNECTION_LEASE_SECONDS * 1000);
+  const nextMaintenanceAtMs = transport === SOCKET_TRANSPORT
+    ? Math.min(grant.expiresAtMs, nowMs + SOCKET_LEASE_RENEW_AFTER_MS)
+    : expiresAtMs;
   // Authorization/digest work yielded to other registrations. Reserve capacity
   // again immediately before insertion, with no await between check and write.
   if (Number(state.storage.sql.exec(
@@ -431,16 +598,24 @@ async function registerSocket(state, env, socket, input, _connections = []) {
   state.storage.sql.exec(
     `INSERT INTO state_query_stream_subscriptions
       (subscription_id, grant_id, query_set_digest, next_sequence,
-       expires_at_ms, created_at_ms, updated_at_ms)
-     VALUES (?, ?, ?, 1, ?, ?, ?)
+       expires_at_ms, created_at_ms, updated_at_ms, transport,
+       grant_expires_at_ms, next_maintenance_at_ms, maintenance_attempt_count)
+     VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, 0)
      ON CONFLICT(subscription_id) DO UPDATE SET expires_at_ms = excluded.expires_at_ms,
-       updated_at_ms = excluded.updated_at_ms`,
+       updated_at_ms = excluded.updated_at_ms,
+       transport = excluded.transport,
+       grant_expires_at_ms = excluded.grant_expires_at_ms,
+       next_maintenance_at_ms = excluded.next_maintenance_at_ms,
+       maintenance_attempt_count = 0`,
     subscriptionId,
     grant.id,
     querySetDigest,
     expiresAtMs,
     nowMs,
-    nowMs
+    nowMs,
+    transport,
+    grant.expiresAtMs,
+    nextMaintenanceAtMs
   );
   const results = [];
   try {
@@ -450,8 +625,10 @@ async function registerSocket(state, env, socket, input, _connections = []) {
         queryId: observerQueryId,
         grantId: grant.id,
         query: entry.query,
-        leaseSeconds: CONNECTION_LEASE_SECONDS
+        leaseSeconds: CONNECTION_LEASE_SECONDS,
+        authorizationMode: transport === SOCKET_TRANSPORT ? "event_driven" : "periodic"
       });
+      requireActiveGrant(state, grant.id);
       state.storage.sql.exec(
         `INSERT INTO state_query_stream_queries
           (subscription_id, client_query_id, observer_query_id,
@@ -478,7 +655,6 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     );
     throw error;
   }
-  const priorAttachment = socketAttachment(socket);
   const attachment = {
     registered: true,
     subscriptionId,
@@ -494,9 +670,11 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     results
   }, nowMs);
   recordStateQueryMetric(state, "registrations");
-  safeSend(socket, attachment.transport === SOCKET_TRANSPORT
-    ? socketEventMessage(socket, event)
-    : { type: "ready", subscriptionId, event });
+  if (attachment.transport === SOCKET_TRANSPORT) {
+    sendSocketEvent(socket, attachment, event);
+  } else {
+    safeSend(socket, { type: "ready", subscriptionId, event });
+  }
 }
 
 function socketHandshakeTarget(request) {
@@ -755,9 +933,202 @@ export async function cleanupExpiredStateQueryStreams(state, env) {
     Date.now(), stateQueryStreamsEnabled(env) ? 1 : 0, MAX_CONNECTIONS
   ).toArray();
   for (const row of rows) {
+    for (const socket of streamSockets(state)) {
+      if (socketAttachment(socket)?.subscriptionId === row.subscription_id) {
+        closeSocket(
+          socket,
+          STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation,
+          "State-query lease expired"
+        );
+      }
+    }
     await removePolledStateQueryStream(state, env, { subscriptionId: row.subscription_id });
     recordStateQueryMetric(state, "expired");
   }
+}
+
+export async function invalidateStateQueryGrant(state, env, input, connections = []) {
+  const invalidation = normalizedGrantInvalidation(input);
+  if (invalidation.environment !== stateQueryEnvironment(env)) {
+    fail("State-query grant invalidation is invalid.", {
+      status: 403,
+      code: "state_query_observer_identity_mismatch"
+    });
+  }
+  state.storage.transactionSync(() => {
+    const identity = state.storage.sql.exec(
+      `SELECT environment, target_platform, target_group_id
+       FROM state_query_observer_meta WHERE singleton = 1`
+    ).toArray()[0];
+    if (identity && (identity.environment !== invalidation.environment ||
+        identity.target_platform !== invalidation.target.platform ||
+        identity.target_group_id !== invalidation.target.groupId)) {
+      fail("State-query grant invalidation does not belong to this observer.", {
+        status: 409,
+        code: "state_query_observer_identity_mismatch"
+      });
+    }
+    if (!identity) {
+      state.storage.sql.exec(
+        `INSERT INTO state_query_observer_meta
+          (singleton, environment, target_platform, target_group_id, created_at_ms)
+         VALUES (1, ?, ?, ?, ?)`,
+        invalidation.environment,
+        invalidation.target.platform,
+        invalidation.target.groupId,
+        Date.now()
+      );
+    }
+    state.storage.sql.exec(
+      `INSERT INTO state_query_stream_grant_invalidations
+        (grant_id, error_code, invalidated_at_ms, expires_at_ms)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(grant_id) DO UPDATE SET
+         error_code = excluded.error_code,
+         invalidated_at_ms = MAX(
+           state_query_stream_grant_invalidations.invalidated_at_ms,
+           excluded.invalidated_at_ms
+         ),
+         expires_at_ms = MAX(
+           state_query_stream_grant_invalidations.expires_at_ms,
+           excluded.expires_at_ms
+         )`,
+      invalidation.grantId,
+      invalidation.code,
+      invalidation.invalidatedAtMs,
+      invalidation.expiresAtMs
+    );
+  });
+  const result = invalidateLiveQueriesForGrant(state, {
+    grantId: invalidation.grantId,
+    code: invalidation.code,
+    nowMs: invalidation.invalidatedAtMs
+  });
+  state.storage.sql.exec(
+    `UPDATE state_query_stream_subscriptions
+     SET next_maintenance_at_ms = expires_at_ms
+     WHERE grant_id = ? AND transport = ?`,
+    invalidation.grantId,
+    SOCKET_TRANSPORT
+  );
+  recordStateQueryMetric(state, "grantInvalidations");
+  await publishStateQueryStreamUpdates(state, connections);
+  await scheduleLiveObservationAlarm(state);
+  return { accepted: true, invalidated: result.invalidated };
+}
+
+function socketForSubscription(state, connections, subscriptionId) {
+  return streamSockets(state, connections).find((socket) => {
+    const attachment = socketAttachment(socket);
+    return attachment?.registered && attachment.transport === SOCKET_TRANSPORT &&
+      attachment.subscriptionId === subscriptionId;
+  }) ?? null;
+}
+
+export async function maintainStateQuerySocketLeases(state, env, connections = []) {
+  const nowMs = Date.now();
+  const rows = state.storage.sql.exec(
+    `SELECT subscription_id, grant_id, grant_expires_at_ms,
+            expires_at_ms, maintenance_attempt_count
+     FROM state_query_stream_subscriptions
+     WHERE transport = ? AND next_maintenance_at_ms <= ?
+     ORDER BY next_maintenance_at_ms, subscription_id LIMIT ?`,
+    SOCKET_TRANSPORT,
+    nowMs,
+    SOCKET_LEASE_BATCH_SIZE
+  ).toArray();
+  for (const row of rows) {
+    const socket = socketForSubscription(state, connections, row.subscription_id);
+    if (!socket) {
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET next_maintenance_at_ms = expires_at_ms
+         WHERE subscription_id = ?`,
+        row.subscription_id
+      );
+      continue;
+    }
+    if (Number(row.grant_expires_at_ms) <= nowMs) {
+      invalidateLiveQueriesForGrant(state, {
+        grantId: row.grant_id,
+        code: "query_grant_expired",
+        nowMs
+      });
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET expires_at_ms = ?, next_maintenance_at_ms = ?
+         WHERE subscription_id = ?`,
+        nowMs,
+        nowMs,
+        row.subscription_id
+      );
+      continue;
+    }
+    try {
+      requireActiveGrant(state, row.grant_id, nowMs);
+      const grant = { expiresAtMs: Number(row.grant_expires_at_ms) };
+      const queries = state.storage.sql.exec(
+        `SELECT observer_query_id FROM state_query_stream_queries
+         WHERE subscription_id = ? ORDER BY client_query_id`,
+        row.subscription_id
+      ).toArray();
+      for (const query of queries) {
+        await renewLiveStateQuery(state, env, {
+          queryId: query.observer_query_id,
+          leaseSeconds: CONNECTION_LEASE_SECONDS,
+          authorizationMode: "event_driven"
+        }, { grant });
+        requireActiveGrant(state, row.grant_id, Date.now());
+      }
+      const renewedAtMs = Date.now();
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET expires_at_ms = ?, grant_expires_at_ms = ?,
+             next_maintenance_at_ms = ?, maintenance_attempt_count = 0,
+             updated_at_ms = ?
+         WHERE subscription_id = ?`,
+        Math.min(grant.expiresAtMs, renewedAtMs + CONNECTION_LEASE_SECONDS * 1000),
+        grant.expiresAtMs,
+        Math.min(grant.expiresAtMs, renewedAtMs + SOCKET_LEASE_RENEW_AFTER_MS),
+        renewedAtMs,
+        row.subscription_id
+      );
+    } catch (error) {
+      if (error instanceof StateQueryStreamError) {
+        const code = error.code === "query_grant_expired"
+          ? "query_grant_expired"
+          : "query_grant_revoked";
+        invalidateLiveQueriesForGrant(state, {
+          grantId: row.grant_id,
+          code,
+          nowMs: Date.now()
+        });
+        state.storage.sql.exec(
+          `UPDATE state_query_stream_subscriptions
+           SET next_maintenance_at_ms = expires_at_ms
+           WHERE subscription_id = ?`,
+          row.subscription_id
+        );
+      } else {
+        const attempt = Number(row.maintenance_attempt_count) + 1;
+        recordStateQueryMetric(state, "leaseRetries");
+        state.storage.sql.exec(
+          `UPDATE state_query_stream_subscriptions
+           SET maintenance_attempt_count = ?, next_maintenance_at_ms = ?,
+               updated_at_ms = ? WHERE subscription_id = ?`,
+          attempt,
+          Math.min(
+            Number(row.expires_at_ms),
+            Date.now() + SOCKET_LEASE_RETRY_MS * (2 ** Math.min(4, attempt - 1))
+          ),
+          Date.now(),
+          row.subscription_id
+        );
+      }
+    }
+  }
+  await scheduleLiveObservationAlarm(state);
+  return { attempted: rows.length };
 }
 
 export async function handleStateQueryStreamMessage(state, env, socket, message) {
@@ -825,18 +1196,27 @@ export async function handleStateQueryStreamMessage(state, env, socket, message)
       new RegExp(`^sq1\\.${generation}\\.${attachment.subscriptionId}\\.(\\d+)$`)
     );
     const acknowledgedSequence = match ? Number(match[1]) : NaN;
-    const currentSequence = Number(state.storage.sql.exec(
-      `SELECT next_sequence - 1 AS sequence FROM state_query_stream_subscriptions
-       WHERE subscription_id = ?`, attachment.subscriptionId
-    ).toArray()[0]?.sequence ?? -1);
+    const sentSequence = Number(attachment.sentSequence ?? 0);
     if (Number.isSafeInteger(acknowledgedSequence) && acknowledgedSequence >= 1 &&
-        acknowledgedSequence <= currentSequence &&
+        acknowledgedSequence <= sentSequence &&
         acknowledgedSequence > Number(attachment.acknowledgedSequence ?? 0)) {
-      socket.serializeAttachment({
+      const acknowledgedAttachment = {
         ...attachment,
         acknowledgedSequence,
         acknowledgedCursor: input.cursor
-      });
+      };
+      socket.serializeAttachment(acknowledgedAttachment);
+      const pending = eventAfterSequence(
+        state,
+        attachment.subscriptionId,
+        acknowledgedSequence
+      );
+      if (pending) {
+        if (pending.sequence > acknowledgedSequence + 1) {
+          recordStateQueryMetric(state, "backpressureCoalesced");
+        }
+        sendSocketEvent(socket, acknowledgedAttachment, pending);
+      }
     }
   } catch (error) {
     const code = error?.code ?? "state_query_stream_invalid";
@@ -919,6 +1299,11 @@ export async function closeStateQueryStream(state, env, socket, connections = []
   );
   if (!stillConnected) {
     await removeSubscriptionQueries(state, env, attachment.subscriptionId);
+    state.storage.sql.exec(
+      `UPDATE state_query_stream_subscriptions
+       SET next_maintenance_at_ms = expires_at_ms WHERE subscription_id = ?`,
+      attachment.subscriptionId
+    );
     await scheduleLiveObservationAlarm(state);
   }
 }

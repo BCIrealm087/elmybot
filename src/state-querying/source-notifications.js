@@ -338,7 +338,7 @@ async function scheduleNextAlarm(state, { immediate = false, nowMs = Date.now() 
   pruneExpired(state.storage.sql, nowMs);
   let nextAlarm = immediate ? nowMs + RETRY_BASE_MS : null;
   if (!immediate) {
-    const due = state.storage.sql.exec(
+    let due = state.storage.sql.exec(
       `SELECT MIN(next_at) AS next_at FROM (
          SELECT MIN(next_attempt_at_ms) AS next_at
          FROM state_query_notification_outbox
@@ -347,6 +347,21 @@ async function scheduleNextAlarm(state, { immediate = false, nowMs = Date.now() 
          FROM state_query_source_watchers
        ) WHERE next_at IS NOT NULL`
     ).toArray()[0]?.next_at;
+    const grantOutboxExists = Boolean(state.storage.sql.exec(
+      `SELECT 1 AS found FROM sqlite_master
+       WHERE type = 'table' AND name = 'state_query_grant_invalidation_outbox'`
+    ).toArray()[0]);
+    if (grantOutboxExists) {
+      const grantDue = state.storage.sql.exec(
+        `SELECT MIN(next_attempt_at_ms) AS next_at
+         FROM state_query_grant_invalidation_outbox`
+      ).toArray()[0]?.next_at;
+      if (grantDue !== null && grantDue !== undefined) {
+        due = due === null || due === undefined
+          ? grantDue
+          : Math.min(Number(due), Number(grantDue));
+      }
+    }
     nextAlarm = due === null || due === undefined
       ? null
       : Math.max(nowMs, Number(due));

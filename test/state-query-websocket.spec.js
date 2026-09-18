@@ -14,6 +14,10 @@ import {
   issueStateQueryGrant,
   revokeStateQueryCredential
 } from "../src/state-querying/grant-client.js";
+import {
+  drainStateQueryGrantInvalidations,
+  handleStateQueryGrantStorageRequest
+} from "../src/state-querying/grant-storage.js";
 import { grantPermissionsForExportList } from "../src/state-querying/grants.js";
 import { handleStateQueryRequest } from "../src/state-querying/http.js";
 import { stateQueryOperationalSnapshot } from "../src/state-querying/operations.js";
@@ -112,6 +116,26 @@ function observerStub(target) {
   ));
 }
 
+function groupConfigStub(target) {
+  return socketEnv.CONFIG.get(socketEnv.CONFIG.idFromName(group(target).key));
+}
+
+async function acknowledge(socket, target, event) {
+  socket.send(JSON.stringify({
+    protocol: STATE_QUERY_SOCKET_PROTOCOL,
+    type: STATE_QUERY_SOCKET_MESSAGE_TYPES.acknowledge,
+    cursor: event.cursor
+  }));
+  await vi.waitFor(async () => {
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      const attachment = state.getWebSockets().find((candidate) =>
+        candidate.deserializeAttachment()?.subscriptionId === event.payload.subscriptionId
+      )?.deserializeAttachment();
+      expect(attachment?.acknowledgedSequence).toBe(event.sequence);
+    });
+  });
+}
+
 async function drainMutation(target, scope, rounds = 3) {
   for (let round = 0; round < rounds; round += 1) {
     await runInDurableObject(shareableStateRealmStub(socketEnv, scope.realm),
@@ -174,6 +198,79 @@ function closeQuietly(socket) {
 }
 
 describe("hibernating state-query WebSockets", () => {
+  it("commits revocation intent atomically and retries failed invalidation delivery", async () => {
+    const revokedTarget = selectedTarget();
+    const stub = groupConfigStub(revokedTarget);
+    await runInDurableObject(stub, async (_instance, state) => {
+      const nowMs = Date.now();
+      const request = (body) => new Request("https://group-config/internal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const grantId = crypto.randomUUID();
+      const secretDigest = "test-secret-digest";
+      const common = {
+        grantId,
+        secretDigest,
+        environment: env.STATE_QUERY_DEPLOYMENT_ENVIRONMENT,
+        target: revokedTarget
+      };
+      await handleStateQueryGrantStorageRequest(state, request({
+        grantId,
+        secretDigest,
+        grant: {
+          environment: env.STATE_QUERY_DEPLOYMENT_ENVIRONMENT,
+          target: revokedTarget,
+          permissions: {},
+          limits: {},
+          issuedAtMs: nowMs,
+          expiresAtMs: nowMs + 3_600_000
+        },
+        actor: { platform: revokedTarget.platform, id: "operator" }
+      }), "/internal/state-query/grants/issue");
+      await handleStateQueryGrantStorageRequest(state, request({
+        ...common,
+        nowMs: nowMs + 1
+      }), "/internal/state-query/grants/revoke");
+      await state.storage.deleteAlarm();
+      expect(state.storage.sql.exec(
+        `SELECT revoked_at_ms FROM state_query_read_grants WHERE grant_id = ?`,
+        grantId
+      ).one().revoked_at_ms).toBe(nowMs + 1);
+      expect(Number(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM state_query_grant_invalidation_outbox
+         WHERE grant_id = ?`,
+        grantId
+      ).one().total)).toBe(1);
+
+      const unavailableEnv = {
+        ...socketEnv,
+        STATE_QUERY_OBSERVER: {
+          idFromName: (name) => name,
+          get: () => ({ fetch: async () => new Response("unavailable", { status: 503 }) })
+        }
+      };
+      await drainStateQueryGrantInvalidations(state, unavailableEnv);
+      expect(state.storage.sql.exec(
+        `SELECT attempt_count, next_attempt_at_ms
+         FROM state_query_grant_invalidation_outbox WHERE grant_id = ?`,
+        grantId
+      ).one()).toMatchObject({ attempt_count: 1 });
+      state.storage.sql.exec(
+        `UPDATE state_query_grant_invalidation_outbox SET next_attempt_at_ms = 0
+         WHERE grant_id = ?`,
+        grantId
+      );
+      await drainStateQueryGrantInvalidations(state, socketEnv);
+      expect(Number(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM state_query_grant_invalidation_outbox
+         WHERE grant_id = ?`,
+        grantId
+      ).one().total)).toBe(0);
+    });
+  });
+
   it("enforces transport, authentication, URL, and cookie-origin boundaries", async () => {
     const target = selectedTarget();
     const grant = await issue(target);
@@ -294,6 +391,192 @@ describe("hibernating state-query WebSockets", () => {
     });
   });
 
+  it("coalesces durable replacements while one socket event is unacknowledged", async () => {
+    const target = selectedTarget();
+    await setCount(target, 1);
+    const grant = await issue(target);
+    const { socket } = await openSocket(target, grant.credential);
+    try {
+      const initial = await register(socket, target);
+      const forgedCursor = initial.event.cursor.replace(/\.1$/, ".99");
+      socket.send(JSON.stringify({
+        protocol: STATE_QUERY_SOCKET_PROTOCOL,
+        type: STATE_QUERY_SOCKET_MESSAGE_TYPES.acknowledge,
+        cursor: forgedCursor
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      await drainMutation(target, await setCount(target, 2));
+      await drainMutation(target, await setCount(target, 3));
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        const attachment = state.getWebSockets()[0].deserializeAttachment();
+        expect(attachment.sentSequence).toBe(1);
+        expect(attachment.acknowledgedSequence).toBeUndefined();
+        expect(Number(state.storage.sql.exec(
+          `SELECT next_sequence FROM state_query_stream_subscriptions
+           WHERE subscription_id = ?`,
+          initial.event.payload.subscriptionId
+        ).one().next_sequence)).toBe(4);
+      });
+
+      const replacementMessage = nextMessage(socket);
+      await acknowledge(socket, target, initial.event);
+      const replacement = await replacementMessage;
+      expect(replacement).toMatchObject({
+        type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
+        event: {
+          sequence: 3,
+          eventType: "update",
+          payload: { results: [{
+            queryId: "deaths",
+            result: { data: { deaths: { value: 3 } } }
+          }] }
+        }
+      });
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        const snapshot = stateQueryOperationalSnapshot(state);
+        expect(snapshot.counters.backpressureCoalesced).toBe(1);
+      });
+    } finally {
+      closeQuietly(socket);
+    }
+  });
+
+  it("renews leases only while a socket is attached and expires lost interest", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const { socket } = await openSocket(target, grant.credential);
+    const initial = await register(socket, target);
+    await acknowledge(socket, target, initial.event);
+    const subscriptionId = initial.event.payload.subscriptionId;
+    const shortExpiry = Date.now() + 1_000;
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET expires_at_ms = ?, next_maintenance_at_ms = 0
+         WHERE subscription_id = ?`,
+        shortExpiry,
+        subscriptionId
+      );
+      state.storage.sql.exec(
+        `UPDATE state_query_observer_queries
+         SET lease_expires_at_ms = ?`,
+        shortExpiry
+      );
+      await instance.alarm();
+      const renewed = state.storage.sql.exec(
+        `SELECT expires_at_ms, next_maintenance_at_ms
+         FROM state_query_stream_subscriptions WHERE subscription_id = ?`,
+        subscriptionId
+      ).one();
+      expect(Number(renewed.expires_at_ms)).toBeGreaterThan(shortExpiry);
+      expect(Number(renewed.next_maintenance_at_ms)).toBeGreaterThan(Date.now());
+      const query = state.storage.sql.exec(
+        `SELECT authorization_mode, next_authorization_at_ms, grant_expires_at_ms
+         FROM state_query_observer_queries`
+      ).one();
+      expect(query.authorization_mode).toBe("event_driven");
+      expect(Number(query.next_authorization_at_ms)).toBe(
+        Number(query.grant_expires_at_ms)
+      );
+    });
+
+    closeQuietly(socket);
+    await vi.waitFor(async () => {
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        expect(Number(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM state_query_stream_queries"
+        ).one().total)).toBe(0);
+      });
+    });
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET expires_at_ms = 0, next_maintenance_at_ms = 0
+         WHERE subscription_id = ?`,
+        subscriptionId
+      );
+      await instance.alarm();
+      expect(Number(state.storage.sql.exec(
+        `SELECT COUNT(*) AS total FROM state_query_stream_subscriptions
+         WHERE subscription_id = ?`,
+        subscriptionId
+      ).one().total)).toBe(0);
+    });
+  });
+
+  it("bounds a revoked socket that never acknowledges its initial event", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const { socket } = await openSocket(target, grant.credential);
+    const initial = await register(socket, target);
+    const closed = nextSocketEvent(socket, "close");
+    await revokeStateQueryCredential(socketEnv, grant.credential);
+    await runInDurableObject(groupConfigStub(target), async (instance) => {
+      await instance.alarm();
+    });
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      const attachment = state.getWebSockets()[0].deserializeAttachment();
+      expect(attachment.sentSequence).toBe(initial.event.sequence);
+      expect(attachment.acknowledgedSequence).toBeUndefined();
+      expect(state.storage.sql.exec(
+        "SELECT query_state FROM state_query_observer_queries"
+      ).one().query_state).toBe("denied");
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET expires_at_ms = 0, next_maintenance_at_ms = 0
+         WHERE subscription_id = ?`,
+        initial.event.payload.subscriptionId
+      );
+      await instance.alarm();
+    });
+    expect((await closed).code).toBe(STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation);
+    await runInDurableObject(observerStub(target), async (_instance, state) => {
+      expect(Number(state.storage.sql.exec(
+        "SELECT COUNT(*) AS total FROM state_query_stream_subscriptions"
+      ).one().total)).toBe(0);
+    });
+  });
+
+  it("terminates an acknowledged socket at its durable grant expiry", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target);
+    const { socket } = await openSocket(target, grant.credential);
+    const initial = await register(socket, target);
+    await acknowledge(socket, target, initial.event);
+    const terminal = nextMessage(socket);
+    const closed = nextSocketEvent(socket, "close");
+    await runInDurableObject(observerStub(target), async (instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE state_query_stream_subscriptions
+         SET grant_expires_at_ms = 0, next_maintenance_at_ms = 0
+         WHERE subscription_id = ?`,
+        initial.event.payload.subscriptionId
+      );
+      state.storage.sql.exec(
+        `UPDATE state_query_observer_queries
+         SET grant_expires_at_ms = 0, next_authorization_at_ms = 0`
+      );
+      await instance.alarm();
+    });
+    expect(await terminal).toMatchObject({
+      type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
+      event: {
+        eventType: "status",
+        payload: { results: [{
+          status: "denied",
+          reason: "query_grant_expired"
+        }] }
+      }
+    });
+    expect((await closed).code).toBe(STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation);
+    await vi.waitFor(async () => {
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        expect(state.getWebSockets().length).toBe(0);
+      });
+    });
+  });
+
   it("recovers an attached socket after observer eviction and resynchronizes reconnects", async () => {
     const target = selectedTarget();
     await setCount(target, 2);
@@ -302,6 +585,7 @@ describe("hibernating state-query WebSockets", () => {
     const initial = await register(first.socket, target);
     const subscriptionId = initial.event.payload.subscriptionId;
     try {
+      await acknowledge(first.socket, target, initial.event);
       await evictDurableObject(observerStub(target));
       const afterRestart = nextMessage(first.socket);
       await drainMutation(target, await setCount(target, 3));
@@ -414,14 +698,12 @@ describe("hibernating state-query WebSockets", () => {
     });
 
     const active = await openSocket(target, grant.credential);
-    await register(active.socket, target);
+    const initial = await register(active.socket, target);
+    await acknowledge(active.socket, target, initial.event);
     const terminal = nextMessage(active.socket);
     const closed = nextSocketEvent(active.socket, "close");
     await revokeStateQueryCredential(socketEnv, grant.credential);
-    await runInDurableObject(observerStub(target), async (instance, state) => {
-      state.storage.sql.exec(
-        "UPDATE state_query_observer_queries SET next_authorization_at_ms = 0"
-      );
+    await runInDurableObject(groupConfigStub(target), async (instance) => {
       await instance.alarm();
     });
     expect(await terminal).toMatchObject({
@@ -432,5 +714,13 @@ describe("hibernating state-query WebSockets", () => {
       }
     });
     expect((await closed).code).toBe(STATE_QUERY_SOCKET_CLOSE_CODES.policyViolation);
+    await vi.waitFor(async () => {
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        expect(state.getWebSockets().length).toBe(0);
+        expect(Number(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM state_query_stream_queries"
+        ).one().total)).toBe(0);
+      });
+    });
   }, 10_000);
 });

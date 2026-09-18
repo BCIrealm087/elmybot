@@ -5,8 +5,11 @@ import {
   initializeFeatureStorageTables
 } from "./framework/feature-storage.js";
 import {
+  drainStateQueryGrantInvalidations,
   handleStateQueryGrantStorageRequest,
+  hasPendingStateQueryGrantInvalidations,
   initializeStateQueryGrantTables,
+  recoverStateQueryGrantInvalidations,
   StateQueryGrantStorageError
 } from "./state-querying/grant-storage.js";
 import {
@@ -206,10 +209,16 @@ export class GroupConfig {
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
     initializeStateQueryGrantTables(state);
-    if (stateQueryNotificationTablesExist(state)) {
+    const hasNotificationTables = stateQueryNotificationTablesExist(state);
+    if (hasNotificationTables) {
       initializeLocalStateNotificationTables(state);
+    }
+    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state)) {
       state.blockConcurrencyWhile(async () => {
-        await recoverStateQueryNotificationDelivery(state);
+        await recoverStateQueryGrantInvalidations(state);
+        if (hasNotificationTables) {
+          await recoverStateQueryNotificationDelivery(state);
+        }
       });
     }
   }
@@ -355,6 +364,9 @@ export class GroupConfig {
   }
 
   async alarm() {
-    await drainStateQueryNotifications(this.state, this.env);
+    await drainStateQueryGrantInvalidations(this.state, this.env);
+    if (stateQueryNotificationTablesExist(this.state)) {
+      await drainStateQueryNotifications(this.state, this.env);
+    }
   }
 }

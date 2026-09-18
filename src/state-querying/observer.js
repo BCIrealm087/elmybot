@@ -21,10 +21,13 @@ import {
   cleanupExpiredStateQueryStreams,
   handleStateQueryStreamMessage,
   initializeStateQueryStreamTables,
+  invalidateStateQueryGrant,
+  maintainStateQuerySocketLeases,
   pollStateQueryStream,
   publishStateQueryStreamUpdates,
   registerPolledStateQueryStream,
   removePolledStateQueryStream,
+  STATE_QUERY_GRANT_INVALIDATION_PATH,
   STATE_QUERY_SOCKET_INTERNAL_PATH,
   STATE_QUERY_STREAM_CLOSE_PATH,
   STATE_QUERY_STREAM_PATH,
@@ -496,9 +499,10 @@ export class StateQueryObserverBackend {
   }
 
   async alarm() {
-    await cleanupExpiredStateQueryStreams(this.state, this.env);
+    await maintainStateQuerySocketLeases(this.state, this.env);
     await drainLiveStateQueries(this.state, this.env);
     await publishStateQueryStreamUpdates(this.state);
+    await cleanupExpiredStateQueryStreams(this.state, this.env);
     flushStateQueryMetrics(this.state, this.env);
   }
 
@@ -616,6 +620,13 @@ export class StateQueryObserverBackend {
       }
       if (url.pathname === ACK_PATH) {
         return noStoreJson(acknowledgeNotifications(this.state, input));
+      }
+      if (url.pathname === STATE_QUERY_GRANT_INVALIDATION_PATH) {
+        return noStoreJson(await invalidateStateQueryGrant(
+          this.state,
+          this.env,
+          input
+        ));
       }
       if (url.pathname === STATE_QUERY_LIVE_PATHS.attach) {
         return noStoreJson(await attachLiveStateQuery(this.state, this.env, input), 201);

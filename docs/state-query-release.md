@@ -10,7 +10,7 @@ until the test rollout below is performed.
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
 | `STATE_QUERY_STREAMS_ENABLED` | `"false"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
-| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects one exact route. `"hibernating_websocket"` enables the Step 14 server endpoint, but remains an implementation-only option until browser migration and hardening. Missing preserves polling; malformed values fail closed. |
+| `STATE_QUERY_STREAM_TRANSPORT` | `"polling_sse"` | Selects one exact route. `"hibernating_websocket"` enables the hardened socket endpoint, but remains a pre-rollout option until Step 17's deployed verification. Missing preserves polling; malformed values fail closed. |
 | `STATE_QUERY_DIAGNOSTICS` | `"false"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
@@ -32,9 +32,9 @@ silently falls back. The accepted socket contract and transition stages are
 documented in [`state-query-websocket.md`](state-query-websocket.md).
 
 Do not select `hibernating_websocket` for a user-facing environment yet. The
-current browser and OBS clients still open `/state-query/stream`; Step 15 moves
-them to the socket protocol, and Step 16 completes acknowledgement backpressure
-and socket-aware authorization/lease hardening.
+browser and OBS clients, acknowledgement backpressure, socket-aware leases, and
+event-driven grant invalidation are implemented, but Step 17 must still verify
+actual hibernation, parity, latency, and cost in the deployed test environment.
 
 Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
 commands continue to operate with subscriptions disabled. Snapshot previews
@@ -49,9 +49,11 @@ enables streaming so a green test run exercises the entire implementation.
 - A result exceeding the 256 KiB aggregate payload budget produces a small
   terminal `query_limit_exceeded` status. No oversized payload is silently
   removed from history while leaving the browser permanently stale.
-- Graceful close removes stream mappings, history, and subscription records as
-  well as the active query graph. Abrupt-disconnect leases and alarms perform the
-  same cleanup. Recovery after a closed lease starts a fresh authorized snapshot.
+- Graceful socket close removes active query/source interest idempotently while
+  retaining only the bounded subscription/history recovery window. Its expiry
+  alarm removes those records if no authorized reconnect occurs. Polling-SSE
+  close removes the complete stream record immediately. A lost disconnect is
+  bounded by the same durable expiry.
 - Registration rechecks the 20-subscription limit immediately before durable
   insertion, after asynchronous authorization work.
 - Empty polls stay at least 500 ms apart, including across heartbeat frames.
@@ -95,6 +97,7 @@ than repeating the entire OAuth lifecycle in every streaming test.
 | Direct socket snapshot/update without polling | `state-query-websocket.spec.js`: real upgrade, complete snapshot/update, and zero poll counter |
 | Socket observer restart and reconnect | `state-query-websocket.spec.js`: hibernatable eviction recovery and authorized resynchronization |
 | Socket authentication, capacity, terminal access, cleanup | `state-query-websocket.spec.js`: transport/origin boundary, 20-connection cap, revocation status, bounded attachment, final graph removal |
+| Socket slow/no-ack and grant invalidation recovery | `state-query-websocket.spec.js`: future-ack rejection, durable coalescing, no-ack expiry, atomic revocation outbox retry, exact grant expiry, socket-only lease renewal |
 | Test credential in production | `state-query-http.spec.js`: environment mismatch before owner lookup |
 | Feature omits readable declarations | `readable-state.spec.js`: frozen empty default; full existing command/storage suite |
 
