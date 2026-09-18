@@ -629,7 +629,13 @@ Verified implementation: commit
 
 ### 16. Harden authorization, leases, and backpressure
 
-**Status:** pending. **Depends on:** steps 14–15.
+**Status:** completed on 2026-09-18. **Depends on:** steps 14–15.
+Implementation commit:
+[`1ce8887`](https://github.com/BCIrealm087/elmybot/commit/1ce8887d7c1b8e61c5ce0d19e1d5377eca33f74c).
+Verified by
+[CI run 35303983738](https://github.com/BCIrealm087/elmybot/actions/runs/35303983738):
+45 test files / 433 tests, lint and project checks, Chromium WebSocket smoke,
+JavaScript syntax, and the non-deploying Wrangler build passed.
 
 Allow at most one unacknowledged event per connection and durably coalesce newer
 complete replacements. Replace poll-driven subscription renewal with
@@ -955,3 +961,20 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
   [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
   Step 16 is next.
+- 2026-09-18: Step 16 completed. Each socket now has at most one
+  unacknowledged event; bounded durable history coalesces later complete
+  replacements, and forged future acknowledgements cannot advance delivery.
+  Attached sockets renew query/source interest through bounded group alarm
+  turns without transport or grant polling, while close/error and expiry clean
+  up detached interest. Grant revocation now commits a durable invalidation
+  outbox alongside the grant update, retries observer delivery, and records a
+  tombstone that closes registration races. Exact grant expiry, reevaluation,
+  binding handoff, slow/no-ack clients, retry, restart, oversize, duplicate
+  notification, and cleanup paths remain bounded. Both checked-in environments
+  remain disabled and select `polling_sse`; deployed hibernation, parity, and
+  cost measurement remain Step 17. Implementation commit
+  [`1ce8887`](https://github.com/BCIrealm087/elmybot/commit/1ce8887d7c1b8e61c5ce0d19e1d5377eca33f74c)
+  passed all 433 tests across 45 files, lint and project checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35303983738](https://github.com/BCIrealm087/elmybot/actions/runs/35303983738).
+  Step 17 is next.
