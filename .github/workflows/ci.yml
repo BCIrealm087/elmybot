@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-      - codex-state-querying
+      - codex-querying-experiment
   pull_request:
   workflow_dispatch:
 
