@@ -685,6 +685,12 @@ measurement window and accepted deviations are recorded here and in
 ### 18. Make WebSockets authoritative and retire polling
 
 **Status:** completed on 2026-09-19. **Depends on:** step 17.
+Implementation commit:
+[`bcf464a`](https://github.com/BCIrealm087/elmybot/commit/bcf464aed9d5daa3009cd4d3db70964dfc6cba23).
+Verified by
+[CI run 35408422524](https://github.com/BCIrealm087/elmybot/actions/runs/35408422524):
+44 test files / 409 tests, lint and project checks, Chromium WebSocket smoke,
+JavaScript syntax, and the non-deploying Wrangler build passed.
 
 The operator accepted the production rollout and soak. Both checked-in
 environments now enable direct hibernating WebSockets, and the master switch is
@@ -1013,5 +1019,8 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   in both checked-in environments. The master-switch rollback is covered by an
   automated drain case. Public/internal polling routes, polling metrics, the SSE
   adapter, transport selector, polling-specific tests, and the obsolete cost
-  proof/model were removed. The full local suite and authoritative CI result are
-  recorded with the implementation commit.
+  proof/model were removed. Implementation commit
+  [`bcf464a`](https://github.com/BCIrealm087/elmybot/commit/bcf464aed9d5daa3009cd4d3db70964dfc6cba23)
+  passed all 409 tests across 44 files, lint and project checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35408422524](https://github.com/BCIrealm087/elmybot/actions/runs/35408422524).
