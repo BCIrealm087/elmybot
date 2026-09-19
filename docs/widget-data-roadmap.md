@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: proposed; implementation has not started.
+Status: implementation roadmap; Step 1 completed on 2026-09-19.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -193,7 +193,13 @@ exit criteria.
 
 ### 1. Freeze the version-1 feature contract
 
-**Status:** pending. **Depends on:** this roadmap.
+**Status:** completed on 2026-09-19. **Depends on:** this roadmap.
+
+The approved normative result is
+[`widget-data-contract.md`](widget-data-contract.md). It freezes the command,
+payload, update identity, shareable ownership, collision, readable-export,
+authorization, coalescing, and deferred-event-delivery semantics described by
+this step. Implementation begins in step 2.
 
 Write a concise normative contract for command names, input normalization and
 maximum length, access, cooldown, acknowledgement text, feature IDs, namespace
@@ -413,4 +419,5 @@ log.
 
 | Date | Step | Commit | Verification | Notes |
 | --- | --- | --- | --- | --- |
-| 2026-09-19 | Roadmap | pending | Documentation review | Initial agreed plan; implementation not started |
+| 2026-09-19 | Roadmap | `aa05f78` | CI run 35419090662 passed | Initial agreed plan; implementation not started |
+| 2026-09-19 | 1 | `aad7dd8` | Contract review; CI pending | Approved `widget-data-contract.md`; implementation not started |
