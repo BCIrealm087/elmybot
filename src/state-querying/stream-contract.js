@@ -1,18 +1,3 @@
-export const STATE_QUERY_STREAM_TRANSPORTS = Object.freeze({
-  pollingSse: "polling_sse",
-  hibernatingWebSocket: "hibernating_websocket"
-});
-
-const configuredTransports = new Set(Object.values(STATE_QUERY_STREAM_TRANSPORTS));
-
-// An omitted selector preserves the already-deployed Step 9 behavior. Invalid
-// values are deliberately distinct from the default so callers can fail closed.
-export function stateQueryStreamTransport(env) {
-  const selected = env?.STATE_QUERY_STREAM_TRANSPORT;
-  if (selected === undefined) return STATE_QUERY_STREAM_TRANSPORTS.pollingSse;
-  return configuredTransports.has(selected) ? selected : null;
-}
-
 export const STATE_QUERY_SOCKET_PATH = "/state-query/socket";
 export const STATE_QUERY_SOCKET_PROTOCOL = "state-query-socket/v1";
 export const STATE_QUERY_SOCKET_PING = "state-query-ping/v1";

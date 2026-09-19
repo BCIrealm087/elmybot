@@ -1,7 +1,7 @@
 # State-query read grants, discovery, and snapshot HTTP API
 
 Status: implemented foundation for state-querying roadmap step 5 on 2026-09-12.
-Recoverable notifications, lifecycle-aware observation, and SSE were added in
+Recoverable notifications, lifecycle-aware observation, and WebSockets were added in
 steps 6–9. The [browser client and setup flow](state-query-browser.md) use this
 grant and session contract in step 11.
 
@@ -171,12 +171,13 @@ execute commands or mutations.
 
 ## Live subscriptions
 
-`POST /state-query/stream` accepts the same authentication and query meaning,
-with one to 20 client-named queries in a single SSE subscription. It performs a
-version-checked snapshot-and-attach handshake, then sends complete replacement
-results, status events, and heartbeat comments. Recovery cursors, buffering,
-cleanup, and examples are specified in
-[`state-query-sse.md`](state-query-sse.md).
+`GET /state-query/socket` upgrades an authenticated request to the versioned
+state-query WebSocket protocol. Its first application message registers one to
+20 client-named queries with the same meaning as snapshot reads. The observer
+then sends complete replacement results and safe status events, with explicit
+acknowledgement, bounded coalescing, cursor recovery, and current-state
+resynchronization. Framing, cleanup, and examples are specified in
+[`state-query-websocket.md`](state-query-websocket.md).
 
 ## Revocation and errors
 

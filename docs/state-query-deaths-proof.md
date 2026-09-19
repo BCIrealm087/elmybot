@@ -4,7 +4,7 @@ Status: implemented by roadmap step 10 on 2026-09-14.
 
 The `fun.deaths` feature is the first complete proof that ordinary feature
 commands, readable-state declarations, composed snapshots, and live updates use
-one state model. The feature does not contain notification, watcher, HTTP, or SSE
+one state model. The feature does not contain notification, watcher, HTTP, or transport
 code. Its normal `ctx.state` and `ctx.shareableState` mutations are observed by
 the framework infrastructure from steps 6–9.
 
@@ -38,11 +38,11 @@ The collection query emits a replacement when an inserted game is materialized
 or a reset removes it. A linked test evaluates the same literal query from both
 Discord and Twitch and receives the same integration-owned count.
 
-The public SSE integration suite also registers all five shapes together using
-a real scoped grant and Durable Object-backed state. It verifies the initial
-multiplexed snapshot, a remembered-game dependency handoff, and collection
-removal. Recovery coalesces adjacent history per client query ID, so activity in
-one multiplexed query cannot hide another query's newest result.
+The public integration suites exercise these shapes with real scoped grants and
+Durable Object-backed state. They verify multiplexed snapshots, remembered-game
+dependency handoff, collection removal, and browser WebSocket delivery. Recovery
+coalesces adjacent history per client query ID, so activity in one multiplexed
+query cannot hide another query's newest result.
 
 `fun.deaths` also exports two optional pure builders. They only return ordinary
 version-1 query documents and have no additional permissions or execution rules:
@@ -59,7 +59,7 @@ const current = currentGameDeathsQuery(target);
 ```
 
 Clients remain free to compose the same exports themselves. Presets do not
-extend the language and are not required for discovery, snapshots, or SSE.
+extend the language and are not required for discovery, snapshots, or live delivery.
 
 ## Contributor test workflow
 
@@ -104,5 +104,5 @@ handoffs.
 
 This helper proves feature declarations, composition, dynamic dependencies,
 ordinary mutation visibility, and directional test-link selection. Durable
-storage, authorization grants, HTTP framing, alarms, and network SSE remain the
+storage, authorization grants, HTTP framing, alarms, and network WebSockets remain the
 responsibility of their Worker integration suites.

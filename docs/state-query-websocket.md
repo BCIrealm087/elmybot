@@ -1,16 +1,13 @@
 # Hibernating WebSocket state-query transport
 
-Status: transport contract accepted in roadmap step 13; the server-side route
-and hibernating observer lifecycle are implemented in step 14; the browser and
-OBS client migration is implemented in step 15; authorization, leases, and
-backpressure are implemented in step 16; deployed hibernation and actual OBS
-delivery are verified in step 17. Both environments select the WebSocket
-transport; test enables subscriptions, while production remains disabled during
-the first phase of step 18. Polling remains temporary rollback code.
+Status: implemented and authoritative. The transport contract, server route,
+browser/OBS migration, authorization and backpressure hardening, deployed
+hibernation proof, and production rollout were completed across roadmap steps
+13–18. The former polling/SSE transport has been retired.
 
 ## Decision and scope
 
-The long-term live-query transport is a public WebSocket accepted directly by
+The live-query transport is a public WebSocket accepted directly by
 the selected logical group's `StateQueryObserver` through Cloudflare's Durable
 Object WebSocket Hibernation API. The public Worker authenticates and routes the
 upgrade; it does not remain as a long-lived relay. Committed owner notifications
@@ -27,32 +24,16 @@ This change replaces delivery transport only. It does not change:
 - the browser client's public `catalog`, `read`, `session`, `watch`, `logout`,
   and `close` interface.
 
-The current polling SSE implementation remains available during the rollout
-window. Direct Durable Object-owned SSE is not a target because a long-lived
-response prevents the object from hibernating. The earlier Worker SSE relay is
-also not the selected target: direct public WebSockets remove that additional
-transport and failure boundary.
+The earlier Worker polling/SSE relay has been removed. Direct public WebSockets
+avoid that additional transport and failure boundary while allowing the observer
+to hibernate between events.
 
 ## Release controls
 
-`STATE_QUERY_STREAMS_ENABLED` remains the master subscription switch. A false,
-missing, or malformed value disables every public live transport without
-affecting catalog or snapshot reads.
-
-`STATE_QUERY_STREAM_TRANSPORT` selects the enabled implementation:
-
-| Value | Meaning |
-| --- | --- |
-| `polling_sse` | Existing `POST /state-query/stream` adapter and observer polling |
-| `hibernating_websocket` | Direct `GET /state-query/socket` WebSocket upgrade |
-
-An omitted selector preserves `polling_sse` for backward compatibility. Any
-other value is invalid and fails closed with
-`state_query_transport_unavailable` when subscriptions are enabled. The SSE
-route rejects the socket selection, and the socket route rejects the polling
-selection; neither silently falls back. Both environments explicitly select
-`hibernating_websocket`. Production keeps subscriptions disabled during the
-first Step 18 rollout phase; test enables subscriptions and diagnostics.
+`STATE_QUERY_STREAMS_ENABLED` is the master subscription switch. A false,
+missing, or malformed value rejects new WebSocket upgrades and causes observer
+alarms to terminate existing subscriptions without affecting catalog or
+snapshot reads. There is no transport selector or live polling fallback.
 
 The Worker compatibility-date baseline is `2026-09-01`. This is new enough for
 the runtime's automatic WebSocket close-frame reply behavior; handlers must
@@ -275,7 +256,7 @@ current snapshot. A cursor can optimize recovery only within the same authorized
 subscription and effective binding. A source handoff invalidates earlier realm
 history even when the visible value is unchanged.
 
-## Step 14–16 implementation evidence and remaining gates
+## Implementation and verification evidence
 
 The public Worker now authenticates `GET /state-query/socket`, enforces exact
 cookie origin, rejects URL parameters, selects the observer only from the
@@ -318,13 +299,13 @@ Focused Miniflare tests additionally cover atomic revocation intent and retry,
 future acknowledgement rejection, two-update coalescing, no-ack revocation,
 grant expiry, attached-only renewal, lost-interest expiry, and restart recovery.
 Those tests alone do not prove deployed Cloudflare hibernation or cost. Step 17
-adds that evidence from the test Worker while production keeps `polling_sse`
-as its disabled rollback selection.
+added that evidence from the isolated test Worker, and Step 18 completed the
+production rollout before retiring the fallback implementation.
 
 ## Step boundaries
 
-- **Step 13:** freezes this contract, adds the validated dual-transport selector,
-  records the compatibility baseline, and keeps polling selected.
+- **Step 13:** froze the socket contract and compatibility baseline behind a
+  staged rollout control.
 - **Step 14:** wires the authenticated upgrade, hibernating observer handlers,
   initial registration, direct event delivery, and focused server tests
   (implemented; deployed hibernation is not yet claimed).
@@ -332,7 +313,7 @@ as its disabled rollback selection.
   transport without changing their public JavaScript interface (implemented in
   [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a);
   verified by [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638)).
-- **Step 16:** completes acknowledgement backpressure, socket-aware leases,
+- **Step 16:** completed acknowledgement backpressure, socket-aware leases,
   durable grant invalidation, expiry scheduling, and failure cleanup
   (implemented; deployed behavior remains a Step 17 gate).
 - **Step 17:** completed 2026-09-18. Test Worker version
@@ -342,13 +323,12 @@ as its disabled rollback selection.
   non-hibernatable inbound messages, 1.47 GB-seconds, 113 requests, and no
   internal or resource-limit error. Its live tail contained no polling route.
   The full automated suite retained the lifecycle and 1/20-subscriber matrix.
-- **Step 18:** in progress since 2026-09-18. Production now checks in the
-  WebSocket selector with subscriptions disabled. Automated rollback closes
-  existing sockets before lease renewal and drains their graphs when the master
-  switch disables subscriptions. Only after that drain may an incident rollback
-  select polling. After the bounded production rollout and soak, remove the polling endpoints
-  and implementation.
+- **Step 18:** completed 2026-09-19 after the operator accepted the production
+  rollout and soak. WebSockets are authoritative, both checked-in environments
+  enable subscriptions, the master switch remains the rollback, and polling
+  routes, metrics, implementation, tests, and cost guidance have been removed.
 
 Actual hibernation cannot be claimed from local or CI tests alone. Step 17's
-deployed duration and connection classification now provide that evidence for
-the isolated test environment only.
+deployed duration and connection classification provide that evidence for the
+isolated test environment; Step 18's accepted production soak completes the
+rollout evidence.

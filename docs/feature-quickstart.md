@@ -150,7 +150,7 @@ The counter recipes use the test kit's `runCapabilityCases()` to exercise
 `plus`, `minus`, and `reset` with and without a moderator grant. Keep the
 explicit no-mutation assertion; a denial message alone is not enough evidence.
 They also include a readable `score` export and a watch assertion, so new local
-or shareable counters are queryable without feature-authored notification or SSE
+or shareable counters are queryable without feature-authored notification or transport
 code. See the [deaths query proof](state-query-deaths-proof.md) for literal,
 combined, dynamic, and collection examples.
 

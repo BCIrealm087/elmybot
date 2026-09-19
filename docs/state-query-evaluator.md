@@ -3,7 +3,8 @@
 Status: implemented foundation for state-querying roadmap step 4 on 2026-09-12.
 Read grants and public snapshot HTTP access were added in step 5. Recoverable
 notifications were added in step 6 and ordered lifecycle authority in step 7.
-Live dependency attachment and SSE remain steps 8–9.
+Live dependency attachment and WebSocket delivery are implemented by the later
+state-query layers.
 
 ## Implemented boundary
 

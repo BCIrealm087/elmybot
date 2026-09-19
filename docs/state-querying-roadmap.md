@@ -1,8 +1,9 @@
 # Composable state queries and live subscriptions: development roadmap
 
-Status: development steps 1–17 are complete. The deployed test environment now
-uses direct hibernating WebSockets; step 18 is next. Production subscriptions
-remain disabled, and production retains polling only as the rollback transport.
+Status: development steps 1–18 are complete. Direct hibernating WebSockets are
+the authoritative live transport in both checked-in environments. The former
+polling transport has been retired; the subscription master switch is the
+operational rollback.
 Created: 2026-09-11.
 Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
 Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
@@ -41,8 +42,9 @@ The agreed behavior is:
 - Users can select individual values, parameterized counters, several values
   together, collections, and values whose parameters depend on other readable
   state.
-- One-time reads and live subscriptions use the same query meaning. SSE is the
-  intended first browser delivery surface; the core model is transport-neutral.
+- One-time reads and live subscriptions use the same query meaning. Direct
+  hibernating WebSockets are the browser delivery surface; the core model is
+  transport-neutral.
 - Query execution is read-only and does not invoke command side effects.
 - Feature authors describe readable state and domain rules; the framework owns
   discovery, authorization, dependency tracking, lifecycle following, and delivery.
@@ -184,7 +186,7 @@ Delivery failure must not undo an already committed command mutation.
 
 ## Milestones and step tracking
 
-Steps 1–17 are complete; step 18 remains pending. Complete the relevant
+Steps 1–18 are complete. Complete the relevant
 acceptance criteria before marking another step done. Keep these numbers stable
 for subsequent work requests; record implementation commits and checks in the
 progress log.
@@ -193,8 +195,9 @@ progress log.
 | --- | --- | --- |
 | A: Contract and feasibility | 1–2 | Precise semantics, resource budgets, and a tested transport approach |
 | B: Composable snapshot queries | 3–5 | Discoverable state, user-defined reads, and scoped access |
-| C: Live state following | 6–9 | Reliable invalidation, dynamic dependencies, lifecycle handoffs, and SSE |
+| C: Live state following | 6–9 | Reliable invalidation, dynamic dependencies, lifecycle handoffs, and live delivery |
 | D: Usable product and stabilization | 10–12 | Deaths proof, contributor tools, browser setup, and verified release |
+| E: Hibernating transport rollout | 13–18 | Direct WebSockets, bounded recovery, deployed proof, and polling retirement |
 
 ### 1. Specify the public state-query contract
 
@@ -228,13 +231,11 @@ result or error. The document clearly separates existing behavior from new APIs.
 
 **Status:** completed on 2026-09-12. **Depends on:** step 1 semantics.
 
-The recorded result is
-[`state-query-transport-decision.md`](state-query-transport-decision.md). It
-keeps SSE as the public surface, selects a provisional Worker SSE adapter backed
-by per-group hibernating WebSocket observer objects, establishes initial budgets,
-and explicitly lists the evidence that still requires a deployed test Worker.
-The bounded transport proof and cost model are reproducible repository artifacts;
-no deployment was performed.
+The bounded feasibility work selected a provisional Worker SSE adapter backed
+by per-group hibernating WebSocket observer objects, established initial
+budgets, and listed evidence that required a deployed test Worker. Steps 13–18
+subsequently replaced that provisional path with authoritative direct sockets;
+the obsolete proof and cost-model artifacts were removed in step 18.
 
 Build a bounded technical proof of snapshot-plus-SSE delivery, disconnection,
 cleanup, reconnection, and idle behavior. Compare its expected Durable Object
@@ -438,9 +439,10 @@ queries. Resource limits fail explicitly.
 **Status:** completed on 2026-09-14. **Depends on:** steps 2, 5, 7–8.
 Implementation commit: `5686037`.
 
-The public API, recovery model, bounded durable history, cleanup behavior, and
-the tested durable-polling fallback are recorded in
-[`state-query-sse.md`](state-query-sse.md).
+This historical step established the public API, recovery model, bounded durable
+history, cleanup behavior, and the initial polling delivery adapter. The final
+direct transport is documented in
+[`state-query-websocket.md`](state-query-websocket.md).
 
 Implement the selected SSE architecture with validated query registration,
 multiplexed query IDs where supported, UTF-8 event framing, connection cleanup,
@@ -682,24 +684,18 @@ measurement window and accepted deviations are recorded here and in
 
 ### 18. Make WebSockets authoritative and retire polling
 
-**Status:** in progress since 2026-09-18. **Depends on:** step 17.
+**Status:** completed on 2026-09-19. **Depends on:** step 17.
 
-Test keeps `hibernating_websocket` selected. Production now selects the same
-transport while its subscription master switch remains disabled, making the
-selector change inert until a reviewed deployment enables subscriptions.
-Automated rollback coverage proves that disabling the master switch terminates
-existing sockets before lease renewal, drains their query graphs, and rejects
-new socket upgrades. Snapshots and commands remain independent.
+The operator accepted the production rollout and soak. Both checked-in
+environments now enable direct hibernating WebSockets, and the master switch is
+the sole operational rollback. Automated coverage proves that disabling it
+rejects new upgrades, terminates existing sockets before lease renewal, drains
+their query graphs, and leaves snapshots and commands independent.
 
-Next, deploy the disabled production selection, enable a bounded production
-cohort, and observe it through an agreed soak period. The master switch is always
-the first rollback. Only after sockets drain may `polling_sse` be selected as a
-temporary code rollback; the soak must succeed before that code is removed.
-
-After successful evidence and soak, remove the public/internal polling routes,
-poll/empty-poll metrics, SSE adapter loop, polling-specific tests, and obsolete
-cost guidance. Preserve transport-neutral query/history logic and rename the
-remaining module boundaries where useful.
+The public and internal polling routes, poll/empty-poll metrics, SSE adapter,
+transport selector, polling-specific tests, and obsolete cost-model artifacts
+have been removed. The remaining module is named for the live stream boundary
+and preserves the transport-neutral query/history semantics.
 
 **Exit criteria:** production uses direct hibernating WebSockets, polling code is
 absent, all release checks pass, rollback and operational documentation are
@@ -1012,12 +1008,10 @@ Step 2 must recheck applicable limits and costs before implementation decisions.
   non-critical repetitions of automated failure variants are accepted
   deviations under the operator-testing policy. Step 18 is next.
 
-- 2026-09-18: Step 18 started. Production's checked-in transport selection moved
-  to `hibernating_websocket` while `STATE_QUERY_STREAMS_ENABLED` remains
-  `"false"`. Observer alarms now apply the master switch and transport selector
-  before lease renewal, send a bounded terminal error to affected sockets, close
-  them, and remove their live query graphs. The automated case covers the
-  disabled-switch rollback; operational guidance requires that drain to finish
-  before any temporary `polling_sse` selector rollback. Legacy polling remains
-  explicitly selected only in its test runtime until the
-  production rollout and soak authorize code removal.
+- 2026-09-19: Step 18 completed after the operator accepted the production
+  rollout and soak. Direct hibernating WebSockets are authoritative and enabled
+  in both checked-in environments. The master-switch rollback is covered by an
+  automated drain case. Public/internal polling routes, polling metrics, the SSE
+  adapter, transport selector, polling-specific tests, and the obsolete cost
+  proof/model were removed. The full local suite and authoritative CI result are
+  recorded with the implementation commit.

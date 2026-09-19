@@ -29,13 +29,9 @@ import {
 } from "./query.js";
 import {
   createStateQuerySocketResponse,
-  createStateQuerySseResponse,
-  requireStateQueryPollingTransport,
-  requireStateQuerySocketTransport,
   requireStateQueryStreamsEnabled,
-  STATE_QUERY_SSE_LIMITS,
   StateQueryStreamError
-} from "./sse.js";
+} from "./stream.js";
 
 const SESSION_COOKIE = "elmybot_state_query";
 const JSON_CONTENT_TYPE = "application/json";
@@ -371,39 +367,9 @@ async function snapshotResponse(request, env, registry) {
   return json(result.envelope);
 }
 
-async function streamResponse(request, env) {
-  if (request.method !== "POST") return plain("Method Not Allowed", 405);
-  requireStateQueryStreamsEnabled(env);
-  requireStateQueryPollingTransport(env);
-  const { grant } = await authorizedRequest(request, env, { mutates: false });
-  const input = await readJson(request, Math.min(
-    STATE_QUERY_LIMITS.maxDocumentBytes * STATE_QUERY_SSE_LIMITS.maxQueriesPerConnection,
-    grant.limits.maxDocumentBytes * STATE_QUERY_SSE_LIMITS.maxQueriesPerConnection
-  ));
-  if (!input || typeof input !== "object" || Array.isArray(input) ||
-      !Array.isArray(input.queries)) {
-    throw new StateQueryStreamError("State-query stream registration is invalid.");
-  }
-  const lastEventId = request.headers.get("last-event-id");
-  if (lastEventId && input.subscriptionId === undefined) {
-    const match = lastEventId.match(/^sq1\.[a-f0-9]{32}\.([a-f0-9]{32})\.\d+$/);
-    input.subscriptionId = match?.[1] ?? "invalid-recovery-cursor";
-  }
-  if (input.queries.length < 1 ||
-      input.queries.length > STATE_QUERY_SSE_LIMITS.maxQueriesPerConnection) {
-    throw new StateQueryStreamError("State-query stream query limit exceeded.", {
-      status: 413,
-      code: "query_limit_exceeded"
-    });
-  }
-  for (const entry of input.queries) preauthorizeStateQueryInput(entry?.query, grant);
-  return await createStateQuerySseResponse(env, grant, input);
-}
-
 async function socketResponse(request, env) {
   if (request.method !== "GET") return plain("Method Not Allowed", 405);
   requireStateQueryStreamsEnabled(env);
-  requireStateQuerySocketTransport(env);
   const url = new URL(request.url);
   if (url.search.length > 0) {
     throw new StateQueryStreamError("State-query socket URLs must not contain parameters.", {
@@ -479,9 +445,6 @@ export async function handleStateQueryRequest(
     }
     if (url.pathname === "/state-query/snapshot") {
       return await snapshotResponse(request, env, registry);
-    }
-    if (url.pathname === "/state-query/stream") {
-      return await streamResponse(request, env);
     }
     if (url.pathname === "/state-query/socket") {
       return await socketResponse(request, env);

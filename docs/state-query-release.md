@@ -1,360 +1,140 @@
 # State-query release verification and operations
 
-Status: Step 17 completed and CI/deployment-verified on 2026-09-18.
-The version-1 query, grant, snapshot, streaming, contributor, browser, and
-hibernating WebSocket surfaces are implemented. Streaming remains disabled in
-production; the isolated test environment enables the WebSocket transport.
+Status: roadmap step 18 completed on 2026-09-19. Direct hibernating
+WebSockets are the only live state-query transport in both checked-in
+environments. The former polling/SSE adapter, routes, counters, tests, and cost
+model have been removed.
 
 ## Release controls
 
 | Setting | Checked-in value | Behavior |
 | --- | --- | --- |
-| `STATE_QUERY_STREAMS_ENABLED` | production: `"false"`; test: `"true"` | Only boolean `true` or string `"true"` enables public subscriptions. Missing or malformed values stay disabled. |
-| `STATE_QUERY_STREAM_TRANSPORT` | production/test: `"hibernating_websocket"` | Selects one exact route. Missing preserves polling; malformed values fail closed. Production remains inert while its master switch is disabled. |
+| `STATE_QUERY_STREAMS_ENABLED` | production/test: `"true"` | Master switch for public live subscriptions. False, missing, or malformed values reject new upgrades and cause observer alarms to terminate existing sockets and remove their live query graphs. |
 | `STATE_QUERY_DIAGNOSTICS` | production: `"false"`; test: `"true"` | `"true"` enables aggregate observer log windows. |
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | `production` / `test` | Separates grants, routing, and observers. |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Environment secret | Required for issued credentials; use a different secret in each environment. |
-| `STATE_QUERY_PUBLIC_ORIGIN` | Environment's Worker origin | Same-origin session and OAuth boundary. |
+| `STATE_QUERY_PUBLIC_ORIGIN` | Environment's Worker origin | Same-origin session and WebSocket security boundary. |
 
-The streaming switch gates both the public registration and observer polling
-paths. A disabled registration returns HTTP 403 with
-`state_query_subscriptions_disabled`. An already open polling adapter closes when its observer rejects a poll.
-Observer alarms apply the disabled master switch before socket lease renewal,
-send a terminal error to affected WebSockets, and retire their stream graphs. Deploying
-a setting is subject to Worker rollout propagation; this is not a claim that
-every old isolate changes configuration instantaneously.
+`GET /state-query/socket` is the sole public live-subscription route. There is
+no transport selector or polling fallback. `POST /state-query/stream` and the
+former internal poll routes return 404.
 
-Roadmap step 14 implements the server-side socket path. With subscriptions
-enabled, each public endpoint requires its matching selector: polling rejects
-`/state-query/socket`, socket mode rejects `/state-query/stream`, and an invalid
-selector returns HTTP 503 with `state_query_transport_unavailable`. It never
-silently falls back. The accepted socket contract and transition stages are
-documented in [`state-query-websocket.md`](state-query-websocket.md).
+The master switch is the operational rollback. Disabling it does not affect
+catalog, snapshot, setup, session, grant-management, or ordinary bot-command
+routes. Deployment propagation still applies: disabling the setting does not
+instantaneously replace every old Worker isolate.
 
-The deployed test environment selects `hibernating_websocket`; Step 17 verified
-actual hibernation and real Chrome/OBS delivery there. Production now checks in
-the same selector while its master switch remains disabled. Step 18 must still
-complete the controlled production rollout and soak before polling is removed.
+The accepted socket contract and lifecycle are documented in
+[`state-query-websocket.md`](state-query-websocket.md).
 
-Snapshots, catalog, grant management, sessions, setup assets, and ordinary bot
-commands continue to operate with subscriptions disabled. Snapshot previews
-work, but a live widget needs streaming enabled. The Vitest environment explicitly
-enables streaming so a green test run exercises the entire implementation.
+## Security and recovery
 
-## Stabilization changes
+- Browser and OBS clients exchange a read grant for a secure same-site session
+  before upgrading. Raw credentials, query documents, targets, subscription
+  IDs, and recovery cursors are never placed in the URL.
+- Cookie-authenticated upgrades require an exact configured `Origin`. Supported
+  non-browser clients may use the existing Bearer credential header.
+- The public Worker verifies the credential and routes by its authenticated
+  target. The observer stores only the grant reference and trusted target data.
+- Revocation commits durable invalidation intent with the grant change. Exact
+  expiry is also an observer alarm deadline, so routine lease maintenance does
+  not poll grant storage.
+- Reconnect is authorized again and resolves current bindings. A valid retained
+  cursor may recover bounded history; otherwise the client receives a complete
+  current resynchronization.
 
-- A slow multiplexed reader falling behind the count, byte, age, or source-handoff
-  history boundary receives a complete current snapshot of **every** query. A
-  quiet query's last value cannot disappear behind many updates to another query.
-- A result exceeding the 256 KiB aggregate payload budget produces a small
-  terminal `query_limit_exceeded` status. No oversized payload is silently
-  removed from history while leaving the browser permanently stale.
-- Graceful socket close removes active query/source interest idempotently while
-  retaining only the bounded subscription/history recovery window. Its expiry
-  alarm removes those records if no authorized reconnect occurs. Polling-SSE
-  close removes the complete stream record immediately. A lost disconnect is
-  bounded by the same durable expiry.
-- Registration rechecks the 20-subscription limit immediately before durable
-  insertion, after asynchronous authorization work.
-- Empty polls stay at least 500 ms apart, including across heartbeat frames.
-  Cancellation during a poll delay avoids starting another request.
+## Bounded behavior
 
-## Acceptance evidence
+The implementation permits at most 20 socket subscriptions per logical group
+and 20 named queries per socket. Registration frames are limited to 384 KiB,
+later control frames to 1 KiB, and cursors to 256 bytes. Only one event may be
+unacknowledged per socket; newer committed state is durably coalesced until the
+client acknowledges or reconnects.
 
-These are executable behavioral tests, not deployed-browser observations. Paths
-are relative to `test/` unless a package path is shown. Several matrix rows are
-verified across the storage, binding, query, and transport boundaries rather
-than repeating the entire OAuth lifecycle in every streaming test.
+Per-query and aggregate query limits remain defined by the public contract.
+Retained socket history is bounded to 64 events and 256 KiB per subscription.
+Close, error, revocation, expiry, lost-interest cleanup, and the disabled master
+switch all release query/source interest idempotently.
 
-| Roadmap scenario | Evidence |
+## Automated verification
+
+The full suite covers the public HTTP and socket boundaries plus the underlying
+query, notification, binding, and shareable-state behavior. Key transport
+evidence includes:
+
+| Scenario | Primary evidence |
 | --- | --- |
-| One exposed value: snapshot and updates | `state-query-sse.spec.js`: authorized handshake, complete replacements |
-| Three counters without a preset | `state-query-sse.spec.js`: five deaths query shapes; `state-query-evaluator.spec.js`: composition |
-| Privileged read has no command side effects | `state-query-evaluator.spec.js`: unchanged real local/shareable revisions; deaths feature tests |
-| Missing named counter versus unselected game | `state-query-evaluator.spec.js`: defaults and blocked dynamic reads |
-| Remembered-game handoff removes old dependency | `state-query-live-observation.spec.js`: dynamic switch and ignored old values |
-| Collection insertion | `state-query-live-observation.spec.js`: collection insertion/removal |
-| Reset/delete agrees with defaults and membership | `state-query-notifications.spec.js`, `shareable-state-realm.spec.js`, five-shape SSE test |
-| Unlabeled legacy counter remains readable | `state-query-evaluator.spec.js`: exact lookup and explicit incomplete collection |
-| Shared changes reach both platform perspectives | `shareable-state-resolution.spec.js`, `packages/features/fun-deaths/test/feature.spec.js` |
-| Linked groups remember different games | Deaths feature query tests and `state-query-sse.spec.js`: composed local/dynamic reads |
-| Activation replaces standalone binding | `state-query-bindings.spec.js`: ordered activation; real browser-client realm-handoff SSE test |
-| Additional nondefault link is stable | `state-query-bindings.spec.js`: A→B→A setup without automatic reselection |
-| Pending cancellation preserves selection | `integration-registry.spec.js`: cancellation now also asserts unchanged binding authority |
-| Same-value default handoff is visible | `state-query-live-observation.spec.js`: attach replacement before retiring old source |
-| A→B→A rejects delayed earlier binding | `state-query-bindings.spec.js`: monotonic authority; duplicate/older notification SSE test |
-| Unlink without fallback creates independent successor | `integration-registry.spec.js`: deaths through link/revoke/relink; binding lazy-successor tests |
-| Unlink with fallback selects existing ledger | `state-query-bindings.spec.js`: interrupted revocation then ready fallback |
-| Interrupted transition or clone | Binding restart/lazy-successor tests and evaluator transitioning/unavailable results |
-| Write races attachment or rebind | Notification snapshot/register test; binding registration race; evaluator revision retries |
-| Commit precedes process failure | `state-query-notifications.spec.js`: durable outbox recovered after source restart |
-| Reconnect follows current default | Real browser-client handoff plus reconnect/current-snapshot SSE tests |
-| Expiry/revocation ends access | Grant HTTP tests, live authorization tests, terminal SSE and Chromium smoke |
-| Dynamic argument leaves exact grant | `state-query-http.spec.js`: exact-subject and dynamic-source denial |
-| Oversized query/collection | Evaluator/grant/realm limits; terminal aggregate SSE overflow test |
-| Slow/duplicate delivery stays bounded and current | Per-query history coalescing, 70-update retention-gap regression, obsolete-notification SSE test |
-| Last client disconnects | SSE cleanup/load cases; explicit abrupt-disconnect lease regression; owner no-interest test |
-| Direct socket snapshot/update without polling | `state-query-websocket.spec.js`: real upgrade, complete snapshot/update, and zero poll counter |
-| Socket observer restart and reconnect | `state-query-websocket.spec.js`: hibernatable eviction recovery and authorized resynchronization |
-| Socket authentication, capacity, terminal access, cleanup | `state-query-websocket.spec.js`: transport/origin boundary, 20-connection cap, revocation status, bounded attachment, final graph removal |
-| Socket slow/no-ack and grant invalidation recovery | `state-query-websocket.spec.js`: future-ack rejection, durable coalescing, no-ack expiry, atomic revocation outbox retry, exact grant expiry, socket-only lease renewal |
-| Test credential in production | `state-query-http.spec.js`: environment mismatch before owner lookup |
-| Feature omits readable declarations | `readable-state.spec.js`: frozen empty default; full existing command/storage suite |
+| Authenticated upgrade, snapshot, update, and acknowledgement | `test/state-query-websocket.spec.js` |
+| Real browser client, remembered-game update, realm handoff, shared update, and grant revocation | `test/state-query-browser-integration.spec.js` |
+| Hibernatable restart, reconnect, and current resynchronization | `test/state-query-websocket.spec.js` |
+| Slow/no-ack coalescing and bounded expiry | `test/state-query-websocket.spec.js` |
+| Durable revocation retry and exact grant expiry | `test/state-query-websocket.spec.js` |
+| Connection cap, frame limits, origin/authentication failures, and terminal cleanup | `test/state-query-websocket.spec.js` |
+| Removed polling endpoint and master-switch rejection | `test/state-query-stream-contract.spec.js` |
+| Dynamic dependency and binding handoff correctness | `test/state-query-live-observation.spec.js`, `test/state-query-bindings.spec.js` |
+| Recoverable owner notification delivery | `test/state-query-notifications.spec.js` |
+| Catalog/snapshot/grant behavior independent of subscriptions | `test/state-query-http.spec.js` |
 
-The browser fixture exercises real page/client code in Chromium but uses a
-deterministic HTTP/SSE server. The separate Worker test exercises the client
-against real Durable Objects, game changes, integration defaults, and revocation.
-Neither establishes actual OBS behavior, geographic placement, or runtime
-replacement on Cloudflare.
-
-## Local budget measurements
-
-Reproduce the representative coordinator workload with:
+Run the repository checks with:
 
 ```sh
-npm test -- --run test/state-query-sse.spec.js -t 'measures bounded' --disableConsoleIntercept
-node scripts/model-state-query-transport.js
+npm ci
+npm run lint
+npm test -- --run
 ```
 
-Recorded on 2026-09-15 in the Cloudflare Vitest/Miniflare workspace:
-
-| Measurement | 1 subscriber | 20 subscribers |
-| --- | ---: | ---: |
-| Active queries / shared source edges | 1 / 2 | 20 / 2 |
-| Empty poll calls | 5 | 100 |
-| Query reevaluations caused by those empty polls | 0 | 0 |
-| Registration plus those idle polls | 58 ms | 399 ms |
-| Committed mutations | 10 | 10 |
-| Local commit-to-coordinator-result median | 27 ms | 236 ms |
-| Local sample p95 (maximum of 10 samples) | 85 ms | 293 ms |
-| Retained history events after changes | 11 | 220 |
-| Retained history bytes after changes | 5,834 | 116,680 |
-| Queries / source edges / history after last close | 0 / 0 / 0 | 0 / 0 / 0 |
-
-This small local workload manually drains alarms and polls the coordinator; it
-does not include the public adapter's 0–500 ms waiting interval, network RTT,
-browser rendering, or production alarm scheduling. Measurements are descriptive,
-not hard timing assertions in CI. The 21st registration is rejected. Idle here
-means no value changes while subscribers remain attached, not a hibernation test.
-
-The implementation enforces 20 subscriptions/group, 20 queries/subscription,
-100 distinct active plans, 400 query records, 40 dependencies/query, 2,000 shared
-source edges, 16 KiB/query, 64 KiB/result, 256 KiB/aggregate payload, and
-64 events/256 KiB/history per subscription. Query drain batches are 20 records
-with four external operations at a time, and attachment retries stop after three
-attempts. Retry delays grow from 1 to 30 seconds. History retention is five
-minutes while attached; closing removes it immediately. See the individual
-contract, evaluator, live-observation, and SSE guides for lower grant limits.
-
-The Step 2 objectives of 100 notifications/second sustained, 500 in a burst,
-500 deliveries/second, p95 ≤1 second/p99 ≤3 seconds client latency, and recovery
-within five seconds are **not certified by this local workload**. Test those
-rates and larger mixed query/collection documents in the deployed test stage.
-The browser silence threshold implemented in Step 11 is 60 seconds (the Step 2
-proposal used 45); heartbeats remain 20 seconds and reconnect backoff 1–30 seconds.
-
-The same workload in implementation CI, while the full suite ran, produced:
-
-| CI measurement | 1 subscriber | 20 subscribers |
-| --- | ---: | ---: |
-| Registration plus idle polls | 41 ms | 925 ms |
-| Commit-to-coordinator-result median | 99 ms | 1,101 ms |
-| Sample p95 (maximum of 10 samples) | 278 ms | 1,994 ms |
-| Final queries / source edges / history | 0 / 0 / 0 | 0 / 0 / 0 |
-
-The 20-subscriber CI sample exceeds the provisional one-second p95 objective
-even before edge/browser latency is included. This environment-dependent result
-leaves the service objective unverified; the relative contributions of runner
-capacity and concurrent suite work were not isolated. It reinforces the requirement to measure representative
-deployed load before enabling production subscriptions.
-
-## Implemented transport cost
-
-The shipped adapter uses durable polling, not the proposed hibernating WebSocket
-relay. Each waiting client makes up to two empty polls/second, plus initial,
-reconnect, renewal, authorization, and active-result work. Twenty waiting clients
-can therefore account for about 40 observer poll requests/second even without
-mutations. No subscriber means no adapter polls or query evaluations.
-
-For Step 2's 100 groups × 10 clients × 8 hours/day × 30 days scenario, the model
-now includes **1,728,000,000 idle poll requests/month**. Its simplified total is
-1,728,270,000 requests: $259.20 incremental request cost. Assuming two milliseconds
-of observer activity per poll gives 432,300 GB-seconds and $12.50 incremental
-duration cost, or $271.70 combined. If objects instead accrue duration throughout
-active hours, the duration component is $137.50 and the combined illustration is
-$396.70. Neither duration assumption is a measured production bound.
-
-The model uses the paid-plan request and duration rates and rounding rules
-rechecked on 2026-09-15 in [Cloudflare's pricing documentation](https://developers.cloudflare.com/durable-objects/platform/pricing/).
-It excludes public Worker requests/CPU, SQL reads/writes/storage, authorization,
-renewals, alarms, extra active polls, owner fanout, base subscriptions, and other
-account usage. Included allowances may already be consumed elsewhere. It is a
-comparison model, not an invoice forecast or approval to scale the polling path.
+The GitHub Actions workflow is the authoritative clean-run check. It repeats
+the full tests and lint, checks JavaScript syntax, and performs a non-deploying
+Wrangler dry run.
 
 ## Observability
 
 With `STATE_QUERY_DIAGNOSTICS="true"`, an observer emits
-`state_query.operations` at most once per minute **when it next handles work**.
+`state_query.operations` at most once per minute when it next handles work.
 There is no diagnostic timer keeping an idle object awake. Fields include:
 
-- active leased subscriptions, active query records, source edges, pending
-  queries, retained events, and retained bytes;
-- registration, poll, empty-poll, close/expiry, resynchronization, oversize,
-  reevaluation, handoff, retry, authorization-retry, and detach-retry counters;
+- active leased subscriptions, query records, source edges, pending queries,
+  retained events, and retained bytes;
+- registration, close/expiry, resynchronization, oversize, reevaluation,
+  handoff, retry, authorization-retry, and detach-retry counters;
 - notification, duplicate, and obsolete/no-longer-interested counts; and
 - maximum received-notification lag from its durable commit timestamp.
 
 Counters cover one object instance's current window and reset on restart or
 flush. The random instance identifier is not a group identifier. Active
-subscriptions are leases, not an exact count of TCP connections; abrupt closes
-remain counted until cleanup. Notification lag is not end-to-end widget latency.
-Use Cloudflare request/CPU/duration/storage analytics for billing and deployed
-client-side timings for latency percentiles. Outbox delivery failures retain the
-existing bounded attempt logs and retry alarms.
+subscriptions are leases rather than an exact TCP-connection count. Use
+Cloudflare request, CPU, duration, storage, and WebSocket analytics for deployed
+resource behavior and client-side timings for end-to-end latency.
 
 Logs never accept query documents, credentials, result data, subject labels, or
-raw resolver/transport exception messages. Existing state-query error logs now
-replace those messages with a fixed description and optional HTTP status.
-There is no public metrics endpoint exposing another group's activity.
+raw resolver/transport exception messages. There is no public metrics endpoint
+exposing another group's activity.
 
-## Compatibility and migrations
+## Operational rollback
 
-The Worker compatibility date is `2026-09-01`, established and live-tested as
-the baseline before the hibernating-WebSocket transition. It includes the
-runtime's automatic WebSocket close-frame reply behavior. Application close and
-error cleanup must nevertheless remain explicit and idempotent.
+If live delivery must be stopped, set `STATE_QUERY_STREAMS_ENABLED` to false and
+deploy the configuration. New upgrades fail closed. Observer alarms send a
+bounded terminal error where possible, close attached sockets before renewal,
+and remove their live graphs. Confirm the drain using aggregate diagnostics and
+platform analytics.
 
-Framework API v1 remains additive and stable. Production exports and test-kit
-exports are unchanged in Step 12; the exact public API tests, feature-boundary
-check, workspace checks, and generated catalogs remain required. Features with
-no `readableState` declaration keep their original behavior. Public query and
-stream protocols remain v1; a compatible internal transport change cannot alter
-their read-only, grant, binding, or full-replacement guarantees.
+There is no in-place SSE or polling fallback. A code rollback, if ever required,
+is a normal reviewed repository rollback. Snapshot reads and bot commands remain
+available while subscriptions are disabled.
 
-Keep migration tags v1–v15 intact. In particular, v15 creates the SQLite
-`StateQueryObserver` class and requires its binding in each environment. Step 12
-adds no migration tag or storage rewrite. Existing observer stream/live tables
-are preserved; cleanup only deletes expired or closed subscription records.
-Do not delete Durable Objects, reset counters, modify historical migration tags,
-or rotate signing secrets just to make a test or rollback easier.
+## Deployed acceptance evidence
 
-Historical unlabeled counters remain readable by their exact normalized game.
-An incomplete collection reports the legacy-coverage limitation instead of
-silently omitting those counts. Ordinary labeled mutations can add known subject
-metadata. There is no safe automatic reversal of historical hashed subjects.
+Step 17 established the critical runtime boundary in the isolated test Worker:
+Chrome and a current OBS Browser Source received Discord-driven updates, and OBS
+was already current after roughly 30 minutes idle. The approximately 74-minute
+Durable Object window recorded 10 hibernatable and zero non-hibernatable inbound
+messages, 113 requests, 97 alarms, 1.47 GB-seconds, 5k rows read, and 580 rows
+written. The only reported invocation errors were two client disconnects; there
+were no internal, exception, CPU-limit, or memory-limit errors, and the live tail
+contained no polling route.
 
-## Test-first rollout and rollback
-
-1. Record the intended release commit and its green CI run. Keep production
-   streaming disabled. Prepare a separate test Worker/environment with all current
-   bindings, unchanged migrations, browser assets, test-only signing secret,
-   public origin, and the Twitch state-query callback registered. Re-register
-   Discord commands if `/state_query_grant` is not yet installed.
-2. Deploy to that test environment through the normal operator release process,
-   then enable streaming and diagnostics **there only**. Use disposable test
-   groups and grants, never copied production credentials or reset production state.
-   Verify commands before and after enabling streams, secure sessions, custom
-   three-counter composition, collections, remembered-game changes, and denial.
-3. Exercise the lifecycle matrix with a browser and OBS source open: activate,
-   switch A→B→A, revoke/unlink with and without fallback, reconnect, revoke the
-   read grant, and replace the Worker version. Confirm explicit temporary status,
-   fresh authorized state, and no obsolete values. In OBS, authenticate via
-   Interact in its own cookie context; widget URLs contain no credential.
-4. Measure 1 and 20 clients/group, 20 queries/client, sparse and larger collection
-   results, slow consumers, 15 minutes idle, and the sustained/burst objectives
-   above. Use multiple groups to reach 100 clients; 100 clients on one group must
-   be rejected. Capture at least two regions' commit-to-widget percentiles,
-   reconnect recovery, error rates, active leases, cleanup, retries, and account
-   request/CPU/duration/SQL costs. Do not infer hibernation from local tests.
-5. Run the rollback drill: set streaming false, deploy that setting, confirm
-   new subscriptions receive 403, old clients terminate/reconnect to that status,
-   leases and watchers drain, and ordinary Discord/Twitch commands and snapshots
-   continue. Re-enable only after diagnosing any persistent retry or cleanup work.
-6. Record observed values, test Worker version, dates, browser/OBS versions,
-   regions, and accepted cost/latency deviations. Only then approve a small
-   production group cohort using scoped short-lived grants. Expand after the
-   same telemetry remains acceptable; admission limits are not a throughput SLA.
-
-For a production incident, disabling subscriptions is the first rollback.
-Wait for active socket graphs to drain before changing the selector to
-`polling_sse` if a code-level fallback is still required. Revoke a compromised
-grant independently when needed. If a code rollback is
-also necessary, use a reviewed version that retains current migrations, DO
-classes, persisted kinds, and compatible storage readers. A pre-state-query
-Worker is not an automatic safe rollback target. Keep state and audit records;
-do not reset or delete data as part of this procedure.
-
-The test deployment evidence below satisfies Step 17; it does not authorize a
-production rollout or retire the polling rollback path.
-
-## Validation record
-
-### Step 17 deployed validation
-
-Commit [`31a9872`](https://github.com/BCIrealm087/elmybot/commit/31a9872f753e024cc24ae0a01eb3c77281462bb8)
-passed all **435 tests** and the lifecycle/load matrix in
-[CI run 35326114263](https://github.com/BCIrealm087/elmybot/actions/runs/35326114263).
-Test Worker version `ba1faa66-b2cf-487a-84a7-acf18ffa78ac` was deployed with
-streams and diagnostics enabled and `hibernating_websocket` selected.
-Chrome and an actual OBS Browser Source both received Discord-driven changes.
-After roughly 30 minutes idle, OBS was already current when revisited.
-
-The approximately 74-minute Durable Object dashboard sample reported:
-
-| Metric | Observed |
-| --- | ---: |
-| Requests | 113 |
-| Request types | 97 alarms; 6 HTTP; 10 inbound WebSocket messages |
-| WebSocket classification | 10 hibernatable; 0 non-hibernatable; 6 outbound |
-| Billable duration | 1.47 GB-seconds |
-| Wall time | p50 32.91 ms; p90 185 ms; p99 268 ms |
-| CPU time | p50 1.68 ms; p90 6.38 ms; p99 10.72 ms |
-| Storage operations | approximately 5k rows read; 580 rows written |
-| Stored data | 135.17 kB |
-| Memory | p50 4.18 MB; p90/p99 4.47 MB |
-| Errors | 2 client disconnects; 0 internal, thrown, CPU-limit, or memory-limit errors |
-
-The live tail showed source-watch registration, notification delivery, and
-event-driven reevaluation, with no request to the state-query polling route.
-Against the documented polling adapter's maximum idle rate of two polls per
-second per client, two clients for 74 minutes would produce 17,760 poll calls;
-113 total invocations is a 99.36% lower sample count. This is an illustrative
-comparison, not a billing forecast: the window includes setup and mutation work,
-dashboard figures are rounded, and the alarm schedule contributes most requests.
-The prior operator polling measurements were reused rather than repeated.
-
-Accepted deviations are exact Chrome/OBS patch versions, regional latency
-percentiles, and manual repetitions of network loss, Worker replacement,
-revocation, and the full 20-client load. The current releases were reported by
-the operator, while those lifecycle and scale variants remain covered by the
-automated suite. Manual testing was limited to the critical boundaries that
-automation cannot establish: deployed Cloudflare hibernation and actual OBS
-behavior.
-
-### Earlier release validation
-
-Local validation on 2026-09-15 passed all **43 files / 417 tests** at normal
-Vitest concurrency (final run: 29.99 seconds). The first full run exposed the new load
-assertion's one-second default wait; its eventual-delivery check now allows
-five seconds and the complete rerun passed. No production timing threshold was
-relaxed. Lint, API boundaries, workspace/generated-document checks, and JavaScript
-syntax are part of the release gate.
-
-Implementation commit
-[`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63)
-passed [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829),
-job `104334298977`: 43 files / 417 tests (42.48 seconds), lint and repository
-checks, Chromium smoke, JavaScript syntax, and the non-deploying Wrangler build.
-The completed job log confirms the test count, browser scenarios, and dry-run
-exit; no deployment occurred. Local browser execution remains blocked by Chromium
-download access in this workspace; the supported build and browser gates are CI.
-
-The documentation checkpoint's [CI run 34955166830](https://github.com/BCIrealm087/elmybot/actions/runs/34955166830)
-passed all state-query cases but hit the existing five-second limit in the full
-invitation/OAuth/activation/refresh/unlink test. That same test passed in 808 ms
-in implementation CI and 118 ms in an isolated local rerun. Only that test now
-has a ten-second limit, matching the already scoped treatment of the oversized
-revocation case. Its assertions, production time budgets, and global test limit
-remain unchanged. The final branch CI must pass before this checkpoint is handed
-back as verified. The follow-up passes all 417 tests locally at normal concurrency
-(30.52 seconds), lint and repository checks, syntax, and diff validation.
+For Step 18, the operator completed and accepted the production rollout and soak
+on 2026-09-19. That acceptance authorized removal of the temporary polling path.
+Routine deployment management and additional live-cloud validation remain an
+operator responsibility rather than a repository completion gate unless a
+critical risk specifically requires manual evidence.

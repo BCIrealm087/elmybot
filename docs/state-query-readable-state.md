@@ -2,7 +2,7 @@
 
 Status: readable declarations and metadata implemented by roadmap step 3;
 read-only resolver execution implemented by step 4 on 2026-09-12; public grants,
-HTTP/SSE access, and the deaths contributor proof completed through step 10.
+HTTP/WebSocket access, and the deaths contributor proof completed through step 10.
 
 ## What this step adds
 
@@ -240,5 +240,5 @@ function. See [`state-query-evaluator.md`](state-query-evaluator.md).
 
 The remaining contributor-facing proof and test workflow is recorded in
 [`state-query-deaths-proof.md`](state-query-deaths-proof.md). Grants, authorized
-discovery, snapshots, revisions, lifecycle-aware observation, and SSE were
+discovery, snapshots, revisions, lifecycle-aware observation, and WebSockets were
 implemented by roadmap steps 5–9.

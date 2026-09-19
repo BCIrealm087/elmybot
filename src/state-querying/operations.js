@@ -1,7 +1,7 @@
 // Internal operational controls; no public route or feature-authoring API.
 const windows = new WeakMap();
 const COUNTERS = new Set([
-  "registrations", "polls", "emptyPolls", "closed", "expired", "resynchronized",
+  "registrations", "closed", "expired", "resynchronized",
   "oversized", "notifications", "duplicates", "obsolete", "handoffs", "retries",
   "authorizationRetries", "detachRetries", "evaluations", "backpressureCoalesced",
   "grantInvalidations", "leaseRetries"

@@ -21,9 +21,7 @@ import {
   STATE_QUERY_SOCKET_MESSAGE_TYPES,
   STATE_QUERY_SOCKET_PING,
   STATE_QUERY_SOCKET_PONG,
-  STATE_QUERY_SOCKET_PROTOCOL,
-  STATE_QUERY_STREAM_TRANSPORTS,
-  stateQueryStreamTransport
+  STATE_QUERY_SOCKET_PROTOCOL
 } from "./stream-contract.js";
 
 const encoder = new TextEncoder();
@@ -40,28 +38,23 @@ const SOCKET_LEASE_RENEW_AFTER_MS = 60 * 1000;
 const SOCKET_LEASE_RETRY_MS = 5 * 1000;
 const SOCKET_LEASE_BATCH_SIZE = 1;
 
-export const STATE_QUERY_STREAM_PATH = "/internal/state-query/stream";
-export const STATE_QUERY_STREAM_POLL_PATH = "/internal/state-query/stream/poll";
-export const STATE_QUERY_STREAM_CLOSE_PATH = "/internal/state-query/stream/close";
 export const STATE_QUERY_SOCKET_INTERNAL_PATH = "/internal/state-query/socket";
 export const STATE_QUERY_GRANT_INVALIDATION_PATH =
   "/internal/state-query/grant-invalidation";
 
 const SOCKET_TAG = "state-query";
-const SOCKET_TRANSPORT = STATE_QUERY_STREAM_TRANSPORTS.hibernatingWebSocket;
+const SOCKET_TRANSPORT = "hibernating_websocket";
 const SOCKET_GRANT_HEADER = "x-elmybot-state-query-grant";
 const SOCKET_PLATFORM_HEADER = "x-elmybot-state-query-platform";
 const SOCKET_GROUP_HEADER = "x-elmybot-state-query-group";
 
-export const STATE_QUERY_SSE_LIMITS = Object.freeze({
+export const STATE_QUERY_STREAM_LIMITS = Object.freeze({
   maxQueriesPerConnection: MAX_QUERIES_PER_CONNECTION,
   maxConnections: MAX_CONNECTIONS,
   maxHistoryEvents: MAX_HISTORY_EVENTS,
   maxHistoryBytes: MAX_HISTORY_BYTES,
   maxBufferedBytes: MAX_BUFFERED_BYTES,
-  historyRetentionMs: HISTORY_RETENTION_MS,
-  pollIntervalMs: 500,
-  heartbeatMs: 20_000
+  historyRetentionMs: HISTORY_RETENTION_MS
 });
 
 export class StateQueryStreamError extends Error {
@@ -81,24 +74,6 @@ export function requireStateQueryStreamsEnabled(env) {
   if (!stateQueryStreamsEnabled(env)) {
     fail("Public state-query subscriptions are disabled.", {
       status: 403, code: "state_query_subscriptions_disabled"
-    });
-  }
-}
-
-export function requireStateQueryPollingTransport(env) {
-  if (stateQueryStreamTransport(env) !== STATE_QUERY_STREAM_TRANSPORTS.pollingSse) {
-    fail("The configured state-query subscription transport is unavailable.", {
-      status: 503,
-      code: "state_query_transport_unavailable"
-    });
-  }
-}
-
-export function requireStateQuerySocketTransport(env) {
-  if (stateQueryStreamTransport(env) !== SOCKET_TRANSPORT) {
-    fail("The configured state-query subscription transport is unavailable.", {
-      status: 503,
-      code: "state_query_transport_unavailable"
     });
   }
 }
@@ -179,7 +154,7 @@ export function initializeStateQueryStreamTables(state) {
     "PRAGMA table_info(state_query_stream_subscriptions)"
   ).toArray().map((column) => column.name));
   for (const [name, definition] of [
-    ["transport", "TEXT NOT NULL DEFAULT 'polling_sse'"],
+    ["transport", "TEXT NOT NULL DEFAULT 'hibernating_websocket'"],
     ["grant_expires_at_ms", "INTEGER NOT NULL DEFAULT 0"],
     ["next_maintenance_at_ms", "INTEGER NOT NULL DEFAULT 0"],
     ["maintenance_attempt_count", "INTEGER NOT NULL DEFAULT 0"]
@@ -229,14 +204,12 @@ function safeSend(socket, value) {
   }
 }
 
-function socketEventMessage(socket, event) {
-  return socketAttachment(socket)?.transport === SOCKET_TRANSPORT
-    ? {
-        protocol: STATE_QUERY_SOCKET_PROTOCOL,
-        type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
-        event
-      }
-    : { type: "event", ...event };
+function socketEventMessage(event) {
+  return {
+    protocol: STATE_QUERY_SOCKET_PROTOCOL,
+    type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
+    event
+  };
 }
 
 function closeSocket(socket, code, reason) {
@@ -481,7 +454,7 @@ function sendSocketEvent(socket, attachment, event) {
   const acknowledged = Number(attachment.acknowledgedSequence ?? 0);
   const sent = Number(attachment.sentSequence ?? 0);
   if (sent > acknowledged) return false;
-  if (!safeSend(socket, socketEventMessage(socket, event))) return false;
+  if (!safeSend(socket, socketEventMessage(event))) return false;
   socket.serializeAttachment?.({
     ...attachment,
     sentSequence: event.sequence,
@@ -498,11 +471,7 @@ function sendEventToSubscription(state, connections, subscriptionId, event) {
   for (const socket of streamSockets(state, connections)) {
     const attachment = socketAttachment(socket);
     if (attachment?.registered && attachment.subscriptionId === subscriptionId) {
-      if (attachment.transport === SOCKET_TRANSPORT) {
-        sendSocketEvent(socket, attachment, event);
-      } else {
-        safeSend(socket, socketEventMessage(socket, event));
-      }
+      sendSocketEvent(socket, attachment, event);
     }
   }
 }
@@ -524,10 +493,6 @@ async function removeSubscriptionQueries(state, env, subscriptionId) {
 async function registerSocket(state, env, socket, input, _connections = []) {
   requireStateQueryStreamsEnabled(env);
   await cleanupExpiredStateQueryStreams(state, env);
-  const priorAttachment = socketAttachment(socket);
-  const transport = priorAttachment?.transport === SOCKET_TRANSPORT
-    ? SOCKET_TRANSPORT
-    : STATE_QUERY_STREAM_TRANSPORTS.pollingSse;
   const retainedConnections = Number(state.storage.sql.exec(
     `SELECT COUNT(*) AS total FROM state_query_stream_subscriptions
      WHERE expires_at_ms > ? AND subscription_id != ?`,
@@ -582,9 +547,10 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     await removeSubscriptionQueries(state, env, subscriptionId);
   }
   const expiresAtMs = Math.min(grant.expiresAtMs, nowMs + CONNECTION_LEASE_SECONDS * 1000);
-  const nextMaintenanceAtMs = transport === SOCKET_TRANSPORT
-    ? Math.min(grant.expiresAtMs, nowMs + SOCKET_LEASE_RENEW_AFTER_MS)
-    : expiresAtMs;
+  const nextMaintenanceAtMs = Math.min(
+    grant.expiresAtMs,
+    nowMs + SOCKET_LEASE_RENEW_AFTER_MS
+  );
   // Authorization/digest work yielded to other registrations. Reserve capacity
   // again immediately before insertion, with no await between check and write.
   if (Number(state.storage.sql.exec(
@@ -613,7 +579,7 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     expiresAtMs,
     nowMs,
     nowMs,
-    transport,
+    SOCKET_TRANSPORT,
     grant.expiresAtMs,
     nextMaintenanceAtMs
   );
@@ -626,7 +592,7 @@ async function registerSocket(state, env, socket, input, _connections = []) {
         grantId: grant.id,
         query: entry.query,
         leaseSeconds: CONNECTION_LEASE_SECONDS,
-        authorizationMode: transport === SOCKET_TRANSPORT ? "event_driven" : "periodic"
+        authorizationMode: "event_driven"
       });
       requireActiveGrant(state, grant.id);
       state.storage.sql.exec(
@@ -661,7 +627,7 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     grantId: grant.id,
     target: selectedTarget,
     querySetDigest,
-    ...(priorAttachment?.transport ? { transport: priorAttachment.transport } : {})
+    transport: SOCKET_TRANSPORT
   };
   socket.serializeAttachment?.(attachment);
   const event = storeEvent(state, subscriptionId, "snapshot", {
@@ -670,11 +636,7 @@ async function registerSocket(state, env, socket, input, _connections = []) {
     results
   }, nowMs);
   recordStateQueryMetric(state, "registrations");
-  if (attachment.transport === SOCKET_TRANSPORT) {
-    sendSocketEvent(socket, attachment, event);
-  } else {
-    safeSend(socket, { type: "ready", subscriptionId, event });
-  }
+  sendSocketEvent(socket, attachment, event);
 }
 
 function socketHandshakeTarget(request) {
@@ -716,205 +678,7 @@ export async function acceptStateQueryStream(state, env, request, connections = 
   return new Response(null, { status: 101, webSocket: client });
 }
 
-export async function acceptDirectStateQueryStream(state, env, input, connections) {
-  if ([...connections].filter((socket) => socketAttachment(socket)?.registered).length >= MAX_CONNECTIONS) {
-    fail("This group observer has too many stream connections.", {
-      status: 429,
-      code: "state_query_stream_capacity"
-    });
-  }
-  let controller;
-  let attachment = null;
-  let closed = false;
-  let heartbeat = null;
-  const socket = {
-    readyState: 1,
-    serializeAttachment(value) { attachment = value; },
-    deserializeAttachment() { return attachment; },
-    send(value) {
-      if (closed) throw new Error("State-query stream is closed.");
-      const message = JSON.parse(value);
-      if (message.type === "error") {
-        controller.enqueue(encoder.encode(
-          `event: status\ndata: ${JSON.stringify({
-            protocol: "state-query-stream/v1",
-            status: "terminated",
-            reason: message.error?.code ?? "query_source_unavailable"
-          })}\n\n`
-        ));
-        this.close();
-        return;
-      }
-      if (!message.event) return;
-      const bytes = encodeSse(message.event);
-      if (bytes.byteLength > MAX_BUFFERED_BYTES || controller.desiredSize < 0) {
-        this.close();
-        return;
-      }
-      controller.enqueue(bytes);
-      if (message.event.eventType === "status") this.close();
-    },
-    close() {
-      if (closed) return;
-      closed = true;
-      clearInterval(heartbeat);
-      connections.delete(socket);
-      try { controller.close(); } catch { /* closed */ }
-      void closeStateQueryStream(state, env, socket, connections);
-    }
-  };
-  const body = new ReadableStream({
-    start(selectedController) { controller = selectedController; },
-    cancel() { socket.close(); }
-  });
-  try {
-    await registerSocket(state, env, socket, input, connections);
-    connections.add(socket);
-    heartbeat = setInterval(() => {
-      if (!closed && controller.desiredSize > 0) {
-        controller.enqueue(encoder.encode(": keepalive\n\n"));
-      }
-    }, STATE_QUERY_SSE_LIMITS.heartbeatMs);
-  } catch (error) {
-    socket.close();
-    throw error;
-  }
-  return new Response(body, {
-    headers: {
-      "cache-control": "no-store, no-transform",
-      "content-type": "text/event-stream; charset=utf-8",
-      "x-accel-buffering": "no"
-    }
-  }, { highWaterMark: 0 });
-}
-
-export async function registerPolledStateQueryStream(state, env, input) {
-  requireStateQueryPollingTransport(env);
-  let message = null;
-  let attachment = null;
-  const socket = {
-    serializeAttachment(value) { attachment = value; },
-    deserializeAttachment() { return attachment; },
-    send(value) { message = JSON.parse(value); },
-    close() {}
-  };
-  await registerSocket(state, env, socket, input);
-  if (message?.type !== "ready" || !message.event) {
-    fail("State-query stream registration failed.", {
-      status: 503,
-      code: "query_source_unavailable"
-    });
-  }
-  return { subscriptionId: message.subscriptionId, event: message.event };
-}
-
-export async function pollStateQueryStream(state, env, input) {
-  requireStateQueryStreamsEnabled(env);
-  requireStateQueryPollingTransport(env);
-  recordStateQueryMetric(state, "polls");
-  const subscriptionId = input?.subscriptionId;
-  const afterSequence = input?.afterSequence;
-  if (typeof subscriptionId !== "string" || !SUBSCRIPTION_ID.test(subscriptionId) ||
-      !Number.isSafeInteger(afterSequence) || afterSequence < 0) {
-    fail("State-query stream cursor is invalid.");
-  }
-  const subscription = state.storage.sql.exec(
-    `SELECT grant_id, expires_at_ms, next_sequence FROM state_query_stream_subscriptions
-     WHERE subscription_id = ?`,
-    subscriptionId
-  ).toArray()[0];
-  if (!subscription) {
-    fail("State-query stream was not found.", {
-      status: 404,
-      code: "state_query_stream_not_found"
-    });
-  }
-  const nowMs = Date.now();
-  if (Number(subscription.expires_at_ms) <= nowMs) {
-    await removePolledStateQueryStream(state, env, { subscriptionId });
-    fail("State-query stream lease expired.", { status: 404, code: "state_query_stream_not_found" });
-  }
-  if (Number(subscription.expires_at_ms) - nowMs < 60_000) {
-    const rows = state.storage.sql.exec(
-      `SELECT observer_query_id FROM state_query_stream_queries
-       WHERE subscription_id = ?`,
-      subscriptionId
-    ).toArray();
-    for (const row of rows) {
-      await renewLiveStateQuery(state, env, {
-        queryId: row.observer_query_id,
-        leaseSeconds: CONNECTION_LEASE_SECONDS
-      });
-    }
-    state.storage.sql.exec(
-      `UPDATE state_query_stream_subscriptions
-       SET expires_at_ms = ?, updated_at_ms = ? WHERE subscription_id = ?`,
-      nowMs + CONNECTION_LEASE_SECONDS * 1000,
-      nowMs,
-      subscriptionId
-    );
-  }
-  const events = state.storage.sql.exec(
-    `SELECT sequence, event_type, payload_json
-     FROM state_query_stream_history
-     WHERE subscription_id = ? AND sequence > ?
-     ORDER BY sequence ASC`,
-    subscriptionId,
-    afterSequence
-  ).toArray();
-  // A cursor behind pruned/cleared history must receive every current query,
-  // including quiet queries whose latest event has fallen out of the window.
-  if ((events.length > 0 && Number(events[0].sequence) > afterSequence + 1) ||
-      (events.length === 0 && Number(subscription.next_sequence) - 1 > afterSequence)) {
-    recordStateQueryMetric(state, "resynchronized");
-    const results = state.storage.sql.exec(
-      `SELECT client_query_id, observer_query_id FROM state_query_stream_queries
-       WHERE subscription_id = ? ORDER BY client_query_id`, subscriptionId
-    ).toArray().map((row) => {
-      const query = getLiveStateQuery(state, { queryId: row.observer_query_id }).query;
-      return query ? publicResult(row.client_query_id, query, "resynchronized") : {
-        queryId: row.client_query_id, status: "unavailable", reason: "resynchronized"
-      };
-    });
-    const terminal = results.some((result) => !result.result || result.status === "denied");
-    return { event: storeEvent(state, subscriptionId, terminal ? "status" : "snapshot", {
-      protocol: "state-query-stream/v1", subscriptionId, results
-    }, nowMs) };
-  }
-  if (events.length === 0) {
-    recordStateQueryMetric(state, "emptyPolls");
-    return { event: null };
-  }
-  const latest = events.at(-1);
-  const latestResults = new Map();
-  let eventType = latest.event_type;
-  let payload = null;
-  for (const event of events) {
-    const candidate = JSON.parse(event.payload_json);
-    payload = candidate;
-    for (const result of candidate.results ?? []) {
-      latestResults.set(result.queryId, result);
-    }
-    if (event.event_type === "status") eventType = "status";
-  }
-  payload = { ...payload, results: [...latestResults.values()] };
-  if (encoder.encode(canonicalStateQueryJson(payload)).byteLength > MAX_BUFFERED_BYTES) {
-    return { event: storeEvent(state, subscriptionId, eventType, payload, nowMs) };
-  }
-  const generation = state.storage.sql.exec(
-    "SELECT generation FROM state_query_stream_meta WHERE singleton = 1"
-  ).one().generation;
-  return {
-    event: {
-      sequence: Number(latest.sequence),
-      cursor: `sq1.${generation}.${subscriptionId}.${latest.sequence}`,
-      eventType,
-      payload
-    }
-  };
-}
-
-export async function removePolledStateQueryStream(state, env, input) {
+async function removeStateQuerySubscription(state, env, input) {
   const subscriptionId = input?.subscriptionId;
   if (typeof subscriptionId !== "string" || !SUBSCRIPTION_ID.test(subscriptionId)) return;
   await removeSubscriptionQueries(state, env, subscriptionId);
@@ -930,10 +694,11 @@ export async function cleanupExpiredStateQueryStreams(state, env) {
   const streamsEnabled = stateQueryStreamsEnabled(env);
   const rows = state.storage.sql.exec(
     `SELECT subscription_id FROM state_query_stream_subscriptions
-     WHERE expires_at_ms <= ? OR ? = 0
+     WHERE expires_at_ms <= ? OR ? = 0 OR transport != ?
      ORDER BY expires_at_ms LIMIT ?`,
     Date.now(),
     streamsEnabled ? 1 : 0,
+    SOCKET_TRANSPORT,
     MAX_CONNECTIONS
   ).toArray();
   for (const row of rows) {
@@ -959,7 +724,7 @@ export async function cleanupExpiredStateQueryStreams(state, env) {
         );
       }
     }
-    await removePolledStateQueryStream(state, env, { subscriptionId: row.subscription_id });
+    await removeStateQuerySubscription(state, env, { subscriptionId: row.subscription_id });
     if (!rollbackError) recordStateQueryMetric(state, "expired");
   }
 }
@@ -1325,127 +1090,8 @@ export async function closeStateQueryStream(state, env, socket, connections = []
   }
 }
 
-function encodeSse(event) {
-  return encoder.encode(
-    `id: ${event.cursor}\nevent: ${event.eventType}\ndata: ${JSON.stringify(event.payload)}\n\n`
-  );
-}
-
-export async function createStateQuerySseResponse(env, grant, input) {
-  requireStateQueryStreamsEnabled(env);
-  requireStateQueryPollingTransport(env);
-  const selectedTarget = target(grant.target);
-  const selectedGroup = createPlatformGroupRef({
-    platform: selectedTarget.platform,
-    kind: selectedTarget.platform === "discord" ? "guild" : "channel",
-    id: selectedTarget.groupId
-  });
-  const name = stateQueryObserverObjectName(stateQueryEnvironment(env), selectedGroup);
-  const stub = env.STATE_QUERY_OBSERVER.get(env.STATE_QUERY_OBSERVER.idFromName(name));
-  const response = await stub.fetch(`https://state-query-observer${STATE_QUERY_STREAM_PATH}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      grantId: grant.id,
-      target: selectedTarget,
-      queries: input.queries,
-      ...(input.subscriptionId ? { subscriptionId: input.subscriptionId } : {})
-    })
-  });
-  if (!response.ok) {
-    let error;
-    try { error = await response.json(); } catch { error = null; }
-    fail(error?.error ?? "State-query stream capacity is unavailable.", {
-      status: response.status,
-      code: error?.code ?? (response.status === 429
-        ? "state_query_stream_capacity"
-        : "query_source_unavailable")
-    });
-  }
-  const registered = await response.json();
-  let nextEvent = registered.event;
-  let afterSequence = 0;
-  let lastDeliveryAtMs = Date.now();
-  let nextPollAtMs = 0;
-  let closed = false;
-  const close = async () => {
-    if (closed) return;
-    closed = true;
-    try {
-      await stub.fetch(`https://state-query-observer${STATE_QUERY_STREAM_CLOSE_PATH}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ subscriptionId: registered.subscriptionId })
-      });
-    } catch { /* the durable query lease provides abrupt-disconnect cleanup */ }
-  };
-  const body = new ReadableStream({
-    async pull(controller) {
-      while (!closed) {
-        if (nextEvent) {
-          afterSequence = nextEvent.sequence;
-          controller.enqueue(encodeSse(nextEvent));
-          const terminal = nextEvent.eventType === "status";
-          nextEvent = null;
-          lastDeliveryAtMs = Date.now();
-          if (terminal) {
-            await close();
-            controller.close();
-          }
-          return;
-        }
-        let polled;
-        try {
-          const delayMs = nextPollAtMs - Date.now();
-          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (closed) return;
-          polled = await stub.fetch(
-            `https://state-query-observer${STATE_QUERY_STREAM_POLL_PATH}`,
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ subscriptionId: registered.subscriptionId, afterSequence })
-            }
-          );
-        } catch {
-          if (closed) return;
-          await close();
-          controller.close();
-          return;
-        }
-        if (closed) return;
-        if (!polled.ok) {
-          await close();
-          controller.close();
-          return;
-        }
-        nextEvent = (await polled.json()).event;
-        if (closed) return;
-        nextPollAtMs = nextEvent ? 0 : Date.now() + STATE_QUERY_SSE_LIMITS.pollIntervalMs;
-        if (!nextEvent && Date.now() - lastDeliveryAtMs >= STATE_QUERY_SSE_LIMITS.heartbeatMs) {
-          controller.enqueue(encoder.encode(": keepalive\n\n"));
-          lastDeliveryAtMs = Date.now();
-          return;
-        }
-      }
-    },
-    async cancel(reason) {
-      void reason;
-      await close();
-    }
-  }, { highWaterMark: 0 });
-  return new Response(body, {
-    headers: {
-      "cache-control": "no-store, no-transform",
-      "content-type": "text/event-stream; charset=utf-8",
-      "x-accel-buffering": "no"
-    }
-  });
-}
-
 export async function createStateQuerySocketResponse(env, grant) {
   requireStateQueryStreamsEnabled(env);
-  requireStateQuerySocketTransport(env);
   const selectedTarget = target(grant.target);
   const selectedGroup = createPlatformGroupRef({
     platform: selectedTarget.platform,

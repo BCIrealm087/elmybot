@@ -29,17 +29,11 @@ import {
   initializeStateQueryStreamTables,
   invalidateStateQueryGrant,
   maintainStateQuerySocketLeases,
-  pollStateQueryStream,
   publishStateQueryStreamUpdates,
-  registerPolledStateQueryStream,
-  removePolledStateQueryStream,
   STATE_QUERY_GRANT_INVALIDATION_PATH,
   STATE_QUERY_SOCKET_INTERNAL_PATH,
-  STATE_QUERY_STREAM_CLOSE_PATH,
-  STATE_QUERY_STREAM_PATH,
-  STATE_QUERY_STREAM_POLL_PATH,
   StateQueryStreamError
-} from "./sse.js";
+} from "./stream.js";
 import {
   STATE_QUERY_SOCKET_CLOSE_CODES,
   STATE_QUERY_SOCKET_PING,
@@ -570,49 +564,6 @@ export class StateQueryObserverBackend {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === STATE_QUERY_SOCKET_INTERNAL_PATH) {
       return await acceptStateQueryStream(this.state, this.env, request);
-    }
-    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_PATH) {
-      try {
-        return noStoreJson(await registerPolledStateQueryStream(
-          this.state, this.env, await request.json()
-        ), 201);
-      } catch (error) {
-        if (
-          error instanceof StateQueryStreamError ||
-          error instanceof StateQueryLiveError ||
-          error instanceof StateQueryCredentialError ||
-          error instanceof StateQueryError
-        ) {
-          return noStoreJson({ error: error.message, code: error.code }, error.status);
-        }
-        throw error;
-      }
-    }
-    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_POLL_PATH) {
-      try {
-        return noStoreJson(await pollStateQueryStream(
-          this.state, this.env, await request.json()
-        ));
-      } catch (error) {
-        if (error instanceof TypeError) return new Response(null, { status: 499 });
-        if (
-          error instanceof StateQueryStreamError ||
-          error instanceof StateQueryLiveError ||
-          error instanceof StateQueryCredentialError ||
-          error instanceof StateQueryError
-        ) {
-          return noStoreJson({ error: error.message, code: error.code }, error.status);
-        }
-        throw error;
-      }
-    }
-    if (request.method === "POST" && url.pathname === STATE_QUERY_STREAM_CLOSE_PATH) {
-      try {
-        await removePolledStateQueryStream(this.state, this.env, await request.json());
-      } catch (error) {
-        if (!(error instanceof TypeError)) throw error;
-      }
-      return new Response(null, { status: 204 });
     }
     if (request.method !== "POST") return new Response("Not Found", { status: 404 });
     try {

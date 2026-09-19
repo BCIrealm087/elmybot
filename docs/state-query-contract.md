@@ -456,7 +456,7 @@ A grant contains:
 
 The implemented credential representation and operator routes are recorded in
 [`state-query-http.md`](state-query-http.md). A query digest, logical reference,
-group ID, SSE cursor, integration ID, or CORS approval is never a credential.
+group ID, subscription cursor, integration ID, or CORS approval is never a credential.
 
 Authorization is applied to every binding, including hidden dependencies and
 collection membership. Dynamic values are normalized and checked against the
@@ -515,27 +515,27 @@ process stops before notification. Delivery failure never rolls back a state
 mutation. With no subscribers, revisions continue to change, but query
 evaluation and fanout may be skipped.
 
-### SSE compatibility
+### Live WebSocket compatibility
 
-SSE is the first intended browser delivery surface. It carries the
-transport-neutral envelopes above. Each data event has an `id` containing an
-opaque subscription cursor and an event type identifying snapshot, update, or
-status. Heartbeat comments carry no state.
+Direct hibernating WebSockets are the authoritative browser delivery surface.
+They carry the transport-neutral envelopes above in versioned JSON messages.
+Each event contains an opaque subscription cursor and identifies a snapshot,
+update, or safe status. The client acknowledges delivered cursors so the server
+can bound in-flight work and coalesce newer complete replacements.
 
-The cursor is scoped to one authorized subscription and orders its events.
-`Last-Event-ID` may request bounded recovery, but the server may respond with
-a fresh `resynchronized` snapshot when the cursor is unknown, expired,
-belongs to an obsolete binding, or is outside retained history. It must
-reauthorize and resolve the current source before replay or resynchronization.
+The cursor is scoped to one authorized subscription and orders its events. A
+register message may request bounded recovery, but the server may respond with
+a fresh `resynchronized` snapshot when the cursor is unknown, expired, belongs
+to an obsolete binding, or is outside retained history. It must reauthorize and
+resolve the current source before replay or resynchronization.
 
 A reconnect after linking, unlinking, or switching a default cannot replay an
 archived source as current. Credential expiry or revocation ends data delivery
 with a protocol status when possible and prevents a reconnect loop from
 continuing unauthorized access.
 
-The public query and result contracts are transport-neutral. Step 2 evaluates
-direct SSE ownership and hibernating WebSocket alternatives for cost and
-placement without changing query meaning.
+The public query and result contracts remain transport-neutral even though the
+only live version-1 transport is the direct hibernating WebSocket route.
 
 ## Errors and status codes
 
@@ -579,7 +579,7 @@ operator may return more specific catalog errors.
 
 The examples use the implemented deaths exports and omit grant transport.
 Submit these documents through the [snapshot API](state-query-http.md) or as
-named queries through the [SSE API](state-query-sse.md).
+named queries through the [WebSocket API](state-query-websocket.md).
 
 ### 1. Direct local value
 
@@ -739,7 +739,7 @@ collection export is separately granted.
 10. Source changes are observable even when data is equal.
 11. Reconnects may resynchronize with a current snapshot instead of replaying
     expired history.
-12. The query contract is independent of SSE/WebSocket transport placement.
+12. The query contract is independent of WebSocket transport placement.
 
 ## Implementation handoff
 

@@ -1,7 +1,8 @@
 # Live state-query dependency coordination
 
 Status: implemented for state-querying roadmap step 8 on 2026-09-13.
-Public delivery is implemented in the [SSE layer](state-query-sse.md).
+Public delivery is implemented by the
+[hibernating WebSocket layer](state-query-websocket.md).
 
 ## Boundary
 
@@ -12,9 +13,10 @@ group-local, shareable, and effective-binding sources that can invalidate that
 result.
 
 The coordinator is internal infrastructure. Its attach, renew, remove, and get
-operations are available only through Durable Object bindings. The Step 9 layer
-owns the public HTTP subscription endpoint, cursor contract, SSE framing, and
-connection buffering and exposes these persisted results to browsers.
+operations are available only through Durable Object bindings. The live
+transport layer owns the public WebSocket upgrade, cursor contract, framing,
+acknowledgement, and connection buffering and exposes these persisted results
+to browsers.
 
 ## Persisted graph
 
@@ -88,10 +90,8 @@ query sequence or create a user-visible update.
 
 ## Authorization, leases, and recovery
 
-Authorization is checked during every evaluation. Polling-SSE and direct
-internal live queries also validate their stored grant reference every 30
-seconds without reevaluating an unchanged query. Hibernating-WebSocket queries
-instead use durable revocation invalidations and their exact stored grant-expiry
+Authorization is checked during every evaluation. Hibernating-WebSocket queries
+use durable revocation invalidations and their exact stored grant-expiry
 deadline; their lease-maintenance alarm does not poll grant storage. Expired or
 revoked grants move only matching queries to `denied`, preserve a safe error
 code, and release their source relationships. Dynamic values are authorized

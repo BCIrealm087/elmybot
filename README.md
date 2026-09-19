@@ -56,7 +56,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
-| `/state-query/*` | Scoped readable-state discovery, snapshots, live SSE, sessions, grant issuance, query setup, and widgets |
+| `/state-query/*` | Scoped readable-state discovery, snapshots, live WebSockets, sessions, grant issuance, query setup, and widgets |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -391,14 +391,10 @@ copy a `/state-query/widget` browser-source URL. OBS uses its own session;
 enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
 documents the client API, setup flow, and credential-free widget URLs.
 
-Public subscriptions default to disabled in both environments. The
-[state-query release guide](docs/state-query-release.md) documents
-`STATE_QUERY_STREAMS_ENABLED`, the `STATE_QUERY_STREAM_TRANSPORT` rollout
-selector, aggregate diagnostics, measured local limits, the durable-polling
-cost model, and the test-first rollout/rollback procedure. The accepted
-[hibernating WebSocket contract](docs/state-query-websocket.md) now has a tested
-server implementation, but remains behind the polling transport until browser
-migration, hardening, and deployed verification pass.
+Public subscriptions use direct hibernating WebSockets in both checked-in
+environments. The [state-query release guide](docs/state-query-release.md)
+documents the `STATE_QUERY_STREAMS_ENABLED` rollback switch, aggregate
+diagnostics, bounded limits, automated verification, and operational recovery.
 Snapshots and existing commands remain available when streaming is disabled.
 
 ## Project layout
@@ -477,12 +473,11 @@ explicit catalog-regeneration action.
 - [Composable state queries and live subscriptions roadmap](docs/state-querying-roadmap.md)
 - [State-query release verification, operations, and rollout](docs/state-query-release.md)
 - [Public state-query contract](docs/state-query-contract.md)
-- [State-query live transport and cost decision](docs/state-query-transport-decision.md)
 - [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
 - [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
 - [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
 - [Recoverable state-query change notifications](docs/state-query-notifications.md)
-- [Public state-query SSE delivery](docs/state-query-sse.md)
+- [Public state-query WebSocket delivery](docs/state-query-websocket.md)
 - [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
 - [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)

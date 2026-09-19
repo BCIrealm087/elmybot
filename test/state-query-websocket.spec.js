@@ -37,7 +37,6 @@ const socketEnv = {
   ...env,
   STATE_QUERY_PUBLIC_ORIGIN: "https://example.com",
   STATE_QUERY_STREAMS_ENABLED: "true",
-  STATE_QUERY_STREAM_TRANSPORT: "hibernating_websocket",
   STATE_QUERY_CREDENTIAL_SIGNING_SECRET:
     "test-state-query-signing-secret-32-bytes-minimum"
 };
@@ -271,7 +270,7 @@ describe("hibernating state-query WebSockets", () => {
     });
   });
 
-  it("enforces transport, authentication, URL, and cookie-origin boundaries", async () => {
+  it("enforces authentication, URL, and cookie-origin boundaries", async () => {
     const target = selectedTarget();
     const grant = await issue(target);
     const request = (headers = {}, suffix = "") => new Request(
@@ -284,12 +283,6 @@ describe("hibernating state-query WebSockets", () => {
     });
     expect(disabled.status).toBe(403);
     expect((await disabled.json()).error.code).toBe("state_query_subscriptions_disabled");
-
-    const polling = await handleStateQueryRequest(request(), {
-      ...socketEnv, STATE_QUERY_STREAM_TRANSPORT: "polling_sse"
-    });
-    expect(polling.status).toBe(503);
-    expect((await polling.json()).error.code).toBe("state_query_transport_unavailable");
 
     expect((await handleStateQueryRequest(request(), socketEnv)).status).toBe(403);
     expect((await handleStateQueryRequest(request({
@@ -422,7 +415,7 @@ describe("hibernating state-query WebSockets", () => {
         }
       });
       await runInDurableObject(observerStub(target), async (_instance, state) => {
-        expect(stateQueryOperationalSnapshot(state).counters.polls ?? 0).toBe(0);
+        expect(stateQueryOperationalSnapshot(state).counters).not.toHaveProperty("polls");
       });
     } finally {
       closeQuietly(socket);

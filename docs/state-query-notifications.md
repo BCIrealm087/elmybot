@@ -2,7 +2,7 @@
 
 Status: implemented foundation for state-querying roadmap step 6 on 2026-09-12.
 Effective-state lifecycle handoffs were added in step 7 and live dependency
-coordination in step 8; public SSE remains step 9.
+coordination in step 8; public delivery now uses direct hibernating WebSockets.
 
 ## Boundary
 
