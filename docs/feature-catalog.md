@@ -24,6 +24,7 @@ Framework API: v1.
 | Feature | Namespace | Label | Schema | Compatible schemas | Collision summary | Limits | Legacy adoption |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | fun.deaths | `game_deaths` | Per-game death counts | 1 | 1 | entry_count | 100 entries; 16384 bytes/value | integrationState |
+| widget.data | `published_data` | Published widget data | 1 | 1 | presence | 100 entries; 16384 bytes/value | — |
 
 ## Readable state exports
 
@@ -64,7 +65,7 @@ Framework API: v1.
 | --- | --- | --- | --- | --- | --- |
 | core.alive | `core.health.check.v1` | discord, twitch | public | — | — |
 | fun.deaths | `fun.deaths.manage.v1` | discord, twitch | public; framework.moderators when `operation` is present and is not `check` | authorization, shareableState, state | — |
-| widget.data | `widget.data.publish.v1` | discord, twitch | framework.moderators | — | group, 1s |
+| widget.data | `widget.data.publish.v1` | discord, twitch | framework.moderators | shareableState | group, 1s |
 | fun.counter | `fun.counter.increment.v1` | discord, twitch | public | config, state | actor, 5s |
 | integrations.announcements | `integration.announcement.publish.v1` | discord, twitch | integration.announcement.publish | — | — |
 | twitch.stream-online | `twitch.stream-online.publish.v1` | twitch | public | — | — |

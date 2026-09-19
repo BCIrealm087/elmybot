@@ -17,13 +17,25 @@ export { deriveWidgetDataUpdateId };
 
 export const WIDGET_DATA_ACTION_KIND = "widget.data.publish.v1";
 export const WIDGET_DATA_MAX_LENGTH = 400;
+export const WIDGET_DATA_NAMESPACE_ID = "published_data";
+export const WIDGET_DATA_STATE_KEY = "latest";
 
-const pendingMessage = "Widget data publishing is not available yet.";
+const UPDATED_MESSAGE = "Widget data updated.";
+
+function otherPlatform(platform) {
+  return platform === "discord" ? "twitch" : "discord";
+}
 
 export const widgetDataFeature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "widget.data",
   description: "Publishes current widget data for state-query clients.",
+  shareableState: [{
+    id: WIDGET_DATA_NAMESPACE_ID,
+    label: "Published widget data",
+    schemaVersion: 1,
+    collisionSummary: { kind: "presence" }
+  }],
   actions: [
     defineAction({
       kind: WIDGET_DATA_ACTION_KIND,
@@ -36,11 +48,27 @@ export const widgetDataFeature = defineFeature({
           trim: true
         })
       }),
+      uses: { services: ["shareableState"] },
       cooldown: { scope: "group", seconds: 1 },
-      execute: () => ({
-        output: { message: pendingMessage },
-        effects: []
-      })
+      async execute(ctx, { data }) {
+        const state = await ctx.shareableState.current(
+          otherPlatform(ctx.origin.group.platform),
+          WIDGET_DATA_NAMESPACE_ID
+        );
+        const publication = Object.freeze({
+          updateId: await deriveWidgetDataUpdateId({
+            originGroupKey: ctx.origin.group.key,
+            sourceEventId: ctx.sourceEventId
+          }),
+          data,
+          origin: ctx.origin.group.platform
+        });
+        await state.set(WIDGET_DATA_STATE_KEY, publication);
+        return {
+          output: { message: UPDATED_MESSAGE },
+          effects: []
+        };
+      }
     })
   ],
   commands: {
