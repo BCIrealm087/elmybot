@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: implementation roadmap; Steps 1–2 completed on 2026-09-19.
+Status: implementation roadmap; Steps 1–3 completed on 2026-09-19.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -246,7 +246,7 @@ enforce moderator access.
 
 ### 3. Implement atomic effective-shareable publication
 
-**Status:** pending. **Depends on:** steps 1–2.
+**Status:** completed on 2026-09-19. **Depends on:** steps 1–2.
 
 Declare the `published_data` shareable namespace with schema version 1 and a
 presence collision summary. Resolve the effective realm once per command and set
@@ -422,3 +422,4 @@ log.
 | 2026-09-19 | Roadmap | `aa05f78` | CI run 35419090662 passed | Initial agreed plan; implementation not started |
 | 2026-09-19 | 1 | `aad7dd8`, `6ace057` | CI run 35435837932 passed | Approved `widget-data-contract.md`; implementation not started |
 | 2026-09-19 | 2 | `c0750bd`, `83fccc8` | CI run 35446952598 passed | Installed private widget-data package, cross-platform bounded command definitions, deterministic update-ID helper, and package/registration tests; persistence remains step 3 |
+| 2026-09-19 | 3 | `0b44ffd`, `d274571` | CI run 35474663099 passed | Added atomic effective-shareable `latest` publication, exact success acknowledgement, lifecycle/concurrency coverage, and multi-namespace integration discovery assertions; readable export remains step 4 |
