@@ -162,7 +162,9 @@ const sharedDeaths = await ctx.shareableState.current(
   "game_deaths"
 );
 await sharedDeaths
-  .boundedCounter("deaths", normalizedGameName)
+  .boundedCounter("deaths", normalizedGameName, {
+    subjectLabel: displayGameName
+  })
   .increment();
 ```
 
@@ -209,12 +211,27 @@ text. Subject identity is exact: case folding, Unicode normalization, and
 whitespace normalization are domain choices the feature should make before
 constructing the counter.
 
-Options are `{ min, max, initial }`. They default to zero,
+Options are `{ min, max, initial, subjectLabel }`. Bounds default to zero,
 `Number.MAX_SAFE_INTEGER`, and `min`, respectively. Bounds and the initial value
 must be safe integers satisfying `min <= initial <= max`. Increment and
 decrement amounts are positive integers up to 1,000,000; operations saturate at
 the applicable inclusive bound. `set(value)` requires a safe integer within the
 configured bounds, and `reset()` returns the new initial value.
+
+`subjectLabel` is optional display metadata for collection discovery. It is
+trimmed, limited to 80 characters, and never participates in counter identity;
+the feature must still pass its canonical subject as the second argument. The
+first recorded label is retained. Shareable snapshots carry known subject
+metadata with the counter values, so existing linking, cloning, revocation,
+standalone-successor, and relinking flows move them together.
+
+Historical counters created before subject metadata remain addressable by their
+exact canonical subject, because the hashed key derivation is unchanged. Their
+original subjects cannot be recovered from the hashes. Enumeration therefore
+reports explicit incomplete coverage until a later mutation using that subject
+and a label identifies the row; it never silently presents only labeled rows as
+the complete collection. See [Readable state declarations and subject
+metadata](state-query-readable-state.md).
 
 Each state operation is atomic independently; API v1 does not expose a general
 multi-operation or cross-owner transaction. A bounded-counter mutation and its
@@ -258,6 +275,11 @@ initial value. A missing `get()`, no-op decrement at the floor, or no-op reset
 does not consume one of the 100 state entries.
 
 The existing `GroupConfig` Durable Object owns these SQLite tables. Legacy
+group-local state revisions also drive the leased, recoverable invalidation
+outbox described in
+[`state-query-notifications.md`](state-query-notifications.md); feature authors
+do not emit notifications themselves.
+
 Discord role configuration remains in its existing storage and public listing;
 framework namespaces are not exposed through `/config_list_entries`.
 Integration-owned state uses the existing per-integration coordinator storage;

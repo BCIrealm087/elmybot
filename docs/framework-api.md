@@ -43,6 +43,8 @@ surface consists of:
 - manifest and version helpers: `defineFeature`, `isFeatureDefinition`,
   `frameworkApiVersion`, `supportedFrameworkApiVersions`, and
   `FeatureDefinitionError`;
+- readable-state helpers: `defineReadableStateExport` and
+  `ReadableStateDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -58,6 +60,16 @@ metadata. Omission normalizes to a frozen empty array, preserving every existing
 v1 definition. Declarations contain stable IDs, labels, schema compatibility,
 safe collision-summary policy, and bounded limits. This is the compatible
 addition of an optional manifest field with a stable default.
+
+`defineFeature()` also accepts optional `readableState` declarations created by
+`defineReadableStateExport()`. Omission normalizes to a frozen empty array. The
+helper validates public identity, schemas, supported platforms, ownership,
+operator-grant eligibility, normalization hooks, absence policy, and bounded
+collection behavior. Its required `resolve(ctx, arguments)` function receives
+only the declaration's scope-bound, read-only state methods and must return a
+schema-valid result cell. A declaration only makes state eligible for a later
+read grant; it does not add a route or expose a value. See
+[`state-query-readable-state.md`](state-query-readable-state.md).
 
 Actions may explicitly request the controlled `authorization`, `config`,
 `integrationState`, `links`, `shareableState`, `state`, and `random` context
@@ -77,6 +89,10 @@ options)` API. It safely derives storage keys for arbitrary subjects and makes
 each read, assignment, saturating increment or decrement, or reset one atomic
 operation. All configuration and `ctx.state` remain scoped to the action's origin group,
 including when that group is linked to another platform.
+`options.subjectLabel` may provide a trimmed, non-control display label of at
+most 80 characters. Mutations can then attach enumerable metadata without
+changing the subject identity or derived counter key. Omitting it preserves the
+previous behavior.
 
 The additive `integrationState` service deliberately exposes mutable state
 owned by one active integration. The action must first resolve the current
@@ -141,6 +157,15 @@ identity without exposing production registry infrastructure. Its Twitch runtime
 semantic arguments through `twitch.command()` or bang-prefixed raw command text
 through `twitch.commandText()` when parser behavior is under test.
 
+The test runtime also exposes `runtime.query.snapshot(document)` and
+`runtime.query.watch(document)`. Both use the production version-1 query parser
+and evaluator against in-memory local and effective-shareable state. A watch
+returns its initial evaluation, coalesces ordinary mutations to the latest
+different result through `next()`, follows `runtime.links.set()` source changes,
+and releases interest through `close()`. It does not simulate durable grants,
+alarms, HTTP, or network WebSockets. See the
+[deaths query proof](state-query-deaths-proof.md#contributor-test-workflow).
+
 The additive test-only `runtime.inputError(platform, commandName, error)`
 formats an existing schema or parser failure using the live adapters' correction
 text, or returns `null` for unrelated errors. Command execution still rejects
@@ -158,6 +183,16 @@ All other modules below `src/framework/` are implementation details. In
 particular, `internal.js`, registry composition, service runtimes, storage
 clients, definition brands, adapter descriptors, and catalog tooling carry no
 compatibility guarantee for feature authors.
+
+The state-query release preserves API v1, including omitted readable declarations
+and the existing command scope semantics. Its browser client and version-1 HTTP
+query/stream protocols are documented in [state-query-browser.md](state-query-browser.md)
+and [state-query-contract.md](state-query-contract.md). Compatible additions may
+add exports or optional fields; removing existing fields, weakening authorization,
+or changing full-result replacement semantics requires a new protocol version.
+Transport cursors are opaque and may expire; resynchronization remains guaranteed.
+Internal operational controls and diagnostics are not feature or test-kit exports.
+See [release and migration guidance](state-query-release.md).
 
 ## Manifest compatibility
 

@@ -143,11 +143,16 @@ framework suite:
 | Bounded counters | The relevant floor, ceiling, or assignment boundary |
 | Local preferences or state | Isolation between the groups that must remember independently |
 | Shareable state | Standalone isolation and two origins selecting the same integration |
+| Readable state | `runtime.query.snapshot()` or `runtime.query.watch()`, then an ordinary mutation that changes the result |
 | Custom routes or platform options | The relevant missing-route or platform-specific behavior |
 
 The counter recipes use the test kit's `runCapabilityCases()` to exercise
 `plus`, `minus`, and `reset` with and without a moderator grant. Keep the
 explicit no-mutation assertion; a denial message alone is not enough evidence.
+They also include a readable `score` export and a watch assertion, so new local
+or shareable counters are queryable without feature-authored notification or transport
+code. See the [deaths query proof](state-query-deaths-proof.md) for literal,
+combined, dynamic, and collection examples.
 
 For Twitch syntax that matters, test the actual chat text:
 

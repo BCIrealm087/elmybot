@@ -5,7 +5,7 @@ Feature packages use these exports instead of reaching into Worker internals:
 
 | Import | Audience | Contents |
 | --- | --- | --- |
-| `@elmybot/framework` | Feature production source | Feature, action, command, route, event, schedule, schema, and context helpers |
+| `@elmybot/framework` | Feature production source | Feature, action, command, route, event, schedule, readable-state declaration, schema, and context helpers |
 | `@elmybot/framework/testing` | Feature tests only | Deployment-free feature runtime, fixtures, and assertions |
 
 The package major matches `frameworkApiVersion`; version `1.0.0` therefore

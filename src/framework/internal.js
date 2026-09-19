@@ -8,3 +8,14 @@ export {
 } from "./feature-registry.js";
 export { discordOptionDescriptor } from "./discord.js";
 export { parseTwitchCommandText } from "./twitch-command-text.js";
+export {
+  isReadableStateExport,
+  publicReadableStateExport,
+  validateReadableStateSchemaValue
+} from "./readable-state.js";
+export {
+  createReadableStateReference,
+  normalizeReadableStateArguments,
+  normalizeReadableStateParameter,
+  ReadableStateReferenceError
+} from "../state-querying/catalog.js";

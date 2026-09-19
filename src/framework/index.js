@@ -4,6 +4,10 @@ export {
   isFeatureDefinition
 } from "./define-feature.js";
 export {
+  defineReadableStateExport,
+  ReadableStateDefinitionError
+} from "./readable-state.js";
+export {
   FEATURE_FRAMEWORK_API_VERSION,
   frameworkApiVersion,
   supportedFrameworkApiVersions

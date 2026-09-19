@@ -395,10 +395,14 @@ Use the smallest rows that apply:
 | Bounded counters | The relevant floor, ceiling, or assignment boundary |
 | Local preferences or state | Isolation between the groups that must remember independently |
 | Shareable state | Isolated standalone groups and two origins whose defaults select the same integration |
+| Readable state | A snapshot or watch through `runtime.query`, followed by an ordinary mutation that changes the selected result |
 | Custom routes or platform options | The relevant missing-route result, emitted effect, or platform-specific response |
 
 The test runtime proves feature composition, parsing, authorization decisions,
-state selection, and returned effects. It does not replace platform-ingress or
+state selection, readable query evaluation, and returned effects. Use
+`runtime.query.snapshot(document)` for one evaluation or
+`await runtime.query.watch(document)` for an initial result plus coalesced
+updates. Close every watch when the test is done. It does not replace platform-ingress or
 durability integration tests. Use the existing Worker suites when changing
 signatures, raw Discord or Twitch payload parsing, SQL migrations, alarms,
 coordinator retries, or real delivery adapters.
@@ -408,6 +412,10 @@ changes them. Collision selection, stale-snapshot retries, revocation forks,
 CSRF, and legacy adoption are covered by the
 [shareable-state lifecycle verification](shareable-state-lifecycle-verification.md),
 not by every command package.
+
+The local- and shareable-counter scaffolds demonstrate the supported readable
+counter declaration and query test. The complete deaths composition proof is
+recorded in [state-query-deaths-proof.md](state-query-deaths-proof.md).
 
 Fixture names do not widen that boundary. `defaultTestLink()` records a
 directional default and integration identity so a feature test can prove state
@@ -759,13 +767,20 @@ ceiling, use the bounded-counter handle instead of deriving a storage key or
 combining `get()` with `increment()`:
 
 ```js
-const deaths = ctx.state.boundedCounter("deaths", normalizedGameName);
+const deaths = ctx.state.boundedCounter("deaths", normalizedGameName, {
+  subjectLabel: displayGameName
+});
 const value = await deaths.decrement(); // atomically stops at zero
 ```
 
 The framework safely maps the subject to an internal key. Normalize subject
 identity in the feature only when the domain requires it—for example, if game
-names should be case-insensitive.
+names should be case-insensitive. Supply `subjectLabel` when the counter may be
+declared as a readable collection: it lets the framework enumerate a safe
+display label without changing the normalized identity or exposing its hashed
+storage key. Existing rows without labels keep their count and are reported as
+unidentified until a later mutation safely supplies the metadata. See
+[`state-query-readable-state.md`](state-query-readable-state.md).
 
 When both members of the selected relationship must update one authoritative
 value, declare a shareable namespace on the feature and resolve it through
@@ -777,7 +792,9 @@ const targetPlatform = ctx.origin.group.platform === "discord"
   ? "twitch"
   : "discord";
 const deaths = (await ctx.shareableState.current(targetPlatform, "game_deaths"))
-  .boundedCounter("deaths", normalizedGameName);
+  .boundedCounter("deaths", normalizedGameName, {
+    subjectLabel: displayGameName
+  });
 const value = await deaths.increment();
 ```
 
@@ -788,6 +805,16 @@ convenience state—such as the last selected game—in `ctx.state`; there is no
 transaction spanning the two owners. See the
 [compatibility-only legacy section](feature-state.md#compatibility-only-legacy-integration-state)
 only when maintaining already deployed integration-owned data.
+
+To make selected state eligible for later operator-granted queries, add
+`readableState` declarations with `defineReadableStateExport()`. Each declaration
+includes a `resolve(ctx, arguments)` function whose context has only read methods
+for that declaration's group-local or effective-shareable source. It cannot call
+the command action or mutate state. See the complete
+[read-only evaluator contract](state-query-evaluator.md).
+Operators can expose only selected declarations through scoped, expiring grants;
+the [state-query HTTP guide](state-query-http.md) describes discovery and
+snapshot behavior. A declaration remains private until such a grant exists.
 
 ## Cookbook 7: conditionally protected command modes
 

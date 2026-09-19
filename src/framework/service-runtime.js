@@ -172,6 +172,15 @@ async function resolveShareableState(
     targetPlatform,
     correlationId: invocation.correlationId
   });
+  if (
+    !Number.isSafeInteger(result?.bindingRevision) ||
+    result.bindingRevision < 0
+  ) {
+    throw new FeatureServiceRuntimeError(
+      "Shareable-state resolution returned an invalid binding revision.",
+      { code: "shareable_state_resolution_invalid", status: 502 }
+    );
+  }
   if (result.defaultLink === null) {
     let realm;
     try {
@@ -195,6 +204,7 @@ async function resolveShareableState(
       featureId,
       namespaceId,
       targetPlatform,
+      bindingRevision: result.bindingRevision,
       realm
     });
   }
@@ -207,6 +217,7 @@ async function resolveShareableState(
     featureId,
     namespaceId,
     targetPlatform,
+    bindingRevision: result.bindingRevision,
     realm: createIntegrationRealmIdentity(link.integration, {
       generation: link.integration.shareableStateGeneration ?? 1
     }),
@@ -413,6 +424,13 @@ export function createFeatureServiceRuntime(env, invocation) {
           const result = await shareableRequest(featureId, scope, "get", { key });
           return result.value;
         },
+        async queryRead(featureId, scope, key) {
+          return await shareableRequest(featureId, scope, "query-read", { key });
+        },
+        async revision(featureId, scope) {
+          const result = await shareableRequest(featureId, scope, "revision", {});
+          return result.mutationVersion;
+        },
         async set(featureId, scope, key, value) {
           await shareableRequest(featureId, scope, "set", { key, value });
         },
@@ -441,6 +459,14 @@ export function createFeatureServiceRuntime(env, invocation) {
             }
           );
           return result.value;
+        },
+        async boundedCounterSubjects(featureId, scope, name) {
+          return await shareableRequest(
+            featureId,
+            scope,
+            "bounded-counter-subjects",
+            { name }
+          );
         }
       }),
       state: Object.freeze({
@@ -452,6 +478,23 @@ export function createFeatureServiceRuntime(env, invocation) {
             input(featureId, { key })
           );
           return result.value;
+        },
+        async queryRead(featureId, key) {
+          return await storageRequest(
+            env,
+            invocation,
+            "state/query-read",
+            input(featureId, { key })
+          );
+        },
+        async revision(featureId) {
+          const result = await storageRequest(
+            env,
+            invocation,
+            "state/revision",
+            input(featureId)
+          );
+          return result.mutationVersion;
         },
         async set(featureId, key, value) {
           await storageRequest(
@@ -491,6 +534,14 @@ export function createFeatureServiceRuntime(env, invocation) {
             })
           );
           return result.value;
+        },
+        async boundedCounterSubjects(featureId, name) {
+          return await storageRequest(
+            env,
+            invocation,
+            "state/bounded-counter-subjects",
+            input(featureId, { name })
+          );
         }
       })
     }),

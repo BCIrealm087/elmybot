@@ -3,6 +3,9 @@
 `master` is the integration branch. Substantial implementation and experiment
 work should use a dedicated task branch and reach `master` through review.
 
+The current development branch is `codex-state-querying`. Make repository
+changes only on that branch unless the user explicitly changes the target branch.
+
 For repository work:
 
 - Follow the branch named by the current task or session instructions.
@@ -10,6 +13,7 @@ For repository work:
   that exact action.
 - Before making changes, verify that the active branch is the intended task branch.
 - Focus on small, scoped fixes, cleanup, maintainability improvements, documentation, and stronger verification while preserving the existing Discord and Twitch behavior and the shared platform-independent foundations.
+- When designing development roadmaps, include steps centered on manual human-operator testing only when omitting that testing would create a critical risk. Prefer automated, simulated, or CI-verifiable evidence for non-critical validation, and do not make routine manual testing a standalone roadmap gate.
 - For work on the contributor-facing command/feature framework, consult `docs/command-feature-framework.md` for the design and staged plan and `docs/command-feature-framework-contract.md` for the approved normative API. The contract was approved on 2026-08-30, but an API is not implemented merely because it is documented; follow the staged implementation status.
 - Framework API v1 is stable. Consult `docs/framework-api.md` for its supported entry points, compatibility rules, and deprecation policy. Production feature modules must import project APIs only from `src/framework/index.js` or other feature modules; do not bypass the enforced boundary to depend on persistence, platform, registry, adapter, or service-runtime internals.
 - Private build-time feature packages live under `packages/features/`, import `@elmybot/framework`, declare matching `elmybot` metadata and framework peer compatibility, and remain explicitly installed in `src/features/index.js`. Run `npm run feature:workspaces`; do not introduce runtime package loading or publish a workspace package without a separate packaging and supply-chain review.

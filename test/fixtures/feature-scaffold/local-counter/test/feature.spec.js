@@ -80,4 +80,31 @@ describe("recipe.local", () => {
       expect(allowed.stateAfter).toEqual({ message: `Score: ${expected}` });
     }
   });
+
+  it("exposes ordinary mutations through its readable state", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const group = discordTestGroup();
+    const query = {
+      version: 1,
+      target: { platform: "discord", groupId: group.id },
+      bindings: {
+        score: {
+          read: { feature: "recipe.local", export: "score", version: 1 }
+        }
+      },
+      select: { score: { ref: "score" } }
+    };
+    const subscription = await runtime.query.watch(query);
+    expect(subscription.initial.envelope.data.score)
+      .toEqual({ state: "present", value: 0 });
+
+    await runtime.discord.command("local", {
+      group,
+      actor: discordTestModerator(),
+      args: { operation: "plus" }
+    });
+    expect((await subscription.next()).envelope.data.score)
+      .toEqual({ state: "present", value: 1 });
+    subscription.close();
+  });
 });

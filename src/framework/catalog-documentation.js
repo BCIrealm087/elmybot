@@ -123,6 +123,19 @@ export function generateFeatureCatalogMarkdown(
       namespace.adoptLegacyIntegrationState ? "integrationState" : "—"
     ])
   );
+  const readableStateRows = Object.values(registry.readableState).map((entry) => [
+    entry.featureId,
+    `\`${entry.definition.id}\``,
+    entry.definition.version,
+    entry.definition.kind,
+    entry.definition.platforms.join(", "),
+    entry.definition.scope.kind,
+    entry.definition.access.kind,
+    Object.keys(entry.definition.parameters).join(", ") || "—",
+    entry.definition.result.schema.type,
+    entry.definition.result.absence.kind,
+    entry.definition.collection?.legacyCoverage ?? "—"
+  ]);
   const workspaceRows = workspacePackages.map((workspacePackage) => [
     `\`${workspacePackage.packageName}\``,
     `\`${workspacePackage.featureId}\``,
@@ -204,6 +217,24 @@ export function generateFeatureCatalogMarkdown(
         "Legacy adoption"
       ],
       shareableStateRows
+    ),
+    "## Readable state exports",
+    "",
+    table(
+      [
+        "Feature",
+        "Export",
+        "Version",
+        "Kind",
+        "Platforms",
+        "Scope",
+        "Access eligibility",
+        "Parameters",
+        "Result",
+        "Absence",
+        "Legacy coverage"
+      ],
+      readableStateRows
     ),
     "## Workspace packages",
     "",

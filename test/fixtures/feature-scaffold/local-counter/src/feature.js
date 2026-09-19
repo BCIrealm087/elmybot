@@ -2,6 +2,7 @@ import {
   access,
   defineAction,
   defineFeature,
+  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -21,6 +22,28 @@ export const feature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "recipe.local",
   description: "Tracks a group-local score.",
+  readableState: [
+    defineReadableStateExport({
+      id: "score",
+      version: 1,
+      label: "Local score",
+      description: "The current group-local score.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "group_local" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        absence: { kind: "default" }
+      },
+      async resolve(ctx) {
+        return {
+          state: "present",
+          value: await ctx.state.boundedCounter("score", "shared")
+        };
+      }
+    })
+  ],
   actions: [
     defineAction({
       kind: RECIPE_LOCAL_ACTION_KIND,

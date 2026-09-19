@@ -124,9 +124,11 @@ a duplicate.
 
 Integration rows are revoked rather than deleted. This preserves membership and
 audit history while excluding the relationship from active routing and listing.
-Large group-wide revocations are processed 50 integrations at a time and leave
-a durable continuation for the registry alarm, keeping each transaction
-bounded without weakening eventual deactivation.
+Large group-wide revocations stop after 50 integrations or five seconds,
+whichever comes first. Completed integrations and the group revocation job
+persist progress, and remaining work is scheduled through the registry alarm.
+The time check happens between integrations, so one active state-freeze attempt
+is always allowed to finish without weakening eventual deactivation.
 
 ## Directional default-link lifecycle
 

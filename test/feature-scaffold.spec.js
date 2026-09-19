@@ -23,6 +23,10 @@ import sharedCommandFeatureSource from
 import sharedCommandTestSource from
   "./fixtures/feature-scaffold/shared-command/test/feature.spec.js?raw";
 
+function normalizedSource(value) {
+  return value.replace(/\r\n?/g, "\n").trimEnd();
+}
+
 describe("Feature scaffold templates", () => {
   it("derives stable framework identities from a contributor-friendly slug", () => {
     expect(scaffoldIdentity("fun-hype")).toEqual({
@@ -96,6 +100,8 @@ describe("Feature scaffold templates", () => {
     expect(shared.featureSource).toContain('supportedOrigins: ["discord", "twitch"]');
     expect(shared.testSource).toContain('twitch.commandText("!hype")');
     expect(local.featureSource).toContain('services: ["state"]');
+    expect(local.featureSource).toContain("defineReadableStateExport");
+    expect(local.featureSource).toContain('scope: { kind: "group_local" }');
     expect(local.featureSource).toContain("modePolicy:");
     expect(local.testSource).toContain("runCapabilityCases");
     expect(local.testSource).toContain("keeps scores local while protecting updates");
@@ -103,11 +109,16 @@ describe("Feature scaffold templates", () => {
     expect(shareable.featureSource).toContain(
       'services: ["shareableState"]'
     );
+    expect(shareable.featureSource).toContain(
+      'scope: { kind: "effective_shareable", namespace: "score" }'
+    );
     expect(shareable.featureSource).not.toContain("adoptLegacyIntegrationState");
     expect(shareable.testSource).toContain("defaultTestLink");
     expect(shareable.testSource).toContain(
       "protects updates and floors the counter at zero"
     );
+    expect(local.testSource).toContain("runtime.query.watch(query)");
+    expect(shareable.testSource).toContain("runtime.query.watch(query)");
     expect(local.testSource).toContain(
       "rejects unsupported operations from raw Twitch text"
     );
@@ -141,15 +152,21 @@ describe("Feature scaffold templates", () => {
       { template: "shareable-counter" }
     );
 
-    expect(minimalFeatureSource.trimEnd()).toBe(minimal.featureSource.trimEnd());
-    expect(minimalTestSource.trimEnd()).toBe(minimal.testSource.trimEnd());
-    expect(sharedCommandFeatureSource.trimEnd()).toBe(shared.featureSource.trimEnd());
-    expect(sharedCommandTestSource.trimEnd()).toBe(shared.testSource.trimEnd());
-    expect(localCounterFeatureSource.trimEnd()).toBe(local.featureSource.trimEnd());
-    expect(localCounterTestSource.trimEnd()).toBe(local.testSource.trimEnd());
-    expect(shareableCounterFeatureSource.trimEnd())
-      .toBe(shareable.featureSource.trimEnd());
-    expect(shareableCounterTestSource.trimEnd())
-      .toBe(shareable.testSource.trimEnd());
+    expect(normalizedSource(minimalFeatureSource))
+      .toBe(normalizedSource(minimal.featureSource));
+    expect(normalizedSource(minimalTestSource))
+      .toBe(normalizedSource(minimal.testSource));
+    expect(normalizedSource(sharedCommandFeatureSource))
+      .toBe(normalizedSource(shared.featureSource));
+    expect(normalizedSource(sharedCommandTestSource))
+      .toBe(normalizedSource(shared.testSource));
+    expect(normalizedSource(localCounterFeatureSource))
+      .toBe(normalizedSource(local.featureSource));
+    expect(normalizedSource(localCounterTestSource))
+      .toBe(normalizedSource(local.testSource));
+    expect(normalizedSource(shareableCounterFeatureSource))
+      .toBe(normalizedSource(shareable.featureSource));
+    expect(normalizedSource(shareableCounterTestSource))
+      .toBe(normalizedSource(shareable.testSource));
   });
 });

@@ -7,6 +7,16 @@ import {
 import {
   snapshotAndSealLegacyIntegrationFeatureState
 } from "../integrations/coordinator-client.js";
+import {
+  drainStateQueryNotifications,
+  initializeShareableStateNotificationTables,
+  prepareStateQueryMutation,
+  recoverStateQueryNotificationDelivery,
+  registerStateQuerySourceWatcher,
+  stateQueryNotificationTablesExist,
+  StateQueryNotificationError,
+  unregisterStateQuerySourceWatcher
+} from "../state-querying/source-notifications.js";
 
 const FEATURE_ID_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
 const NAMESPACE_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -14,27 +24,33 @@ const KEY_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MAX_JSON_DEPTH = 20;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
 const MAX_COUNTER_SUBJECT_LENGTH = 300;
+const MAX_COUNTER_SUBJECT_LABEL_LENGTH = 80;
 const SNAPSHOT_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const TRANSITION_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,300}$/;
 const MAX_TRANSITION_SEAL_LEASE_MS = 2 * 60 * 1000;
 const REALM_OPERATIONS = new Set([
   "get",
+  "query-read",
+  "revision",
   "set",
   "delete",
   "increment",
   "bounded-counter",
+  "bounded-counter-subjects",
   "snapshot",
   "seal-snapshot",
   "freeze-snapshot",
   "release-seal",
   "clone-snapshot",
   "initialize-empty",
-  "inventory"
+  "inventory",
+  "watch-register",
+  "watch-unregister"
 ]);
 
 export const SHAREABLE_STATE_REALM_PATH_PREFIX =
   "/internal/shareable-state/realm/";
-export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 3;
+export const SHAREABLE_STATE_REALM_SCHEMA_VERSION = 4;
 export const SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION = 1;
 
 export class ShareableStateRealmError extends Error {
@@ -201,7 +217,35 @@ function requireCounterInput(input) {
   ) {
     fail("Bounded counter values must be safe integers within the configured bounds.");
   }
-  return { name, subject, min, max, initial, operation, amount, value };
+  const subjectLabel = input?.subjectLabel;
+  if (
+    subjectLabel !== undefined &&
+    (
+      typeof subjectLabel !== "string" ||
+      subjectLabel.trim().length === 0 ||
+      subjectLabel.length > MAX_COUNTER_SUBJECT_LABEL_LENGTH ||
+      Array.from(subjectLabel).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 31 || codePoint === 127;
+      })
+    )
+  ) {
+    fail(
+      `Bounded counter subject labels must contain between 1 and ` +
+      `${MAX_COUNTER_SUBJECT_LABEL_LENGTH} characters.`
+    );
+  }
+  return {
+    name,
+    subject,
+    ...(subjectLabel === undefined ? {} : { subjectLabel: subjectLabel.trim() }),
+    min,
+    max,
+    initial,
+    operation,
+    amount,
+    value
+  };
 }
 
 async function boundedCounterKey(name, subject) {
@@ -275,6 +319,18 @@ export function initializeShareableStateRealmTables(state) {
       entry_count INTEGER NOT NULL CHECK (entry_count >= 0),
       completed_at_ms INTEGER NOT NULL,
       PRIMARY KEY (feature_id, namespace_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS shareable_state_realm_counter_subjects (
+      feature_id TEXT NOT NULL,
+      namespace_id TEXT NOT NULL,
+      counter_name TEXT NOT NULL,
+      subject_identity TEXT NOT NULL,
+      subject_label TEXT NOT NULL,
+      value_key TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, namespace_id, counter_name, subject_identity),
+      UNIQUE (feature_id, namespace_id, value_key)
     );
   `);
   const namespaceColumns = new Set(
@@ -375,6 +431,10 @@ function bindRealmIdentity(state, identity) {
   );
 }
 
+function realmSourceKey(identity) {
+  return `shareable-state:${identity.kind}:g${identity.generation}:${identity.owner.key}`;
+}
+
 function namespaceDeclaration(registry, input) {
   const featureId = requireFeatureId(input?.featureId);
   const namespaceId = requireNamespaceId(input?.namespaceId);
@@ -438,6 +498,18 @@ function ensureNamespace(state, namespace) {
   );
 }
 
+function namespaceSchemaMutationPending(state, namespace) {
+  const existing = state.storage.sql.exec(
+    `SELECT schema_version FROM shareable_state_realm_namespaces
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0];
+  return Boolean(
+    existing && existing.schema_version !== namespace.declaration.schemaVersion
+  );
+}
+
 function namespaceSnapshotRows(state, namespace) {
   return state.storage.transactionSync(() => {
     const metadata = state.storage.sql.exec(
@@ -458,27 +530,56 @@ function namespaceSnapshotRows(state, namespace) {
       key: entry.value_key,
       valueJson: entry.value_json
     }));
+    const entryKeys = new Set(entries.map((entry) => entry.key));
+    const counterSubjects = state.storage.sql.exec(
+      `SELECT counter_name, subject_identity, subject_label, value_key
+       FROM shareable_state_realm_counter_subjects
+       WHERE feature_id = ? AND namespace_id = ?
+       ORDER BY counter_name, subject_identity`,
+      namespace.featureId,
+      namespace.namespaceId
+    ).toArray().filter((subject) => entryKeys.has(subject.value_key)).map((subject) => ({
+      counterName: subject.counter_name,
+      identity: subject.subject_identity,
+      label: subject.subject_label,
+      valueKey: subject.value_key
+    }));
     return {
       schemaVersion: metadata.schema_version,
       mutationVersion: metadata.mutation_version,
-      entries
+      entries,
+      counterSubjects
     };
   });
 }
 
-function snapshotFingerprintInput(namespace, schemaVersion, entries) {
-  return JSON.stringify({
+function snapshotFingerprintInput(namespace, schemaVersion, entries, counterSubjects = []) {
+  const input = {
     formatVersion: SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION,
     featureId: namespace.featureId,
     namespaceId: namespace.namespaceId,
     schemaVersion,
     entries: entries.map((entry) => [entry.key, entry.valueJson])
-  });
+  };
+  if (counterSubjects.length > 0) {
+    input.counterSubjects = counterSubjects.map((subject) => [
+      subject.counterName,
+      subject.identity,
+      subject.label,
+      subject.valueKey
+    ]);
+  }
+  return JSON.stringify(input);
 }
 
-async function fingerprintSnapshotRows(namespace, schemaVersion, entries) {
+async function fingerprintSnapshotRows(
+  namespace,
+  schemaVersion,
+  entries,
+  counterSubjects = []
+) {
   return await sha256Fingerprint(
-    snapshotFingerprintInput(namespace, schemaVersion, entries)
+    snapshotFingerprintInput(namespace, schemaVersion, entries, counterSubjects)
   );
 }
 
@@ -503,7 +604,8 @@ async function snapshotNamespace(state, namespace) {
     fingerprint: await fingerprintSnapshotRows(
       namespace,
       captured.schemaVersion,
-      captured.entries
+      captured.entries,
+      captured.counterSubjects
     ),
     meaningful: captured.entries.length > 0,
     summary: collisionSummary(
@@ -513,7 +615,10 @@ async function snapshotNamespace(state, namespace) {
     entries: captured.entries.map((entry) => ({
       key: entry.key,
       value: JSON.parse(entry.valueJson)
-    }))
+    })),
+    ...(captured.counterSubjects.length > 0
+      ? { counterSubjects: captured.counterSubjects }
+      : {})
   };
 }
 
@@ -593,6 +698,10 @@ async function adoptLegacyIntegrationState(
       namespace.declaration.limits.maxValueBytes
     )
   })).sort((left, right) => left.key.localeCompare(right.key));
+  const counterSubjects = normalizeSnapshotCounterSubjects(
+    source.counterSubjects,
+    entries
+  );
   const snapshot = {
     formatVersion: SHAREABLE_STATE_SNAPSHOT_FORMAT_VERSION,
     namespace: {
@@ -604,14 +713,16 @@ async function adoptLegacyIntegrationState(
     fingerprint: await fingerprintSnapshotRows(
       namespace,
       namespace.declaration.schemaVersion,
-      entries
+      entries,
+      counterSubjects
     ),
     meaningful: entries.length > 0,
     summary: collisionSummary(namespace.declaration, entries.length),
     entries: entries.map((entry) => ({
       key: entry.key,
       value: JSON.parse(entry.valueJson)
-    }))
+    })),
+    ...(counterSubjects.length > 0 ? { counterSubjects } : {})
   };
   await cloneSnapshot(state, namespace, {
     snapshot,
@@ -764,7 +875,12 @@ function releaseNamespaceSeal(state, namespace, input) {
   return { released };
 }
 
-async function namespaceInventory(state, registry, prepareNamespace) {
+async function namespaceInventory(
+  state,
+  registry,
+  prepareNamespace,
+  prepareNamespaceMutation
+) {
   const declarations = registry.features.flatMap((feature) =>
     feature.shareableState.map((declaration) => ({
       featureId: feature.id,
@@ -783,6 +899,9 @@ async function namespaceInventory(state, registry, prepareNamespace) {
       namespaceId: item.namespaceId,
       declaration: item.declaration
     });
+    if (namespaceSchemaMutationPending(state, namespace)) {
+      await prepareNamespaceMutation(namespace);
+    }
     ensureNamespace(state, namespace);
     await prepareNamespace(namespace);
     const captured = namespaceSnapshotRows(state, namespace);
@@ -796,13 +915,66 @@ async function namespaceInventory(state, registry, prepareNamespace) {
       fingerprint: await fingerprintSnapshotRows(
         namespace,
         captured.schemaVersion,
-        captured.entries
+        captured.entries,
+        captured.counterSubjects
       ),
       meaningful: captured.entries.length > 0,
       summary: collisionSummary(item.declaration, captured.entries.length)
     });
   }
   return { namespaces };
+}
+
+function normalizeSnapshotCounterSubjects(value, entries) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > entries.length) {
+    fail("The shareable-state snapshot counter subjects are invalid.", {
+      code: "shareable_state_snapshot_invalid"
+    });
+  }
+  const entryKeys = new Set(entries.map((entry) => entry.key));
+  const identities = new Set();
+  const valueKeys = new Set();
+  return value.map((subject) => {
+    const counterName = requireKey(subject?.counterName);
+    const identity = subject?.identity;
+    const label = subject?.label;
+    const valueKey = requireKey(subject?.valueKey);
+    if (
+      typeof identity !== "string" ||
+      identity.length === 0 ||
+      identity.length > MAX_COUNTER_SUBJECT_LENGTH ||
+      typeof label !== "string" ||
+      label.trim().length === 0 ||
+      label.length > MAX_COUNTER_SUBJECT_LABEL_LENGTH ||
+      Array.from(label).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 31 || codePoint === 127;
+      }) ||
+      !entryKeys.has(valueKey)
+    ) {
+      fail("The shareable-state snapshot counter subjects are invalid.", {
+        code: "shareable_state_snapshot_invalid"
+      });
+    }
+    const identityKey = `${counterName}\u0000${identity}`;
+    if (identities.has(identityKey) || valueKeys.has(valueKey)) {
+      fail("The shareable-state snapshot counter subjects are duplicated.", {
+        code: "shareable_state_snapshot_invalid"
+      });
+    }
+    identities.add(identityKey);
+    valueKeys.add(valueKey);
+    return {
+      counterName,
+      identity,
+      label: label.trim(),
+      valueKey
+    };
+  }).sort((left, right) =>
+    left.counterName.localeCompare(right.counterName) ||
+    left.identity.localeCompare(right.identity)
+  );
 }
 
 function requireSnapshotCloneInput(namespace, input) {
@@ -843,6 +1015,10 @@ function requireSnapshotCloneInput(namespace, input) {
       )
     };
   }).sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0);
+  const counterSubjects = normalizeSnapshotCounterSubjects(
+    snapshot.counterSubjects,
+    entries
+  );
   if (snapshot.meaningful !== (entries.length > 0)) {
     fail("The shareable-state snapshot usage marker is invalid.", {
       code: "shareable_state_snapshot_invalid"
@@ -863,7 +1039,13 @@ function requireSnapshotCloneInput(namespace, input) {
         input.idempotencyKey,
         "The materialization idempotency key"
       );
-  return { snapshot, entries, expectedTargetMutationVersion, idempotencyKey };
+  return {
+    snapshot,
+    entries,
+    counterSubjects,
+    expectedTargetMutationVersion,
+    idempotencyKey
+  };
 }
 
 function replayedMaterialization(sql, namespace, idempotencyKey, fingerprint) {
@@ -921,7 +1103,8 @@ async function cloneSnapshot(state, namespace, input) {
   const fingerprint = await fingerprintSnapshotRows(
     namespace,
     namespace.declaration.schemaVersion,
-    normalized.entries
+    normalized.entries,
+    normalized.counterSubjects
   );
   if (fingerprint !== normalized.snapshot.fingerprint) {
     fail("The shareable-state snapshot fingerprint does not match its content.", {
@@ -974,6 +1157,21 @@ async function cloneSnapshot(state, namespace, input) {
         namespace.namespaceId,
         entry.key,
         entry.valueJson,
+        nowMs
+      );
+    }
+    for (const subject of normalized.counterSubjects) {
+      state.storage.sql.exec(
+        `INSERT INTO shareable_state_realm_counter_subjects
+          (feature_id, namespace_id, counter_name, subject_identity,
+           subject_label, value_key, created_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        namespace.featureId,
+        namespace.namespaceId,
+        subject.counterName,
+        subject.identity,
+        subject.label,
+        subject.valueKey,
         nowMs
       );
     }
@@ -1145,6 +1343,24 @@ function getValue(state, namespace, input) {
   return { value: row ? JSON.parse(row.value_json) : null };
 }
 
+function queryReadValue(state, namespace, input) {
+  const key = requireKey(input?.key);
+  const row = valueRow(state.storage.sql, namespace, key);
+  return row
+    ? { found: true, value: JSON.parse(row.value_json) }
+    : { found: false };
+}
+
+function namespaceRevision(state, namespace) {
+  const row = state.storage.sql.exec(
+    `SELECT mutation_version FROM shareable_state_realm_namespaces
+     WHERE feature_id = ? AND namespace_id = ?`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).one();
+  return { mutationVersion: Number(row.mutation_version) };
+}
+
 function setValue(state, namespace, input) {
   const key = requireKey(input?.key);
   const valueJson = serializeValue(
@@ -1204,6 +1420,121 @@ function incrementValue(state, namespace, input) {
   });
 }
 
+function counterSubjectMetadata(sql, namespace, descriptor, key) {
+  const byIdentity = sql.exec(
+    `SELECT value_key, subject_label
+     FROM shareable_state_realm_counter_subjects
+     WHERE feature_id = ? AND namespace_id = ?
+       AND counter_name = ? AND subject_identity = ?`,
+    namespace.featureId,
+    namespace.namespaceId,
+    descriptor.name,
+    descriptor.subject
+  ).toArray()[0];
+  if (byIdentity && byIdentity.value_key !== key) {
+    fail("The bounded counter subject identity conflicts with stored metadata.", {
+      status: 409,
+      code: "shareable_state_counter_subject_conflict"
+    });
+  }
+  const byKey = sql.exec(
+    `SELECT counter_name, subject_identity
+     FROM shareable_state_realm_counter_subjects
+     WHERE feature_id = ? AND namespace_id = ? AND value_key = ?`,
+    namespace.featureId,
+    namespace.namespaceId,
+    key
+  ).toArray()[0];
+  if (
+    byKey &&
+    (byKey.counter_name !== descriptor.name || byKey.subject_identity !== descriptor.subject)
+  ) {
+    fail("The bounded counter storage key conflicts with stored subject metadata.", {
+      status: 409,
+      code: "shareable_state_counter_subject_conflict"
+    });
+  }
+  return byIdentity ?? null;
+}
+
+function recordCounterSubject(sql, namespace, descriptor, key) {
+  if (descriptor.subjectLabel === undefined) return false;
+  const existing = counterSubjectMetadata(sql, namespace, descriptor, key);
+  if (existing) return false;
+  sql.exec(
+    `INSERT INTO shareable_state_realm_counter_subjects
+      (feature_id, namespace_id, counter_name, subject_identity,
+       subject_label, value_key, created_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    namespace.featureId,
+    namespace.namespaceId,
+    descriptor.name,
+    descriptor.subject,
+    descriptor.subjectLabel,
+    key,
+    Date.now()
+  );
+  return true;
+}
+
+function deleteCounterSubject(sql, namespace, descriptor, key) {
+  sql.exec(
+    `DELETE FROM shareable_state_realm_counter_subjects
+     WHERE feature_id = ? AND namespace_id = ?
+       AND counter_name = ? AND subject_identity = ? AND value_key = ?`,
+    namespace.featureId,
+    namespace.namespaceId,
+    descriptor.name,
+    descriptor.subject,
+    key
+  );
+}
+
+function boundedCounterSubjects(state, namespace, input) {
+  const name = requireKey(input?.name);
+  const subjects = state.storage.sql.exec(
+    `SELECT metadata.subject_identity, metadata.subject_label, values_table.value_json
+     FROM shareable_state_realm_counter_subjects AS metadata
+     INNER JOIN shareable_state_realm_values AS values_table
+       ON values_table.feature_id = metadata.feature_id
+      AND values_table.namespace_id = metadata.namespace_id
+      AND values_table.value_key = metadata.value_key
+     WHERE metadata.feature_id = ? AND metadata.namespace_id = ?
+       AND metadata.counter_name = ?
+     ORDER BY metadata.subject_identity`,
+    namespace.featureId,
+    namespace.namespaceId,
+    name
+  ).toArray().map((entry) => ({
+    identity: entry.subject_identity,
+    label: entry.subject_label,
+    value: JSON.parse(entry.value_json)
+  }));
+  const unidentified = state.storage.sql.exec(
+    `SELECT COUNT(*) AS total
+     FROM shareable_state_realm_values AS values_table
+     LEFT JOIN shareable_state_realm_counter_subjects AS metadata
+       ON metadata.feature_id = values_table.feature_id
+      AND metadata.namespace_id = values_table.namespace_id
+      AND metadata.value_key = values_table.value_key
+     WHERE values_table.feature_id = ? AND values_table.namespace_id = ?
+       AND length(values_table.value_key) = 63
+       AND values_table.value_key GLOB 'bc_[0-9a-f]*'
+       AND metadata.value_key IS NULL`,
+    namespace.featureId,
+    namespace.namespaceId
+  ).toArray()[0];
+  const unidentifiedCount = Number(unidentified?.total ?? 0);
+  return {
+    subjects,
+    coverage: {
+      complete: unidentifiedCount === 0,
+      identifiedCount: subjects.length,
+      unidentifiedCount
+    }
+  };
+}
+
 async function boundedCounterValue(state, namespace, input) {
   const descriptor = requireCounterInput(input);
   const key = await boundedCounterKey(descriptor.name, descriptor.subject);
@@ -1234,6 +1565,7 @@ async function boundedCounterValue(state, namespace, input) {
           namespace.namespaceId,
           key
         );
+        deleteCounterSubject(state.storage.sql, namespace, descriptor, key);
         touchNamespace(state.storage.sql, namespace, nowMs);
       }
       return { value: descriptor.initial };
@@ -1256,7 +1588,12 @@ async function boundedCounterValue(state, namespace, input) {
       value,
       namespace.declaration.limits.maxValueBytes
     );
-    if (existing?.value_json === valueJson) return { value };
+    if (existing?.value_json === valueJson) {
+      if (recordCounterSubject(state.storage.sql, namespace, descriptor, key)) {
+        touchNamespace(state.storage.sql, namespace, Date.now());
+      }
+      return { value };
+    }
     if (!existing && namespaceAtCapacity(state.storage.sql, namespace)) {
       fail(
         `This shareable namespace may store at most ` +
@@ -1278,6 +1615,7 @@ async function boundedCounterValue(state, namespace, input) {
       valueJson,
       nowMs
     );
+    recordCounterSubject(state.storage.sql, namespace, descriptor, key);
     touchNamespace(state.storage.sql, namespace, nowMs);
     return { value };
   });
@@ -1287,6 +1625,10 @@ async function runOperation(state, namespace, operation, input) {
   switch (operation) {
     case "get":
       return getValue(state, namespace, input);
+    case "query-read":
+      return queryReadValue(state, namespace, input);
+    case "revision":
+      return namespaceRevision(state, namespace);
     case "set":
       return setValue(state, namespace, input);
     case "delete":
@@ -1295,6 +1637,8 @@ async function runOperation(state, namespace, operation, input) {
       return incrementValue(state, namespace, input);
     case "bounded-counter":
       return await boundedCounterValue(state, namespace, input);
+    case "bounded-counter-subjects":
+      return boundedCounterSubjects(state, namespace, input);
     case "snapshot":
       return await snapshotNamespace(state, namespace);
     case "seal-snapshot":
@@ -1318,6 +1662,14 @@ function noStoreJson(value, status = 200) {
   return response;
 }
 
+function operationMayMutateState(operation, storage) {
+  if (new Set(["set", "delete", "increment", "clone-snapshot", "initialize-empty"])
+    .has(operation)) {
+    return true;
+  }
+  return operation === "bounded-counter" && storage?.operation !== "get";
+}
+
 export class ShareableStateRealmBackend {
   constructor(state, env, featureRegistry) {
     this.state = state;
@@ -1325,6 +1677,12 @@ export class ShareableStateRealmBackend {
     this.featureRegistry = featureRegistry;
     this.legacyAdoptions = new Map();
     initializeShareableStateRealmTables(state);
+    if (stateQueryNotificationTablesExist(state)) {
+      initializeShareableStateNotificationTables(state);
+      state.blockConcurrencyWhile(async () => {
+        await recoverStateQueryNotificationDelivery(state);
+      });
+    }
   }
 
   async prepareLegacyAdoption(identity, namespace, correlationId) {
@@ -1379,10 +1737,68 @@ export class ShareableStateRealmBackend {
             identity,
             namespace,
             correlationId
-          )
+          ),
+          async (namespace) => await prepareStateQueryMutation(this.state, {
+            kind: "shareable",
+            key: realmSourceKey(identity),
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId
+          })
         ));
       }
       const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
+      const expectedSource = { kind: "shareable", key: realmSourceKey(identity) };
+      const prepareNotification = async () => await prepareStateQueryMutation(
+        this.state,
+        {
+          ...expectedSource,
+          featureId: namespace.featureId,
+          namespaceId: namespace.namespaceId
+        }
+      );
+      if (operation === "watch-register") {
+        initializeShareableStateNotificationTables(this.state);
+        if (namespaceSchemaMutationPending(this.state, namespace)) {
+          await prepareNotification();
+        }
+        ensureNamespace(this.state, namespace);
+        await this.prepareLegacyAdoption(identity, namespace, correlationId);
+        return noStoreJson(await registerStateQuerySourceWatcher(
+          this.state,
+          this.env,
+          {
+            ...input?.storage,
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId,
+            source: expectedSource
+          },
+          expectedSource
+        ));
+      }
+      if (operation === "watch-unregister") {
+        initializeShareableStateNotificationTables(this.state);
+        if (namespaceSchemaMutationPending(this.state, namespace)) {
+          await prepareNotification();
+        }
+        ensureNamespace(this.state, namespace);
+        return noStoreJson(await unregisterStateQuerySourceWatcher(
+          this.state,
+          this.env,
+          {
+            ...input?.storage,
+            featureId: namespace.featureId,
+            namespaceId: namespace.namespaceId,
+            source: expectedSource
+          },
+          expectedSource
+        ));
+      }
+      if (
+        operationMayMutateState(operation, input?.storage) ||
+        namespaceSchemaMutationPending(this.state, namespace)
+      ) {
+        await prepareNotification();
+      }
       ensureNamespace(this.state, namespace);
       if (!new Set(["clone-snapshot", "initialize-empty"]).has(operation)) {
         await this.prepareLegacyAdoption(identity, namespace, correlationId);
@@ -1395,7 +1811,10 @@ export class ShareableStateRealmBackend {
       );
       return noStoreJson(result);
     } catch (error) {
-      if (error instanceof ShareableStateRealmError) {
+      if (
+        error instanceof ShareableStateRealmError ||
+        error instanceof StateQueryNotificationError
+      ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }
       logError("shareable_state.realm_request_failed", {
@@ -1405,5 +1824,9 @@ export class ShareableStateRealmBackend {
       }, error);
       return noStoreJson({ error: "Unknown error.", correlationId }, 500);
     }
+  }
+
+  async alarm() {
+    await drainStateQueryNotifications(this.state, this.env);
   }
 }

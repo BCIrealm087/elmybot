@@ -1,0 +1,1026 @@
+# Composable state queries and live subscriptions: development roadmap
+
+Status: development steps 1–18 are complete. Direct hibernating WebSockets are
+the authoritative live transport in both checked-in environments. The former
+polling transport has been retired; the subscription master switch is the
+operational rollback.
+Created: 2026-09-11.
+Work branch: `codex-state-querying` in `BCIrealm087/elmybot`.
+Baseline reviewed: `de7bdd87a446195ada5743518a62a4f064f103ab`.
+
+This document records the product direction reached in the design conversation
+and a recommended implementation sequence. It does not change the existing
+Framework API v1 or shareable-state lifecycle contracts. API spellings,
+transport details, and resource limits remain proposals until their relevant
+contract or feasibility step is complete.
+
+## Product goal and agreed direction
+
+A bot user or web-source developer should be able to discover readable command
+state, choose the values they want, and receive an initial result and automatic
+updates in a browser widget. They should not need to understand internal storage,
+integration IDs, or which platform last changed a shared value.
+
+The baseline is user-composed queries over declared readable state. Users must
+not be restricted to a fixed catalog of feature-authored queries. Optional
+presets such as “current deaths” should expand into the same query machinery.
+
+The agreed behavior is:
+
+- A query explicitly selects a platform group: a Twitch channel or, with the
+  current model, a Discord server/guild.
+- A stable, serializable logical reference identifies readable state independently
+  of its physical storage owner.
+- Local state stays local. Shareable state follows the selected group's current
+  effective standalone or integration realm.
+- Linking, unlinking, default switching, and reconnection automatically resolve
+  the current source. A subscription must not remain attached to an obsolete
+  realm.
+- Platform selection defines the observer's perspective, not the mutation's
+  originating platform. A Discord mutation of the same effective shared counter
+  must update a Twitch observer too.
+- Users can select individual values, parameterized counters, several values
+  together, collections, and values whose parameters depend on other readable
+  state.
+- One-time reads and live subscriptions use the same query meaning. Direct
+  hibernating WebSockets are the browser delivery surface; the core model is
+  transport-neutral.
+- Query execution is read-only and does not invoke command side effects.
+- Feature authors describe readable state and domain rules; the framework owns
+  discovery, authorization, dependency tracking, lifecycle following, and delivery.
+
+“Flexible” means composition within a documented, bounded query language over
+authorized state. It does not mean arbitrary client JavaScript or SQL executing
+inside the bot, or unrestricted access to every stored value.
+
+## Existing foundation and gaps
+
+| Area | Current foundation | Work still needed |
+| --- | --- | --- |
+| Group identity | Discord guilds and Twitch channels are explicit platform groups | Public logical references and friendly discovery |
+| Local state | Feature-owned state lives in GroupConfig; commands have controlled access | Read declarations, public schemas, revisions, and change notifications |
+| Shareable state | Namespaces resolve to standalone or directional-default integration realms | Long-lived observation that re-resolves instead of retaining one invocation scope |
+| Lifecycle | Linking finalizes state; revocation freezes shared state and provides fallback or standalone successors | Reliable observer invalidation and source handoff |
+| Mutations | Storage operations are atomic individually; shareable namespaces have mutation versions | Recoverable change delivery and observation of local state |
+| Counters | Helpers normalize descriptors and hash internal subject keys | Discoverable subject metadata, collection semantics, and legacy handling |
+| Framework | Stable v1 import boundaries, registry, schemas, and test runtime exist | Additive authoring helpers, query test support, and compatibility documentation |
+| Browser access | Worker handles platform and protected onboarding/management routes | Authorized catalog, snapshot, and subscription endpoints; browser client and setup UI |
+
+Relevant code and contracts:
+
+- [Feature state and ownership](feature-state.md)
+- [Shareable-state lifecycle](shareable-state-lifecycle.md)
+- [Revocation and standalone continuation](shareable-state-revocation.md)
+- [Framework API stability](framework-api.md)
+- [Deaths feature](../packages/features/fun-deaths/src/feature.js)
+- [Feature storage](../src/framework/feature-storage.js)
+- [Shareable realm storage](../src/shareable-state/realm.js)
+- [Feature service runtime](../src/framework/service-runtime.js)
+- [Integration registry](../src/integrations/registry.js)
+
+## Recommended first-release boundaries
+
+These scope choices were finalized by step 1 in
+[`state-query-contract.md`](state-query-contract.md).
+
+### Readable state and query composition
+
+Feature declarations describe readable scalar/object values and parameterized
+collections, including public names, schemas, ownership policy, normalization,
+default values, and access eligibility. Public IDs are stable logical names;
+storage keys, SQL layouts, realm generations, archived snapshots, and credentials
+remain internal.
+
+Start with one explicitly selected platform group per query. Within that group,
+allow bounded composition of authorized exports, including exports from multiple
+features. Support:
+
+1. Reading an exposed value.
+2. Looking up a collection entry using typed literal parameters.
+3. Selecting fields and assembling named results from several reads.
+4. Enumerating a bounded collection of materialized entries.
+5. Supplying a lookup parameter from another readable value, such as the
+   remembered game.
+
+Dynamic values may select typed subjects within declared exports. They must not
+become arbitrary platform IDs, feature IDs, raw paths, or executable code.
+
+Fixed-game counters can return their documented default without a persisted row.
+“All counters” means a finite, declared collection of materialized entries, not
+an infinite enumeration of every possible game with a zero count. Define
+membership, insertion, deletion, reset, ordering, overflow, and completeness
+explicitly. Never silently truncate a result advertised as complete.
+
+Version the query format and public export schemas separately from storage
+schemas. Canonicalization must use the feature's domain normalization rules,
+including deaths game-name normalization, without changing existing identities.
+
+### State semantics and lifecycle
+
+A source binding and a value revision are different things. Maintain a binding
+revision that changes on every relevant handoff, including A-to-B-to-A. A
+namespace's existing mutation version alone cannot identify the current binding.
+
+Keep command invocation scopes pinned as their existing contract requires.
+Subscriptions instead re-resolve on lifecycle changes. They must not retain a
+command scope for the lifetime of a browser connection.
+
+| Lifecycle event | Expected observer behavior |
+| --- | --- |
+| No selected active integration | Read the group's current standalone state |
+| Selected link activates | Switch to its materialized shared state and send a replacement snapshot |
+| Additional link leaves the default unchanged | Continue using the existing source |
+| Default switches | Follow the new integration's existing state without copying data |
+| Pending link cancels or expires | Keep the existing source |
+| Selected integration revokes with a fallback | Follow the fallback integration's existing state |
+| Selected integration revokes without a fallback | Follow the new standalone successor copied from the final shared snapshot |
+| State is transitioning or unavailable | Report an explicit temporary status; do not present an old value as fresh |
+| Subscription reconnects | Reauthorize and resolve the current source before any replay or snapshot |
+
+Opposite platform views agree on a shareable value only when both directional
+defaults select the same integration. Routes are independent of this selection.
+
+### Delivery contract
+
+The first release is a current-state subscription, not an exhaustive history of
+command invocations or mutations.
+
+Send a full initial result, then replacement results when relevant values,
+collection membership, dynamic dependencies, or source bindings change. A source
+handoff is observable even if the value is unchanged. Coalescing intermediate
+values is allowed; the latest committed result must eventually be delivered
+while the client remains authorized and the service is available.
+
+Do not claim instantaneous freshness or exactly-once delivery. Define measurable
+healthy-delivery and recovery targets in step 2. Mark stale or reconnecting
+clients explicitly. After a source handoff is applied, delayed events from the
+old binding cannot overwrite the new result.
+
+Snapshots and watcher attachment need a version-checked handshake so a mutation
+cannot disappear between the initial read and subscription registration.
+Reconnects can use a fresh snapshot; historical replay is optional and bounded.
+An old cursor never authorizes reading an archived or unselected realm.
+
+Atomicity remains per storage operation. Queries combining local and shared
+state need dependency revision validation and bounded retries; they do not
+create a transaction spanning owners or an atomic boundary around a multi-write
+command.
+
+### Authorization and cost
+
+Readable declarations make state eligible for exposure, not automatically public.
+An authenticated group operator grants read access to selected exports,
+parameters, or composed queries under a defined policy. Grants authorize the
+logical group view, including permitted future source changes, rather than a
+permanent right to a physical shared realm.
+
+Authorization applies to discovery, reads, initial attachment, dynamic dependency
+changes, source handoffs, reconnects, and continued use after revocation.
+Cross-group composition, private configuration, OAuth data, cooldowns, snapshots,
+and raw storage enumeration are outside the initial public surface.
+
+Use active interest to avoid unnecessary query evaluation and network fanout.
+Revisions still advance with no subscribers. Watchers, notification records,
+buffers, retry work, and collection results must have bounded lifetimes or sizes.
+Delivery failure must not undo an already committed command mutation.
+
+## Milestones and step tracking
+
+Steps 1–18 are complete. Complete the relevant
+acceptance criteria before marking another step done. Keep these numbers stable
+for subsequent work requests; record implementation commits and checks in the
+progress log.
+
+| Milestone | Steps | Result |
+| --- | --- | --- |
+| A: Contract and feasibility | 1–2 | Precise semantics, resource budgets, and a tested transport approach |
+| B: Composable snapshot queries | 3–5 | Discoverable state, user-defined reads, and scoped access |
+| C: Live state following | 6–9 | Reliable invalidation, dynamic dependencies, lifecycle handoffs, and live delivery |
+| D: Usable product and stabilization | 10–12 | Deaths proof, contributor tools, browser setup, and verified release |
+| E: Hibernating transport rollout | 13–18 | Direct WebSockets, bounded recovery, deployed proof, and polling retirement |
+
+### 1. Specify the public state-query contract
+
+**Status:** completed on 2026-09-11. **Depends on:** this roadmap.
+
+The normative result is
+[`state-query-contract.md`](state-query-contract.md). It closes the version-1
+query, identity, result, revision, authorization, collection, lifecycle, and
+snapshot/subscription semantics while leaving transport placement for step 2.
+
+Write a contract for reference identity, readable export declarations, query
+syntax and typing, normalization, errors, result status, ownership selection,
+binding revisions, and snapshot/subscription behavior. Define the supported
+operations above and their resource limits. Distinguish an absent value,
+explicit JSON null, an unselected game, an empty collection, and a zero counter.
+
+Specify authorization for literal, dynamic, and collection access, including
+whether insufficient permission rejects an entire composed query. Recommended
+default: reject the query rather than return an ambiguous partial result.
+
+Decide finite collection semantics, freshness targets to measure, and required
+protocol compatibility. Keep presets optional and require them to use ordinary
+composition. Resolve open choices before implementing the affected API; do not
+silently infer product semantics from storage.
+
+**Exit criteria:** examples cover all five composition operations, both platforms,
+standalone/shared transitions, and denied access. Every example has an expected
+result or error. The document clearly separates existing behavior from new APIs.
+
+### 2. Validate the Cloudflare transport and cost assumptions
+
+**Status:** completed on 2026-09-12. **Depends on:** step 1 semantics.
+
+The bounded feasibility work selected a provisional Worker SSE adapter backed
+by per-group hibernating WebSocket observer objects, established initial
+budgets, and listed evidence that required a deployed test Worker. Steps 13–18
+subsequently replaced that provisional path with authoritative direct sockets;
+the obsolete proof and cost-model artifacts were removed in step 18.
+
+Build a bounded technical proof of snapshot-plus-SSE delivery, disconnection,
+cleanup, reconnection, and idle behavior. Compare its expected Durable Object
+duration and request costs with a hibernating WebSocket design using the same
+query/result contract. Document the tested environment and distinguish local
+simulation from evidence requiring a deployed test environment.
+
+Record budgets for concurrent clients, active query/dependency counts, result
+sizes, notification throughput, healthy update latency, stale detection, and
+recovery. Test one active observer, several observers of the same shared source,
+and idle connections. Evaluate placement so browser connections do not force a
+single global registry to serve all value traffic.
+
+SSE remains the target surface. If direct SSE ownership is too costly, document
+a compatible topology or transport recommendation; changing that product
+surface is an explicit design decision, not an incidental implementation change.
+
+**Exit criteria:** a recorded architecture decision, reproducible measurements
+or clearly identified measurement blockers, concrete initial limits, and a
+connection/recovery design. Any deployment is a separate operational action,
+not performed merely by adding this roadmap.
+
+### 3. Add readable state declarations, identities, and subject metadata
+
+**Status:** completed on 2026-09-12. **Depends on:** steps 1–2.
+
+The implemented declaration, catalog, logical-reference, counter-subject
+metadata, snapshot, lifecycle, and legacy-coverage boundary is recorded in
+[`state-query-readable-state.md`](state-query-readable-state.md). Query
+evaluation remains step 4; no public state route or subscription was added by
+this step.
+
+Add optional declarations and helpers through the supported framework entry
+points. Validate public names, schemas, ownership policy, parameter types,
+normalizers, defaults, and collection behavior at registration time. Build a
+catalog model for discovery and canonical logical references.
+
+Pilot declarations on deaths: group-local remembered game and effective
+shareable per-game counters. Keep preset query definitions optional. Helpers
+must reuse existing counter identity and domain normalization instead of asking
+authors to duplicate key construction.
+
+Plan and implement the metadata needed to identify collection subjects. Existing
+counter keys are hashed; original game names cannot be recovered from hashes
+alone. Preserve exact-game lookup against existing counts. Decide and document
+how known subjects gain metadata and how unidentified historical entries are
+reported or reconciled. Do not claim a complete labeled legacy collection while
+silently omitting unknown entries.
+
+Subject identity and labels must survive snapshotting, linking, cloning,
+revocation, and relinking with their counter data. Any schema migration must be
+idempotent, preserve counts, and respect deployed namespace limits.
+
+**Exit criteria:** declarations are optional and compatible with existing
+features; reference normalization has behavioral coverage; known subjects can
+be enumerated; legacy coverage is explicit and tested; metadata follows state
+ownership through the lifecycle.
+
+### 4. Implement the read-only composable evaluator
+
+**Status:** completed on 2026-09-12. **Depends on:** step 3.
+
+The implemented parser, planner, scope-bound read runtime, resolver contract,
+revision validation, dependency observation, and deaths proof are recorded in
+[`state-query-evaluator.md`](state-query-evaluator.md). This remains an internal,
+transport-neutral evaluator: read grants, discovery, and public snapshot HTTP
+access begin in step 5.
+
+Implement parsing, validation, planning, and evaluation for the bounded query
+language. Support direct reads, parameterized lookups, named combinations and
+field selection, collection reads, and dynamic parameter lookup.
+
+Resolve each export under the selected group's ownership rules. Track exact
+dependencies plus collection membership dependencies and source bindings.
+Deduplicate repeated reads where safe. Validate revisions across async reads
+and retry a bounded number of times; report temporary instability on exhaustion.
+
+Use controlled read access, not command execution or arbitrary feature effects.
+Internal lazy materialization already required by state resolution can remain,
+but query execution must not change feature values, remembered choices, or
+counter values.
+
+**Exit criteria:** a caller composes useful queries without adding a named query
+to a feature. Fixed and dynamic deaths reads match command data without command
+side effects. Invalid, cyclic, excessive, and unsupported queries fail clearly.
+Composed reads are not advertised as cross-owner transactions.
+
+### 5. Add read grants, discovery, and snapshot HTTP access
+
+**Status:** completed on 2026-09-12. **Depends on:** step 4.
+
+The implemented grant model, platform issuance flows, authorized discovery,
+snapshot route, same-origin browser session, revocation, and security boundary
+are recorded in [`state-query-http.md`](state-query-http.md). SSE remains step 9;
+the session established here provides its browser-compatible credential flow.
+
+Implement authenticated grant issuance for each supported platform group,
+scoped read credentials, expiry/revocation, and environment isolation. Reuse
+existing platform authority checks where applicable; separately define who may
+expose state. Do not use a bot OAuth token or operator-wide setup token as an
+overlay credential.
+
+Expose authorized catalog and one-time snapshot access using the query model.
+Define grant scope for dynamic subjects and collection membership, including
+new subjects. Query identity and cache identity must never bypass authorization.
+
+Choose a browser-compatible credential flow. Native EventSource does not expose
+arbitrary request-header configuration, so evaluate same-origin sessions or
+narrow, revocable stream credentials. Define credential handling, origin/CORS
+policy, cache behavior, and log redaction; CORS is not authorization.
+
+**Exit criteria:** authorized users can discover, construct, and read queries;
+unauthorized groups, features, subjects, and environments cannot be read or
+enumerated. Revoked grants fail subsequent reads. Error responses do not reveal
+hidden state.
+
+### 6. Record committed changes and recoverable notifications
+
+**Status:** completed on 2026-09-12. **Depends on:** steps 3–5.
+
+The implemented leased source watchers, atomic revision outboxes, retry and
+restart recovery, deduplicated observer inbox, no-op rules, and bounded cleanup
+are recorded in
+[`state-query-notifications.md`](state-query-notifications.md). Lifecycle
+binding invalidation remains step 7, live dependency attachment remains step 8,
+and browser SSE remains step 9.
+
+Instrument local and shareable storage mutation boundaries, including collection
+membership and subject metadata changes. Use existing namespace revisions where
+appropriate and add missing local revisions.
+
+Commit revision changes and durable notification intent together when active
+watchers require delivery. Design watcher registration so a subscriber racing
+a write cannot miss the write just because an interest check saw no watcher.
+
+Implement retryable notification delivery, deduplication, bounded cleanup, and
+watcher leases. Keep the state commit independent of subscriber availability.
+Use a durable pending marker, outbox, or equivalent repair protocol so a crash
+between commit and notification cannot leave a connected observer stale forever.
+
+With no interest, skip unnecessary evaluation and fanout; the next subscriber
+must still receive the current snapshot. Same-value operations need not emit
+value changes, but membership or binding changes still matter.
+
+**Exit criteria:** a restart after commit but before delivery recovers; duplicate
+notifications are harmless; no-op semantics and collection membership changes
+are correct; stale watcher records expire; command behavior remains compatible.
+
+### 7. Make live bindings follow the effective-state lifecycle
+
+**Status:** completed on 2026-09-13. **Depends on:** step 6.
+
+The implemented ordered binding authority, recoverable lifecycle invalidation,
+evaluation handoff checks, limits, and failure behavior are recorded in
+[`state-query-bindings.md`](state-query-bindings.md). The internal observer
+boundary is ready for step 8 to attach and replace complete query dependency
+sets; public SSE remains step 9.
+
+Add reliable invalidation for activation, default changes, transition entry and
+completion, revocation, fallback repair, and standalone successor readiness.
+Persist binding revisions or equivalent ordered authority so restarts and
+A-to-B-to-A transitions cannot reuse an obsolete binding identity.
+
+Implement a per-group observation boundary that re-resolves affected exports,
+validates access, prepares replacement dependencies, and applies a source
+handoff. Notifications from superseded bindings must be discarded. Do not
+redirect an already-running command's pinned scope.
+
+Account for interrupted transitions and lazy standalone creation; subscribers
+receive explicit unavailable/transition status until the current source is
+ready. Changes to unselected links must not spuriously retarget observations.
+
+**Exit criteria:** every lifecycle row above passes with a connection already
+open, including same-value handoffs and asymmetric directional defaults.
+Delayed old-source notifications cannot overwrite the new binding.
+
+### 8. Implement live query dependencies and collection observation
+
+**Status:** completed on 2026-09-13. **Depends on:** steps 4, 6–7.
+
+Maintain a dependency graph for active composed queries and re-evaluate only
+affected work. Observe collection membership so new entries can enter a query
+even when their keys were absent at subscription time.
+
+For a remembered-game lookup, watch the remembered game and its selected
+counter. Attach and version-check the new counter before completing a game
+handoff, then remove obsolete interest. Handle absent selections, permission
+changes, collection deletion/reset, and a source switch during re-evaluation.
+
+Share underlying observation work where safe while preserving per-client
+permissions. Coalesce work and bound query complexity, fanout, retries, and
+pending results. Do not scan every stored group on each mutation.
+
+**Exit criteria:** changing the remembered game changes the observed counter;
+later changes to the old counter do not contaminate the result. Multi-value
+queries and collection insertion/removal work without additional feature-authored
+queries. Resource limits fail explicitly.
+
+### 9. Expose SSE snapshots, updates, status, and recovery
+
+**Status:** completed on 2026-09-14. **Depends on:** steps 2, 5, 7–8.
+Implementation commit: `5686037`.
+
+This historical step established the public API, recovery model, bounded durable
+history, cleanup behavior, and the initial polling delivery adapter. The final
+direct transport is documented in
+[`state-query-websocket.md`](state-query-websocket.md).
+
+Implement the selected SSE architecture with validated query registration,
+multiplexed query IDs where supported, UTF-8 event framing, connection cleanup,
+heartbeats, and bounded buffering. Use a tested snapshot-and-attach handshake
+rather than an uncoordinated read followed by registration.
+
+Return complete results with a query identity, result status, opaque cursor,
+and reason such as initial, value change, dependency change, or source change.
+Define cursor scope across restarts and bindings. A reconnect always
+reauthorizes and resolves current state; unknown or expired cursors resynchronize
+without replaying obsolete-realm data.
+
+Handle slow clients, duplicate delivery, disconnects, credential expiry and
+revocation, and temporary source unavailability. Prevent expired credentials
+from causing endless unauthorized reconnect loops in the browser client.
+
+**Exit criteria:** actual streaming tests cover first attachment, disconnect,
+reconnect after a link change, restart recovery, duplicate/out-of-order internal
+notifications, slow consumers, and access revocation. No unbounded queues or
+permanent stale subscriptions remain.
+
+### 10. Complete the deaths proof and contributor workflow
+
+**Status:** completed on 2026-09-14. **Depends on:** steps 3–9.
+Implementation commit: `68d4c6f`.
+
+The complete deaths composition proof, optional query builders, contributor
+test runtime, and readable counter scaffold workflow are recorded in
+[`state-query-deaths-proof.md`](state-query-deaths-proof.md).
+
+Finish deaths declarations, subject metadata compatibility, and optional presets
+for fixed-game and current-game views. Keep normal command syntax, permissions,
+remembered-game rules, counter boundaries, and lifecycle semantics intact.
+
+Demonstrate independently composed subscriptions to one game's count, three
+selected counts, remembered game only, the dynamically selected count, and the
+bounded counter collection. Include standalone and shared group views. Make
+legacy collection coverage visible according to step 3's decision.
+
+Extend the feature test runtime, authoring documentation, and scaffold helpers
+so a contributor can expose a new readable value or counter through supported
+imports. Ordinary mutations should become observable without handwritten
+notification or SSE logic. Share pure domain read/normalization logic where
+useful rather than executing commands from queries.
+
+**Exit criteria:** all five user-created query examples work end to end;
+existing deaths behavior passes; a separate simple feature can expose state
+using documented helpers without depending on persistence internals.
+
+### 11. Deliver the browser client, discovery flow, and widget example
+
+**Status:** completed on 2026-09-15. **Depends on:** steps 5, 9–10.
+Implementation commit: `8622d5c`.
+
+The same-origin browser client, authorized query setup flow, configurable
+widget, and local/CI/deployment verification boundaries are documented in
+[`state-query-browser.md`](state-query-browser.md).
+
+Provide a small client interface for catalog discovery, read, watch, and
+unsubscribe using the same query descriptor. Handle reconnects, replacement
+snapshots, statuses, and teardown internally. Allow a browser page to share
+connection work across its subscriptions.
+
+Build a bounded setup flow: choose an authorized platform group, browse readable
+state, choose literal or state-derived parameters, combine fields, preview the
+result, and copy an integration snippet or browser-source URL. Offer presets
+without hiding custom selection.
+
+Supply a working deaths widget with configurable presentation, an unselected
+game state, and a stale/reconnecting indication. Treat state values as text/data,
+not executable HTML. Expose logical concepts in the UI rather than realm IDs,
+storage hashes, or implementation revisions.
+
+**Exit criteria:** a user can configure a custom multi-value query without
+editing bot code; a developer can embed and stop a subscription with documented
+client calls; a browser-source smoke test follows count, game, and link changes.
+Any hosting or deployment is handled explicitly as a separate rollout action.
+
+### 12. Verify, document, and stabilize the release
+
+**Status:** completed on 2026-09-15. **Depends on:** steps 1–11.
+Implementation commit: [`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63).
+Verified by [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829):
+43 test files / 417 tests, lint and project checks, Chromium smoke, JavaScript
+syntax, and the non-deploying Wrangler build passed.
+
+Acceptance evidence, operational controls, local load results, implemented
+polling costs, compatibility, and test-first rollout/rollback are recorded in
+[`state-query-release.md`](state-query-release.md). Deployed measurements remain
+explicit rollout gates; no deployment has been performed.
+
+Run the acceptance matrix below, the full repository suite, and CI's lint,
+syntax, and non-deploying Wrangler build. Add behavioral and failure-recovery
+tests at the relevant steps rather than deferring all tests to this final step.
+
+Measure the step 2 budgets under representative active and idle load. Confirm
+cleanup after the last subscriber, bounded recovery after injected failures,
+and observability for active connections, lag, retries, handoffs, and discarded
+obsolete notifications without logging credentials or private values.
+
+Update API stability policy, public exports, test-kit documentation, generated
+catalogs where affected, README routes, operator guidance, and migration notes.
+Record exact implementation commits and validation results. Distinguish local,
+CI, and deployed-browser evidence; passing CI alone does not prove production
+latency, hibernation, or cost.
+
+Prepare a test-first rollout and rollback procedure. Existing bot commands must
+continue to operate if public subscriptions are disabled. Do not change or
+remove deployed migration tags, reset state to simplify tests, or claim a
+deployment has occurred merely because implementation is complete.
+
+**Exit criteria:** the agreed query surface is documented as implemented, all
+required checks pass, budget results and legacy limitations are explicit, and
+the release has an operational rollout path.
+
+### 13. Specify the hibernating WebSocket transport and rollout contract
+
+**Status:** completed. **Depends on:** steps 2, 5, 8–12.
+
+The accepted protocol, security boundary, hibernation constraints, message
+vocabulary, acknowledgement rule, close codes, and staged rollout are recorded
+in [`state-query-websocket.md`](state-query-websocket.md). Add an exact
+`STATE_QUERY_STREAM_TRANSPORT` selector with `polling_sse` and
+`hibernating_websocket` values while retaining `STATE_QUERY_STREAMS_ENABLED` as
+the master switch. Missing configuration preserves polling for backward
+compatibility; malformed or prematurely selected transports fail closed.
+
+Keep both checked-in environments on `polling_sse`. Record compatibility date
+`2026-09-01`, but do not activate the socket route or claim hibernation in this
+step. Freeze reusable protocol constants and verify the configuration boundary
+without changing the working stream path.
+
+**Exit criteria:** protocol and rollback decisions are unambiguous; invalid
+configuration cannot select an unintended transport; existing SSE behavior and
+tests remain unchanged under `polling_sse`; and the repository passes its full
+validation path.
+
+Verified implementation: commit
+[`bfd360c`](https://github.com/BCIrealm087/elmybot/commit/bfd360ce8075ef4484e284b164b3ce3d1435bf2b),
+[CI run 35180162101](https://github.com/BCIrealm087/elmybot/actions/runs/35180162101).
+
+### 14. Connect clients directly to hibernating observers
+
+**Status:** completed. **Depends on:** step 13.
+
+Add authenticated `GET /state-query/socket` upgrade routing to the selected
+group's `StateQueryObserver`. Accept sockets through the Durable Object
+Hibernation API, restore bounded attachments after constructor restart, and
+implement message, close, and error handlers. Reuse the existing atomic query
+attachment, current results, history, cursors, and source-notification fanout.
+
+Configure automatic ping/pong responses without observer timers. Deliver the
+initial complete snapshot and later complete updates directly to attached
+sockets. Keep the polling transport available and selected for rollback.
+
+**Exit criteria:** focused server tests cover authentication, initial snapshot,
+committed update, reconnect, terminal status, restart reconstruction, capacity,
+and cleanup with zero observer poll calls in socket mode.
+
+Verified implementation: commit
+[`fc012a4`](https://github.com/BCIrealm087/elmybot/commit/fc012a434e51c8a5c2246d8f9073a62b14e9af13),
+[CI run 35191207496](https://github.com/BCIrealm087/elmybot/actions/runs/35191207496).
+
+### 15. Migrate the browser client and OBS widget
+
+**Status:** completed. **Depends on:** step 14.
+
+Replace the browser client's internal fetch/SSE parser with the versioned socket
+protocol while preserving its public API and same-origin session workflow.
+Multiplex active queries, require a replacement snapshot before updates,
+acknowledge applied events, ignore duplicate or old sequences, detect stale
+connections, and reconnect with bounded backoff and recovery hints.
+
+Update the deterministic browser fixture and real Worker tests. The setup page,
+widget URL, query tools, presentation behavior, and credential-free copied URLs
+remain unchanged.
+
+**Exit criteria:** setup, preview, widget, sharing, unsubscribe, reconnection,
+handoff, and terminal-access browser cases pass over WebSockets without exposing
+credentials or changing the developer-facing `watch()` contract.
+
+Verified implementation: commit
+[`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a),
+[CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
+
+### 16. Harden authorization, leases, and backpressure
+
+**Status:** completed on 2026-09-18. **Depends on:** steps 14–15.
+Implementation commit:
+[`1ce8887`](https://github.com/BCIrealm087/elmybot/commit/1ce8887d7c1b8e61c5ce0d19e1d5377eca33f74c).
+Verified by
+[CI run 35303983738](https://github.com/BCIrealm087/elmybot/actions/runs/35303983738):
+45 test files / 433 tests, lint and project checks, Chromium WebSocket smoke,
+JavaScript syntax, and the non-deploying Wrangler build passed.
+
+Allow at most one unacknowledged event per connection and durably coalesce newer
+complete replacements. Replace poll-driven subscription renewal with
+socket-aware interest, bounded group-level lease maintenance, and idempotent
+close/error cleanup. Retain expiry as recovery protection for lost disconnects.
+
+Replace periodic socket-grant polling with atomic durable revocation intent,
+retrying observer invalidation, and an alarm for the earliest known grant
+expiry. Reauthorize on registration, reconnect, reevaluation, and binding
+handoff. Fail closed if invalidation or attachment cannot safely converge.
+
+**Exit criteria:** slow/non-acknowledging clients, revocation, expiry, abrupt
+disconnect, notification duplication, oversize output, observer restart, and
+cleanup remain bounded and recover without transport polling.
+
+### 17. Verify deployed hibernation, parity, and cost
+
+**Status:** completed 2026-09-18. **Depends on:** steps 14–16.
+
+The lifecycle, recovery, authorization, backpressure, multiplexing, and
+1/20-subscriber matrix passed locally and in CI. Test Worker version
+`ba1faa66-b2cf-487a-84a7-acf18ffa78ac` then ran the selected
+`hibernating_websocket` transport with streaming and diagnostics enabled.
+
+Chrome and an actual OBS Browser Source both received live command updates. OBS
+also received the next update immediately after roughly 30 minutes idle.
+Cloudflare reported 10 hibernatable inbound WebSocket messages, zero
+non-hibernatable inbound messages, 1.47 GB-seconds, 113 requests, 97 alarms, 6
+HTTP requests, 5k rows read, and 580 rows written over the approximately
+74-minute captured window. The only two errors were client disconnects; CPU,
+memory, internal, and thrown-exception limits recorded no failures. The live
+tail showed notification-driven reevaluation and no state-query poll route.
+
+The operator's existing polling measurements were reused instead of repeating a
+manual polling deployment. Exact Chrome and OBS patch versions, region
+percentiles, and manual repetitions of network-loss, replacement, and
+revocation variants were not collected. Those variants and the 1/20-subscriber
+load boundary remain covered by automated lifecycle tests; manual work was
+limited to the critical deployed hibernation and real OBS boundary.
+
+**Exit criteria:** satisfied. Deployed behavior demonstrated recovery after idle
+and a material request/duration reduction without transport polling; the
+measurement window and accepted deviations are recorded here and in
+`state-query-release.md`.
+
+### 18. Make WebSockets authoritative and retire polling
+
+**Status:** completed on 2026-09-19. **Depends on:** step 17.
+Implementation commit:
+[`bcf464a`](https://github.com/BCIrealm087/elmybot/commit/bcf464aed9d5daa3009cd4d3db70964dfc6cba23).
+Verified by
+[CI run 35408422524](https://github.com/BCIrealm087/elmybot/actions/runs/35408422524):
+44 test files / 409 tests, lint and project checks, Chromium WebSocket smoke,
+JavaScript syntax, and the non-deploying Wrangler build passed.
+
+The operator accepted the production rollout and soak. Both checked-in
+environments now enable direct hibernating WebSockets, and the master switch is
+the sole operational rollback. Automated coverage proves that disabling it
+rejects new upgrades, terminates existing sockets before lease renewal, drains
+their query graphs, and leaves snapshots and commands independent.
+
+The public and internal polling routes, poll/empty-poll metrics, SSE adapter,
+transport selector, polling-specific tests, and obsolete cost-model artifacts
+have been removed. The remaining module is named for the live stream boundary
+and preserves the transport-neutral query/history semantics.
+
+**Exit criteria:** production uses direct hibernating WebSockets, polling code is
+absent, all release checks pass, rollback and operational documentation are
+current, and commands/snapshots remain compatible with subscriptions disabled.
+
+## Acceptance matrix
+
+| Scenario | Required outcome | Primary steps |
+| --- | --- | --- |
+| User selects one exposed value | Immediate correctly typed snapshot and relevant updates | 4, 9 |
+| User combines three counters | One composed result without authoring a preset | 4, 8, 10 |
+| Query reads deaths as a privileged user | No remembered-game or count mutation | 4, 10 |
+| Named counter has no row | Documented default, distinct from an unselected game | 3–4 |
+| Remembered game changes | Dynamic counter dependency follows and old dependency is removed | 8 |
+| New counter enters the collection | Collection observer updates within its declared bounds | 3, 8 |
+| Counter resets or is deleted | Default and collection-membership rules agree | 3, 6, 8 |
+| Historical counter has no subject metadata | Count preserved; collection coverage is explicit | 3, 10 |
+| Shared counter is changed from the other platform | Both views update when they select the same integration | 7, 10 |
+| Linked groups remember different games | Current-game results may differ correctly | 8, 10 |
+| Link activates while subscribed | Fresh selected state replaces standalone binding | 7, 9 |
+| Additional nondefault link is created | Current binding remains unchanged | 7 |
+| Pending link is cancelled | Current state remains selected | 7 |
+| Default changes without a value mutation | Observer still receives the source handoff | 7 |
+| Default changes A-to-B-to-A | Delayed earlier-A events cannot overwrite the current binding | 7, 9 |
+| Unlink leaves no fallback | Fresh independent successor follows final shared state | 7 |
+| Unlink leaves a fallback | Observer selects the fallback's existing state | 7 |
+| Transition or lazy clone is interrupted | Explicit temporary status followed by recoverable resolution | 7, 9 |
+| Mutation races initial attachment or rebinding | No lost final value or obsolete-source overwrite | 6–9 |
+| Process stops after commit before notification | Retry or repair delivers the current result | 6, 9 |
+| Client reconnects after default change | Reauthorized current state; no archived-source replay | 9 |
+| Grant expires or is revoked during a stream | Access stops and client reports the status | 5, 9, 11 |
+| Dynamic lookup reaches a forbidden subject | No value or metadata leak | 5, 8 |
+| Query is oversized or collection exceeds bounds | Explicit bounded rejection/status, never silent completeness | 4, 8 |
+| Slow client or duplicate notification | Bounded memory and correct final displayed result | 8–9 |
+| Last client disconnects | Watcher interest and delivery work are cleaned up | 6, 9 |
+| Test credentials target production | Access is rejected; state remains isolated | 5 |
+| Existing feature never opts into readable declarations | Commands and storage semantics remain compatible | 3, 12 |
+
+## Deferred capabilities
+
+The first release does not require arbitrary expressions or scripting, general
+SQL/GraphQL, historical analytics, replay of every death for offline animations,
+cross-group joins, querying archived realms, public state mutation, or new
+Discord text-channel ownership.
+
+Additional filters, sorting, aggregation, transports, and semantic event history
+can be considered after the bounded composable core is proven. Deferral must
+not remove the core ability to choose values, combine them, follow dynamic
+parameters, and observe declared collections.
+
+## Feasibility references
+
+The preceding investigation checked the official documentation on 2026-09-11.
+Step 2 must recheck applicable limits and costs before implementation decisions.
+
+- [Cloudflare Workers HTTP duration and streaming limits](https://developers.cloudflare.com/workers/platform/limits/)
+  support long-lived streaming while a client is connected, subject to runtime
+  interruption and other resource limits.
+- [Durable Object lifecycle](https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/)
+  and [WebSocket hibernation](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
+  explain why long-lived SSE and hibernating WebSocket designs have different
+  idle behavior.
+- [Durable Object pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)
+  is the source for a measured cost model; no fixed price estimate is assumed here.
+- [WHATWG server-sent events](https://html.spec.whatwg.org/dev/server-sent-events.html)
+  specifies EventSource, UTF-8 framing, reconnection, and Last-Event-ID.
+  Durable replay and query recovery remain application responsibilities.
+
+## Progress log
+
+- 2026-09-11: Roadmap created from the agreed composable-state-query direction.
+  Existing branch and contracts reviewed; implementation steps 1–12 are pending.
+- 2026-09-11: Step 1 completed. The public contract selects a bounded JSON query
+  graph, user-composed reads over declared exports, whole-query authorization,
+  explicit value-state semantics, effective-state following, and
+  transport-neutral snapshot/subscription results. Steps 2–12 remain pending.
+- 2026-09-12: Step 2 completed. A bounded Web Streams proof covers SSE snapshots,
+  fanout, cancellation cleanup, replay/resynchronization, slow-reader coalescing,
+  idle heartbeat framing, and admission limits. The architecture decision keeps
+  public SSE while provisionally using a Worker adapter and group-local
+  hibernating WebSocket observers to avoid pinning Durable Objects for idle
+  browser streams. Cost assumptions, initial budgets, and deployment-only
+  validation blockers are recorded. Implementation commit
+  [`a3e17ca`](https://github.com/BCIrealm087/elmybot/commit/a3e17ca48c5f03d4849569ac43d85d5da749c6f4)
+  passed all 346 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34661139725](https://github.com/BCIrealm087/elmybot/actions/runs/34661139725).
+  Steps 3–12 remain pending.
+- 2026-09-12: Step 3 completed. Framework API v1 now supports optional validated
+  readable-state declarations, a value-free public catalog, and canonical
+  logical references. Deaths declares its group-local remembered game and its
+  effective-shareable count lookup and materialized collection. Additive
+  counter-subject metadata preserves the existing hash identity, reports
+  unidentified legacy history explicitly, and follows snapshot cloning,
+  linking, revocation successors, and relinking. Implementation commit
+  [`baa8715`](https://github.com/BCIrealm087/elmybot/commit/baa8715c7bec2a2294408068eda572d9f12fb7a0)
+  passed all 354 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34677582714](https://github.com/BCIrealm087/elmybot/actions/runs/34677582714).
+  Steps 4–12 remain pending.
+- 2026-09-12: Step 4 completed. A bounded parser and read-only evaluator now
+  support user-composed direct, literal, dynamic, projected, combined, and
+  collection reads. Scope-bound sources follow current effective ownership per
+  attempt, record exact dependencies, deduplicate equivalent reads, and validate
+  source revisions with bounded retries without claiming cross-owner atomicity.
+  Deaths resolvers prove local and shareable reads without command effects or
+  feature-state mutations. Implementation commit
+  [`d33b64e`](https://github.com/BCIrealm087/elmybot/commit/d33b64e6e2a43b54bdcfb5b94d90cdab000f1557)
+  passed all 361 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34683269492](https://github.com/BCIrealm087/elmybot/actions/runs/34683269492).
+  Steps 5–12 remain pending.
+- 2026-09-12: Step 5 completed. Scoped, expiring, revocable read grants now
+  authorize one exact Discord guild or Twitch channel, selected exports,
+  normalized literal and dynamic subjects, future collection membership, and
+  reduced resource ceilings. Discord managers issue grants through an ephemeral
+  command; Twitch broadcasters reauthenticate through identity-only OAuth.
+  Authorized catalog and snapshot routes, whole-query enforcement, environment
+  isolation, HMAC-authenticated routing fields, hashed stored secrets, and a
+  same-origin secure browser session prevent query or cache identities from
+  becoming credentials. Implementation commit
+  [`4301c09`](https://github.com/BCIrealm087/elmybot/commit/4301c09e07ea2a43d2f78e1b02f26cd43a6ecfac)
+  passed all 370 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34687256942](https://github.com/BCIrealm087/elmybot/actions/runs/34687256942).
+  Steps 6–12 remain pending.
+- 2026-09-12: Step 6 completed. Group-local and effective-shareable state
+  revisions now create coalesced outbox invalidations atomically with committed
+  mutations when leased watchers exist. Registration closes the snapshot/write
+  race, source alarms recover retryable delivery, observer inboxes deduplicate
+  and reject older revisions, and bounded expiry removes stale interest and
+  pending work. Equal writes avoid revision churn while subject metadata and
+  collection membership remain observable; never-watched sources allocate no
+  notification storage. Implementation commits
+  [`9cf3cc9`](https://github.com/BCIrealm087/elmybot/commit/9cf3cc972399cdd61949e8ab98a968b74f77f7c8)
+  and
+  [`ffcad1e`](https://github.com/BCIrealm087/elmybot/commit/ffcad1e07c3bd4c786c8008d245ab1ab757b372d),
+  with the documented tree at
+  [`27d4d40`](https://github.com/BCIrealm087/elmybot/commit/27d4d40a9103ef11c18edd047f917fdb45f6cce7),
+  passed all 376 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34722915097](https://github.com/BCIrealm087/elmybot/actions/runs/34722915097).
+  The roadmap-status tree passed the same checks in
+  [CI run 34723048624](https://github.com/BCIrealm087/elmybot/actions/runs/34723048624).
+  Steps 7–12 remain pending.
+- 2026-09-13: Step 7 completed. The integration registry now persists ordered,
+  directional effective-state binding revisions and recoverable lifecycle
+  invalidations for activation, default changes, revocation transitions,
+  fallback repair, and standalone successor readiness. Registration closes the
+  snapshot/attachment race, observer high-water authority rejects delayed old
+  bindings after acknowledgement, and evaluation re-resolves the current source
+  and rechecks access before accepting a handoff. Tests cover same-value and
+  A-to-B-to-A changes, asymmetric defaults, interrupted transitions, lazy
+  successor recovery, restart delivery, unavailable status, and unselected-link
+  stability. The verified implementation tree at
+  [`ec00dd7`](https://github.com/BCIrealm087/elmybot/commit/ec00dd74ebc1a4c5135bc47e642b1300dfc306f6)
+  passed all 384 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34750303408](https://github.com/BCIrealm087/elmybot/actions/runs/34750303408).
+  Steps 8–12 remain pending.
+- 2026-09-13: Step 8 completed. Group-local observers now persist active
+  composed queries, exact dependencies, and shared leased source edges; source
+  and binding invalidations reevaluate only graph-related queries. Evaluation
+  attaches and version-checks replacement dependencies before retiring old
+  interest, including remembered-game selection changes, initially absent
+  selections, collection insertion/removal, and same-value realm handoffs.
+  Grant references are revalidated independently per query, sharing cannot let
+  one client's lease or revocation affect another, and explicit budgets bound
+  retained queries, distinct plans, dependency fanout, alarm batches, retries,
+  and pending work. Implementation commit
+  [`c22be90`](https://github.com/BCIrealm087/elmybot/commit/c22be9027af67d8ca5caa4cfc32b700d27e19e35)
+  passed all 391 tests, lint, syntax checks, and the Wrangler dry run in
+  [CI run 34769121986](https://github.com/BCIrealm087/elmybot/actions/runs/34769121986).
+  Steps 9–12 remain pending.
+- 2026-09-14: Step 9 completed. The public `POST /state-query/stream`
+  endpoint now authenticates Bearer or secure-session credentials, registers
+  up to 20 named queries, and streams UTF-8 SSE snapshots, complete updates,
+  statuses, heartbeats, and opaque recovery cursors. Durable bounded history,
+  reconnect reauthorization and resynchronization, duplicate/out-of-order
+  suppression, slow-reader coalescing, terminal grant revocation, multiplexing,
+  and cleanup are covered by actual streaming tests. Implementation commit
+  [`5686037`](https://github.com/BCIrealm087/elmybot/commit/5686037aa59777f8a4e2e4236e19aee894269ce2)
+  plus deterministic revocation-budget test stabilization in
+  [`4ce6158`](https://github.com/BCIrealm087/elmybot/commit/4ce61589c44778798d581beb0d93fd7e4e9c9a2c)
+  passed all 397 tests, lint and project checks, JavaScript syntax checks, and
+  the Wrangler dry run in
+  [CI run 34800948511](https://github.com/BCIrealm087/elmybot/actions/runs/34800948511).
+  Steps 10–12 remain pending.
+- 2026-09-14: Step 10 completed. Deaths now proves all five independently
+  composed query shapes over standalone and linked state, including dynamic
+  remembered-game dependencies, materialized collection removal, and optional
+  fixed/current query builders. The contributor test runtime evaluates and
+  watches production query documents against in-memory feature state, and the
+  local/shareable counter scaffolds demonstrate readable exports whose ordinary
+  mutations produce updates without feature-authored notification or SSE code.
+  Public SSE coverage registers the five deaths queries together and exposed a
+  multiplexed recovery defect; bounded history now coalesces the newest result
+  independently per client query ID. Implementation commit
+  [`68d4c6f`](https://github.com/BCIrealm087/elmybot/commit/68d4c6fe64080b6931eba3dfc47be32cbd1e7a6c)
+  passed all 403 tests, lint and project checks, JavaScript syntax checks, and
+  the Wrangler dry run in
+  [CI run 34814540622](https://github.com/BCIrealm087/elmybot/actions/runs/34814540622).
+  Steps 11–12 remain pending.
+- 2026-09-15: Step 11 completed. Static browser modules now provide catalog,
+  snapshot, shared/multiplexed watch, reconnect, and unsubscribe APIs. The
+  authorized setup page composes literal, dynamic, projected, and combined
+  queries, previews live results, and copies credential-free widget URLs and
+  integration snippets. The deaths widget supports presentation settings,
+  unselected/stale states, safe text rendering, and explicit access termination.
+  A real Worker test follows secure-session access, remembered-game changes,
+  standalone-to-shared handoff, shared mutations, and revocation through the
+  browser client. Chromium smoke coverage separately verifies the actual UI
+  against a deterministic HTTP/SSE fixture. Implementation commit
+  [`8622d5c`](https://github.com/BCIrealm087/elmybot/commit/8622d5c4e24606db9f1ead94f21edd9b419fa484)
+  passed all 412 tests across 43 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax checks, and the Wrangler dry run in
+  [CI run 34903068459](https://github.com/BCIrealm087/elmybot/actions/runs/34903068459).
+  Chromium could not be downloaded in the Work workspace; browser execution
+  evidence comes from CI. No deployment or actual OBS smoke is claimed.
+  Step 12 remains pending.
+- 2026-09-15: Step 12 completed. The acceptance matrix is mapped to behavioral
+  evidence in [the release guide](state-query-release.md). Retention gaps now
+  resynchronize every multiplexed query, aggregate overflow ends explicitly,
+  and closed or expired subscriptions release stream records and watcher work.
+  Public subscriptions have an environment switch and default to disabled;
+  commands and snapshots remain compatible. Aggregate diagnostics cover leases,
+  lag, retries, handoffs, obsolete notifications, and bounded history without
+  recording credentials, values, or raw query exception messages. Local 1/20-client
+  workloads confirm shared interest, no reevaluation on empty polls, and complete
+  cleanup. The cost model now includes the implemented polling path. API policy,
+  legacy metadata limitations, migration preservation, and test-first rollout
+  and rollback guidance are documented. Implementation commit
+  [`5d5c507`](https://github.com/BCIrealm087/elmybot/commit/5d5c5077de11796ddd342b24f8764485d4a8ab63)
+  passed all 417 tests across 43 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 34954844829](https://github.com/BCIrealm087/elmybot/actions/runs/34954844829).
+  No deployment, actual OBS smoke, production latency, or hibernation/cost
+  certification is claimed; those remain explicit operational rollout gates.
+- 2026-09-17: Step 13 completed. The hibernating WebSocket protocol now has a
+  normative security, message, acknowledgement, close-code, recovery, and
+  rollout contract. An exact `STATE_QUERY_STREAM_TRANSPORT` selector preserves
+  `polling_sse` by default and fails closed for invalid or prematurely selected
+  hibernating transport, while `STATE_QUERY_STREAMS_ENABLED` remains the master
+  switch. Both checked-in environments retain polling for rollback, and the
+  compatibility date is `2026-09-01`. Reusable protocol constants and focused
+  boundary tests are in place; no socket route or deployment is claimed.
+  Implementation commit
+  [`bfd360c`](https://github.com/BCIrealm087/elmybot/commit/bfd360ce8075ef4484e284b164b3ce3d1435bf2b)
+  passed all 422 tests across 44 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35180162101](https://github.com/BCIrealm087/elmybot/actions/runs/35180162101).
+  Step 14 is next.
+- 2026-09-17: Step 14 completed. Authenticated `GET /state-query/socket`
+  upgrades now route directly to the grant target's `StateQueryObserver`, which
+  accepts the server socket through the Durable Object Hibernation API. Bounded
+  serialized attachments, automatic ping/pong, versioned register/event/error/
+  ack messages, complete initial and updated results, idempotent close/error
+  cleanup, terminal access status, capacity admission, and authorized reconnect
+  are implemented without raw credentials, observer polling, or heartbeat
+  timers. Real Miniflare sockets prove live observer eviction/reconstruction;
+  deployed hibernation and cost are not claimed. Both checked-in environments
+  remain on `polling_sse`; browser migration and acknowledgement backpressure
+  remain Steps 15–16. Implementation commit
+  [`fc012a4`](https://github.com/BCIrealm087/elmybot/commit/fc012a434e51c8a5c2246d8f9073a62b14e9af13)
+  passed all 427 tests across 45 files, lint and repository checks, Chromium
+  smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35191207496](https://github.com/BCIrealm087/elmybot/actions/runs/35191207496).
+  Step 15 is next.
+- 2026-09-17: Step 15 completed. The browser client's stable `watch()` API now
+  multiplexes active queries over one versioned WebSocket, applies only complete
+  replacement snapshots before updates, acknowledges accepted cursors, ignores
+  duplicate and old sequences, detects stale peers, and reconnects with bounded
+  backoff plus opaque recovery hints. Query-set or session changes discard old
+  recovery identity. The unchanged setup and OBS widget workflows retain secure
+  same-origin sessions, credential-free copied URLs, presentation behavior, and
+  explicit terminal-access handling. The deterministic Chromium fixture and
+  real Worker lifecycle test now exercise the socket path. Both checked-in
+  environments remain on `polling_sse` for rollback, and server backpressure and
+  socket-aware authorization/leases remain Step 16. Implementation commit
+  [`3b18c5a`](https://github.com/BCIrealm087/elmybot/commit/3b18c5a642d5ac5951ebf2885f951f638ee16f4a)
+  passed all 428 tests across 45 files, lint and repository checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35286549638](https://github.com/BCIrealm087/elmybot/actions/runs/35286549638).
+  Step 16 is next.
+- 2026-09-18: Step 16 completed. Each socket now has at most one
+  unacknowledged event; bounded durable history coalesces later complete
+  replacements, and forged future acknowledgements cannot advance delivery.
+  Attached sockets renew query/source interest through bounded group alarm
+  turns without transport or grant polling, while close/error and expiry clean
+  up detached interest. Grant revocation now commits a durable invalidation
+  outbox alongside the grant update, retries observer delivery, and records a
+  tombstone that closes registration races. Exact grant expiry, reevaluation,
+  binding handoff, slow/no-ack clients, retry, restart, oversize, duplicate
+  notification, and cleanup paths remain bounded. Both checked-in environments
+  remain disabled and select `polling_sse`; deployed hibernation, parity, and
+  cost measurement remain Step 17. Implementation commit
+  [`1ce8887`](https://github.com/BCIrealm087/elmybot/commit/1ce8887d7c1b8e61c5ce0d19e1d5377eca33f74c)
+  passed all 433 tests across 45 files, lint and project checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35303983738](https://github.com/BCIrealm087/elmybot/actions/runs/35303983738).
+  Step 17 is next.
+- 2026-09-18: Step 17 completed. Commit
+  [`31a9872`](https://github.com/BCIrealm087/elmybot/commit/31a9872f753e024cc24ae0a01eb3c77281462bb8)
+  passed all 435 tests and the lifecycle/load matrix in
+  [CI run 35326114263](https://github.com/BCIrealm087/elmybot/actions/runs/35326114263).
+  Test Worker version `ba1faa66-b2cf-487a-84a7-acf18ffa78ac` selected direct
+  hibernating WebSockets. Chrome and an actual OBS Browser Source received live
+  Discord-driven updates; OBS was already current after roughly 30 minutes idle.
+  The approximately 74-minute Durable Object window recorded 10 hibernatable
+  inbound messages, zero non-hibernatable messages, 113 requests, 97 alarms,
+  1.47 GB-seconds, 5k rows read, 580 rows written, 32.91 ms median wall time,
+  1.68 ms median CPU, and 4.18 MB median memory. Two client disconnects were the
+  only reported errors; no internal, exception, CPU-limit, or memory-limit error
+  occurred, and the live tail contained no polling route. The existing polling
+  baseline was reused. Exact client patch versions, regional percentiles, and
+  non-critical repetitions of automated failure variants are accepted
+  deviations under the operator-testing policy. Step 18 is next.
+
+- 2026-09-19: Step 18 completed after the operator accepted the production
+  rollout and soak. Direct hibernating WebSockets are authoritative and enabled
+  in both checked-in environments. The master-switch rollback is covered by an
+  automated drain case. Public/internal polling routes, polling metrics, the SSE
+  adapter, transport selector, polling-specific tests, and the obsolete cost
+  proof/model were removed. Implementation commit
+  [`bcf464a`](https://github.com/BCIrealm087/elmybot/commit/bcf464aed9d5daa3009cd4d3db70964dfc6cba23)
+  passed all 409 tests across 44 files, lint and project checks, the Chromium
+  WebSocket smoke, JavaScript syntax, and the Wrangler dry run in
+  [CI run 35408422524](https://github.com/BCIrealm087/elmybot/actions/runs/35408422524).

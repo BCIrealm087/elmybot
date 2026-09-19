@@ -29,6 +29,12 @@ the Twitch broadcaster can choose Discord's counts, Twitch's counts, reset the
 new shared ledger, or cancel. Revoking the last link gives both groups
 independent successors starting from the final shared counts.
 
+The feature exposes `remembered_game`, `count`, and `counts` through the
+composable state-query API. It also exports the optional pure
+`fixedGameDeathsQuery(target, game)` and `currentGameDeathsQuery(target)` query
+builders. The complete standalone/shared and live-update proof is documented in
+[state-query-deaths-proof.md](../../../docs/state-query-deaths-proof.md).
+
 ## Commands
 
 - Discord: `/deaths [operation:check|plus|minus|reset|<count>] [game:<game>]`

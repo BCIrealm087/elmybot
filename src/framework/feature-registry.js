@@ -21,6 +21,7 @@ import {
   isEventActionDefinition,
   isScheduledActionDefinition
 } from "./trigger-definitions.js";
+import { publicReadableStateExport } from "./readable-state.js";
 
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -193,6 +194,7 @@ export function createFeatureRegistry(features, {
   const routes = Object.create(null);
   const events = Object.create(null);
   const schedules = Object.create(null);
+  const readableState = Object.create(null);
   const adapters = collectEffectAdapters(effectAdapters);
   const services = collectAvailableServices(availableServices);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
@@ -246,6 +248,28 @@ export function createFeatureRegistry(features, {
       "feature schedule kind",
       "duplicate_feature_schedule"
     ));
+    feature.readableState.forEach((definition) => {
+      if (
+        definition.scope.kind === "effective_shareable" &&
+        !feature.shareableState.some((namespace) =>
+          namespace.id === definition.scope.namespace
+        )
+      ) {
+        throw new FeatureRegistryError(
+          `Feature \`${feature.id}\` readable export \`${definition.id}\` refers to ` +
+          `undeclared shareable namespace \`${definition.scope.namespace}\`.`,
+          { code: "readable_state_namespace_undeclared" }
+        );
+      }
+      const identity = `${feature.id}:${definition.id}:v${definition.version}`;
+      addUnique(
+        readableState,
+        identity,
+        Object.freeze({ featureId: feature.id, definition }),
+        "readable state export",
+        "duplicate_readable_state_export"
+      );
+    });
     if (PLATFORMS.some((platform) => feature.effectAdapters[platform].length > 0)) {
       throw new FeatureRegistryError(
         `Feature \`${feature.id}\` declares feature-owned effect adapters, which are ` +
@@ -460,6 +484,16 @@ export function createFeatureRegistry(features, {
     routes: Object.freeze(routes),
     events: Object.freeze(events),
     schedules: Object.freeze(schedules),
+    readableState: Object.freeze(readableState),
+    readableCatalog: Object.freeze(Object.values(readableState)
+      .map(({ featureId, definition }) =>
+        publicReadableStateExport(definition, featureId)
+      )
+      .sort((left, right) =>
+        left.feature.localeCompare(right.feature) ||
+        left.export.localeCompare(right.export) ||
+        left.version - right.version
+      )),
     services: Object.freeze([...services].sort()),
     effectAdapters: Object.freeze(adapters),
     commands: Object.freeze(Object.fromEntries(PLATFORMS.map((platform) => [

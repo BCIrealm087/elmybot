@@ -56,6 +56,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/channels/*` | Broadcaster invitations, OAuth, and aggregate health |
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
+| `/state-query/*` | Scoped readable-state discovery, snapshots, live WebSockets, sessions, grant issuance, query setup, and widgets |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -77,6 +78,8 @@ checked again before signature verification and JSON parsing.
 | `TWITCH_CHANNEL_REGISTRY` | `TwitchChannelRegistry` | Singleton non-secret channel membership and health index |
 | `INTEGRATION_REGISTRY` | `IntegrationRegistry` | Singleton authoritative link, membership, route, invitation, and audit state |
 | `INTEGRATION_COORDINATOR` | `IntegrationCoordinator` | One per integration; durable execution ledger and effect outbox |
+| `SHAREABLE_STATE_REALM` | `ShareableStateRealm` | One per standalone or integration realm; shareable namespaces, revisions, and notification outboxes |
+| `STATE_QUERY_OBSERVER` | `StateQueryObserver` | One per logical platform group; deduplicated, coalesced state invalidations for future live queries |
 
 All configured Durable Object classes use SQLite-backed namespaces. Migration
 tags in `wrangler.jsonc` are append-only after deployment.
@@ -107,6 +110,7 @@ script. All commands except `/alive` are guild-only.
 | `/feature_config_set` | `feature`, `key`, `json_value` | Set an installed feature's namespaced configuration |
 | `/feature_config_show` | `feature`, `key` | Inspect a feature configuration value |
 | `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
+| `/state_query_grant` | `exports`, optional `duration_hours` | Create a scoped read credential in an ephemeral response |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
 | `/integration_default_set` | `integration_id` | Select the server's default Twitch link |
@@ -121,9 +125,10 @@ script. All commands except `/alive` are guild-only.
 
 Scheduling create/view/cancel capabilities allow the server owner, intrinsic
 Discord moderators, and configured allowed roles. Configuration management
-allows the owner and intrinsic moderators. Integration management is stricter:
+allows the owner and intrinsic moderators. Integration and state-query grant
+management are stricter:
 only the owner or a member with Administrator or Manage Server may link,
-inspect, configure, recover, or unlink integrations. Announcements allow the
+inspect, configure, recover, unlink integrations, or expose readable state. Announcements allow the
 owner, intrinsic moderators, and configured allowed roles.
 
 Random schedule intervals are expressed in seconds, must remain between 10
@@ -245,6 +250,9 @@ after the platform accepts a request and before local success is recorded.
 | `TWITCH_BOT_USER_ID` | No | Numeric user ID of the Twitch bot account |
 | `TWITCH_EVENTSUB_SECRET` | Yes | EventSub HMAC secret, 10–100 characters |
 | `TWITCH_OAUTH_SETUP_TOKEN` | Yes | Bearer token protecting operator endpoints |
+| `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` grant boundary |
+| `STATE_QUERY_PUBLIC_ORIGIN` | No | Committed origin for grant OAuth and session cookies |
+| `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Yes | HMAC key rejecting forged grant-routing fields before Durable Object lookup |
 | `TWITCH_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` identity |
 | `TWITCH_PUBLIC_ORIGIN` | No | Committed canonical callback and onboarding origin |
 
@@ -289,14 +297,17 @@ npx wrangler secret put TWITCH_CLIENT_SECRET --env test
 npx wrangler secret put TWITCH_BOT_USER_ID --env test
 npx wrangler secret put TWITCH_EVENTSUB_SECRET --env test
 npx wrangler secret put TWITCH_OAUTH_SETUP_TOKEN --env test
+npx wrangler secret put STATE_QUERY_CREDENTIAL_SIGNING_SECRET --env test
 ```
 
-Set the environment-specific `TWITCH_PUBLIC_ORIGIN` values in `wrangler.jsonc`.
+Set the environment-specific `TWITCH_PUBLIC_ORIGIN` and
+`STATE_QUERY_PUBLIC_ORIGIN` values in `wrangler.jsonc`.
 Register these Twitch OAuth callback URLs for each Worker host:
 
 ```text
 https://<worker-host>/twitch/oauth/callback
 https://<worker-host>/twitch/channels/oauth/callback
+https://<worker-host>/state-query/operator/twitch/callback
 ```
 
 Set the Discord interaction endpoint to:
@@ -368,6 +379,24 @@ Authorization: Bearer <TWITCH_OAUTH_SETUP_TOKEN>
 | `POST /twitch/eventsub/channels` | Configure broadcaster desired state |
 | `DELETE /twitch/eventsub/channels?broadcasterUserId=<id>` | Disable desired state and remove managed subscriptions |
 
+State-query grant issuance is group-authorized rather than protected by the
+operator-wide Twitch setup token. Discord server owners and members with
+Administrator or Manage Server use `/state_query_grant`. Twitch broadcasters
+open `GET /state-query/operator/twitch` and reauthenticate with Twitch. See the
+[state-query HTTP and grant guide](docs/state-query-http.md) for credential,
+catalog, snapshot, session, revocation, origin, and scope details.
+
+After deployment, open `/state-query/setup` to compose and preview a query and
+copy a `/state-query/widget` browser-source URL. OBS uses its own session;
+enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
+documents the client API, setup flow, and credential-free widget URLs.
+
+Public subscriptions use direct hibernating WebSockets in both checked-in
+environments. The [state-query release guide](docs/state-query-release.md)
+documents the `STATE_QUERY_STREAMS_ENABLED` rollback switch, aggregate
+diagnostics, bounded limits, automated verification, and operational recovery.
+Snapshots and existing commands remain available when streaming is disabled.
+
 ## Project layout
 
 ```text
@@ -389,14 +418,15 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 
 ## Testing and CI
 
-GitHub Actions runs the complete suite for pushes to
-`codex-feature-experiment`, pull requests, and manual dispatches. CI:
+GitHub Actions runs the complete suite for pushes to `master` and
+`codex-state-querying`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
 3. runs ESLint;
-4. checks tracked JavaScript and MJS syntax; and
-5. performs a non-deploying Wrangler dry run.
+4. runs a Chromium setup/widget smoke test and saves its preview;
+5. checks tracked JavaScript and MJS syntax; and
+6. performs a non-deploying Wrangler dry run.
 
 The CI Wrangler dry run is the authoritative clean build/configuration check.
 
@@ -440,6 +470,16 @@ explicit catalog-regeneration action.
 - [Integration management and recovery](docs/integration-management.md)
 - [EventSub subscriptions and durable inbox](docs/eventsub-pipeline.md)
 - [Feature configuration, state ownership, and cooldowns](docs/feature-state.md)
+- [Composable state queries and live subscriptions roadmap](docs/state-querying-roadmap.md)
+- [State-query release verification, operations, and rollout](docs/state-query-release.md)
+- [Public state-query contract](docs/state-query-contract.md)
+- [Readable state declarations and subject metadata](docs/state-query-readable-state.md)
+- [Read-only composable state-query evaluator](docs/state-query-evaluator.md)
+- [State-query read grants, discovery, and snapshot HTTP API](docs/state-query-http.md)
+- [Recoverable state-query change notifications](docs/state-query-notifications.md)
+- [Public state-query WebSocket delivery](docs/state-query-websocket.md)
+- [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
+- [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

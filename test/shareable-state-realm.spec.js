@@ -220,6 +220,13 @@ describe("Standalone shareable-state realms", () => {
         backend,
         group,
         "score",
+        "query-read",
+        { key: "value" }
+      ))).data).toEqual({ found: false });
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
         "set",
         { key: "value", value: { z: 1, a: 2 } }
       ))).data).toEqual({ ok: true });
@@ -241,6 +248,19 @@ describe("Standalone shareable-state realms", () => {
         `SELECT mutation_version FROM shareable_state_realm_namespaces
          WHERE feature_id = 'test.score' AND namespace_id = 'score'`
       ).one().mutation_version).toBe(1);
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
+        "query-read",
+        { key: "value" }
+      ))).data).toEqual({ found: true, value: { a: 2, z: 1 } });
+      expect((await responseData(await realmRequest(
+        backend,
+        group,
+        "score",
+        "revision"
+      ))).data).toEqual({ mutationVersion: 1 });
 
       expect((await responseData(await realmRequest(
         backend,
@@ -352,8 +372,14 @@ describe("Standalone shareable-state realms", () => {
         key: "alpha",
         value: { z: 3, a: 1 }
       });
-      await identityRealmRequest(backend, sourceIdentity, "score", "set", {
-        key: "beta",
+      await identityRealmRequest(backend, sourceIdentity, "score", "bounded-counter", {
+        name: "deaths",
+        subject: "dark souls",
+        subjectLabel: "Dark Souls",
+        min: 0,
+        max: 10,
+        initial: 0,
+        operation: "set",
         value: 2
       });
       sourceSnapshot = await snapshotShareableStateNamespace(
@@ -415,6 +441,7 @@ describe("Standalone shareable-state realms", () => {
       });
       expect(cloned.mutationVersion).toBe(1);
       expect(cloned.entries).toEqual(sourceSnapshot.entries);
+      expect(cloned.counterSubjects).toEqual(sourceSnapshot.counterSubjects);
       expect(shareableStateSnapshotsEqual(sourceSnapshot, cloned)).toBe(true);
 
       expect(await cloneShareableStateSnapshot(clientEnv, {
@@ -802,6 +829,71 @@ describe("Standalone shareable-state realms", () => {
          WHERE feature_id = 'test.score' AND namespace_id = 'counter'`
       ).one().total).toBe(0);
       expect((await responseData(await operation("get"))).data).toEqual({ value: 0 });
+    });
+  });
+
+  it("enumerates known counter subjects and explicitly reports legacy gaps", async () => {
+    const group = twitchGroup();
+    const stub = standaloneRealmStub(env, createStandaloneRealmIdentity(group));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const backend = new ShareableStateRealmBackend(state, env, featureRegistry());
+      const counter = (subject, operation, values = {}) => realmRequest(
+        backend,
+        group,
+        "counter",
+        "bounded-counter",
+        {
+          name: "deaths",
+          subject,
+          min: 0,
+          max: 10,
+          initial: 0,
+          operation,
+          ...values
+        }
+      );
+      const subjects = () => realmRequest(
+        backend,
+        group,
+        "counter",
+        "bounded-counter-subjects",
+        { name: "deaths" }
+      );
+
+      await counter("legacy game", "set", { value: 4 });
+      expect((await responseData(await counter("legacy game", "get"))).data)
+        .toEqual({ value: 4 });
+      expect((await responseData(await subjects())).data).toEqual({
+        subjects: [],
+        coverage: {
+          complete: false,
+          identifiedCount: 0,
+          unidentifiedCount: 1
+        }
+      });
+
+      await counter("legacy game", "set", {
+        value: 4,
+        subjectLabel: "Legacy Game"
+      });
+      expect((await responseData(await subjects())).data).toEqual({
+        subjects: [{ identity: "legacy game", label: "Legacy Game", value: 4 }],
+        coverage: {
+          complete: true,
+          identifiedCount: 1,
+          unidentifiedCount: 0
+        }
+      });
+
+      await counter("legacy game", "reset", { subjectLabel: "Legacy Game" });
+      expect((await responseData(await subjects())).data).toEqual({
+        subjects: [],
+        coverage: {
+          complete: true,
+          identifiedCount: 0,
+          unidentifiedCount: 0
+        }
+      });
     });
   });
 

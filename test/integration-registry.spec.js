@@ -5,6 +5,7 @@ import {
   runInDurableObject
 } from "cloudflare:test";
 import worker from "../src/index.js";
+import { ALARM_DRAIN_TIME_BUDGET_MS } from "../src/alarm-drain.js";
 import { commands } from "../src/platforms/discord/commands.js";
 import {
   CAPABILITIES,
@@ -21,6 +22,7 @@ import {
   INTEGRATION_PENDING_TTL_MS,
   integrationCoordinatorStub,
   integrationRegistryStub,
+  IntegrationRegistry,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
   resolvePendingIntegrationState,
@@ -402,7 +404,7 @@ describe("Cross-platform integration linking", () => {
     }, integrationEnv);
     expect(unlinkResult.content).toContain("Unlinked integration");
     expect((await listIntegrationsForGroup(integrationEnv, group)).total).toBe(0);
-  });
+  }, 10_000); // Complete OAuth/link/unlink flow across several Durable Objects.
 
   it("requires the OAuth-derived actor to be the Twitch broadcaster", async () => {
     const group = discordGroup();
@@ -464,6 +466,10 @@ describe("Cross-platform integration linking", () => {
 
   it("cancels a verified pending link idempotently without creating an integration", async () => {
     const prepared = await prepareIntegration();
+    const binding = () => runInDurableObject(integrationRegistryStub(integrationEnv), (_instance, state) =>
+      new IntegrationRegistry(state, integrationEnv).stateQueryBinding(prepared.group, "twitch")
+    );
+    const originalBinding = await binding();
     const verification = await verifyIntegrationInvitation(integrationEnv, {
       invitationId: prepared.reservation.invitationId,
       reservationId: prepared.reservation.reservationId,
@@ -502,6 +508,7 @@ describe("Cross-platform integration linking", () => {
       .toBe(verification.pendingIntegration.integrationId);
     expect((await listIntegrationsForGroup(integrationEnv, prepared.group)).total)
       .toBe(0);
+    expect(await binding()).toEqual(originalBinding);
 
     const refreshed = await worker.fetch(
       new Request("https://example.com/twitch/integrations/pending", {
@@ -930,6 +937,7 @@ describe("Cross-platform integration linking", () => {
       const descriptor = {
         name: "game",
         subject: "hades",
+        subjectLabel: "Hades",
         min: 0,
         max: Number.MAX_SAFE_INTEGER,
         initial: 0
@@ -940,9 +948,21 @@ describe("Cross-platform integration linking", () => {
         ),
         set: async (value) => await runtime.featureServices.shareableState.boundedCounter(
           "fun.deaths", scope, descriptor, "set", value
-        )
+        ),
+        subjects: async () =>
+          await runtime.featureServices.shareableState.boundedCounterSubjects(
+            "fun.deaths", scope, "game"
+          )
       };
     };
+    const expectedSubjects = (value) => ({
+      subjects: [{ identity: "hades", label: "Hades", value }],
+      coverage: {
+        complete: true,
+        identifiedCount: 1,
+        unidentifiedCount: 0
+      }
+    });
 
     await (await deathsState(group, "twitch")).set(3);
     await (await deathsState(channel, "discord")).set(5);
@@ -978,6 +998,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(3);
     expect(await (await deathsState(channel, "discord")).get()).toBe(3);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(3));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(3));
     await (await deathsState(group, "twitch")).set(4);
 
     await revokeIntegration(integrationEnv, {
@@ -988,6 +1012,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(4);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(4));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(4));
     await (await deathsState(group, "twitch")).set(6);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
 
@@ -1022,6 +1050,10 @@ describe("Cross-platform integration linking", () => {
     });
     expect(await (await deathsState(group, "twitch")).get()).toBe(4);
     expect(await (await deathsState(channel, "discord")).get()).toBe(4);
+    expect(await (await deathsState(group, "twitch")).subjects())
+      .toEqual(expectedSubjects(4));
+    expect(await (await deathsState(channel, "discord")).subjects())
+      .toEqual(expectedSubjects(4));
   });
 
   it("resolves and pins standalone or active integration shareable-state realms", async () => {
@@ -1563,14 +1595,19 @@ describe("Cross-platform integration linking", () => {
       completePreparedIntegration(replacement).catch((error) => error)
     ]);
     let completed = concurrentCompletion;
-    if (concurrentCompletion instanceof Error) {
-      expect(concurrentCompletion.status).toBe(409);
+    for (let retry = 0; completed instanceof Error && retry < 3; retry += 1) {
+      expect(completed.status).toBe(409);
       expect([
         "shareable_state_transition",
         "integration_state_rediscovery_required"
-      ]).toContain(concurrentCompletion.code);
-      completed = await completePreparedIntegration(replacement);
+      ]).toContain(completed.code);
+      try {
+        completed = await completePreparedIntegration(replacement);
+      } catch (error) {
+        completed = error;
+      }
     }
+    if (completed instanceof Error) throw completed;
 
     expect(revoked.revoked).toBe(true);
     expect((await getIntegrationDefaultLink(integrationEnv, {
@@ -1639,6 +1676,7 @@ describe("Cross-platform integration linking", () => {
   it("expires and continues large maintenance batches through alarms", async () => {
     const prefix = uniqueId("expiry-batch");
     const nowMs = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(nowMs);
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
       async (instance, state) => {
@@ -1737,6 +1775,7 @@ describe("Cross-platform integration linking", () => {
     const groupKey = `discord:guild:${group.id}`;
     const prefix = uniqueId("revocation-batch");
     const nowMs = Date.now();
+    vi.spyOn(Date, "now").mockReturnValue(nowMs);
     await runInDurableObject(
       integrationRegistryStub(integrationEnv),
       async (instance, state) => {
@@ -1772,6 +1811,11 @@ describe("Cross-platform integration linking", () => {
            WHERE integration_id LIKE ? AND status = 'active'`,
           `${prefix}-%`
         ).one().total).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(1);
+        expect(await state.storage.getAlarm()).not.toBeNull();
 
         await instance.alarm();
         expect(state.storage.sql.exec(
@@ -1779,6 +1823,76 @@ describe("Cross-platform integration linking", () => {
            WHERE integration_id LIKE ? AND status = 'revoked'`,
           `${prefix}-%`
         ).one().total).toBe(51);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(0);
+      }
+    );
+  }, 10_000);
+
+  it("continues group revocation after its time budget", async () => {
+    const group = discordGroup();
+    const groupKey = `discord:guild:${group.id}`;
+    const prefix = uniqueId("revocation-time-budget");
+    let nowMs = 2_100_000_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    await runInDurableObject(
+      integrationRegistryStub(integrationEnv),
+      async (instance, state) => {
+        for (let index = 0; index < 2; index += 1) {
+          const integrationId = `${prefix}-${index}`;
+          state.storage.sql.exec(
+            `INSERT INTO integrations
+              (integration_id, status, created_at_ms, updated_at_ms,
+               activated_at_ms, created_by_platform, created_by_actor_id,
+               completed_by_platform, completed_by_actor_id)
+             VALUES (?, 'active', ?, ?, ?, 'discord', 'actor', 'twitch', 'actor')`,
+            integrationId,
+            nowMs + index,
+            nowMs + index,
+            nowMs + index
+          );
+          state.storage.sql.exec(
+            `INSERT INTO integration_members
+              (integration_id, group_key, platform, group_kind, group_id,
+               joined_at_ms)
+             VALUES (?, ?, 'discord', 'guild', ?, ?)`,
+            integrationId,
+            groupKey,
+            group.id,
+            nowMs
+          );
+        }
+
+        const freeze = vi.spyOn(instance, "freezeIntegrationForRevocation")
+          .mockImplementation(async () => {
+            nowMs += ALARM_DRAIN_TIME_BUDGET_MS;
+            return [];
+          });
+        expect(await instance.revokeForGroup({ group, reason: "test" }))
+          .toEqual({ revoked: 1, pending: true });
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'revoked'`,
+          `${prefix}-%`
+        ).one().total).toBe(1);
+        expect(state.storage.sql.exec(
+          "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
+          groupKey
+        ).one().total).toBe(1);
+        const continuationAlarm = await state.storage.getAlarm();
+        expect(continuationAlarm).toBeGreaterThanOrEqual(nowMs);
+
+        freeze.mockImplementation(async () => []);
+        nowMs = continuationAlarm;
+        expect(await instance.processGroupRevocationBatch(groupKey))
+          .toEqual({ revoked: 1, pending: false });
+        expect(state.storage.sql.exec(
+          `SELECT COUNT(*) AS total FROM integrations
+           WHERE integration_id LIKE ? AND status = 'revoked'`,
+          `${prefix}-%`
+        ).one().total).toBe(2);
         expect(state.storage.sql.exec(
           "SELECT COUNT(*) AS total FROM integration_group_revocations WHERE group_key = ?",
           groupKey

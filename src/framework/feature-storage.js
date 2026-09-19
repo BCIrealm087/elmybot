@@ -8,6 +8,7 @@ const MAX_FEATURE_VALUE_DEPTH = 20;
 const MAX_VALUES_PER_NAMESPACE = 100;
 const MAX_INCREMENT_AMOUNT = 1_000_000;
 const MAX_COUNTER_SUBJECT_LENGTH = 300;
+const MAX_COUNTER_SUBJECT_LABEL_LENGTH = 80;
 const MAX_COOLDOWN_ROWS = 10_000;
 const COOLDOWN_PRUNE_BATCH_SIZE = 100;
 
@@ -123,6 +124,22 @@ export function initializeFeatureStorageTables(state) {
       target_namespace_id TEXT NOT NULL,
       sealed_at_ms INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS framework_feature_counter_subjects (
+      feature_id TEXT NOT NULL,
+      counter_name TEXT NOT NULL,
+      subject_identity TEXT NOT NULL,
+      subject_label TEXT NOT NULL,
+      value_key TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (feature_id, counter_name, subject_identity),
+      UNIQUE (feature_id, value_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS framework_feature_state_versions (
+      feature_id TEXT PRIMARY KEY,
+      mutation_version INTEGER NOT NULL DEFAULT 0 CHECK (mutation_version >= 0)
+    );
   `);
 }
 
@@ -166,7 +183,20 @@ export function legacyFeatureStateMigration(state, input) {
       key: entry.value_key,
       value: JSON.parse(entry.value_json)
     }));
-    return { featureId, targetNamespaceId, sealedAtMs, entries };
+    const entryKeys = new Set(entries.map((entry) => entry.key));
+    const counterSubjects = state.storage.sql.exec(
+      `SELECT counter_name, subject_identity, subject_label, value_key
+       FROM framework_feature_counter_subjects
+       WHERE feature_id = ?
+       ORDER BY counter_name, subject_identity`,
+      featureId
+    ).toArray().filter((subject) => entryKeys.has(subject.value_key)).map((subject) => ({
+      counterName: subject.counter_name,
+      identity: subject.subject_identity,
+      label: subject.subject_label,
+      valueKey: subject.value_key
+    }));
+    return { featureId, targetNamespaceId, sealedAtMs, entries, counterSubjects };
   });
 }
 
@@ -203,6 +233,35 @@ function getValue(sql, valueKind, input) {
   return { value: row ? JSON.parse(row.value_json) : null };
 }
 
+function queryReadValue(sql, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const key = requireKey(input?.key);
+  const row = valueRow(sql, "state", featureId, key);
+  return row
+    ? { found: true, value: JSON.parse(row.value_json) }
+    : { found: false };
+}
+
+function featureStateRevision(sql, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const row = sql.exec(
+    `SELECT mutation_version FROM framework_feature_state_versions
+     WHERE feature_id = ?`,
+    featureId
+  ).toArray()[0];
+  return { mutationVersion: Number(row?.mutation_version ?? 0) };
+}
+
+function touchFeatureStateRevision(sql, featureId) {
+  sql.exec(
+    `INSERT INTO framework_feature_state_versions (feature_id, mutation_version)
+     VALUES (?, 1)
+     ON CONFLICT(feature_id) DO UPDATE SET
+       mutation_version = mutation_version + 1`,
+    featureId
+  );
+}
+
 function namespaceAtCapacity(sql, valueKind, featureId) {
   const row = sql.exec(
     `SELECT COUNT(*) AS total FROM framework_feature_values
@@ -219,6 +278,7 @@ function setValue(state, valueKind, input) {
   const valueJson = serializeValue(input?.value);
   state.storage.transactionSync(() => {
     const existing = valueRow(state.storage.sql, valueKind, featureId, key);
+    if (valueKind === "state" && existing?.value_json === valueJson) return;
     if (!existing && namespaceAtCapacity(state.storage.sql, valueKind, featureId)) {
       throw new FeatureStorageUserFacingError(
         `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} ${valueKind} values.`,
@@ -238,6 +298,9 @@ function setValue(state, valueKind, input) {
       valueJson,
       Date.now()
     );
+    if (valueKind === "state") {
+      touchFeatureStateRevision(state.storage.sql, featureId);
+    }
   });
   return { ok: true };
 }
@@ -245,8 +308,9 @@ function setValue(state, valueKind, input) {
 function deleteValue(state, valueKind, input) {
   const featureId = requireFeatureId(input?.featureId);
   const key = requireKey(input?.key);
-  const existing = valueRow(state.storage.sql, valueKind, featureId, key);
-  if (existing) {
+  const existing = state.storage.transactionSync(() => {
+    const row = valueRow(state.storage.sql, valueKind, featureId, key);
+    if (!row) return null;
     state.storage.sql.exec(
       `DELETE FROM framework_feature_values
        WHERE value_kind = ? AND feature_id = ? AND value_key = ?`,
@@ -254,7 +318,11 @@ function deleteValue(state, valueKind, input) {
       featureId,
       key
     );
-  }
+    if (valueKind === "state") {
+      touchFeatureStateRevision(state.storage.sql, featureId);
+    }
+    return row;
+  });
   return { deleted: Boolean(existing) };
 }
 
@@ -287,6 +355,7 @@ function incrementState(state, input) {
       );
     }
     const value = current + amount;
+    if (amount === 0) return { value };
     state.storage.sql.exec(
       `INSERT INTO framework_feature_values
         (value_kind, feature_id, value_key, value_json, updated_at_ms)
@@ -299,6 +368,7 @@ function incrementState(state, input) {
       JSON.stringify(value),
       Date.now()
     );
+    touchFeatureStateRevision(state.storage.sql, featureId);
     return { value };
   });
 }
@@ -356,7 +426,36 @@ function requireBoundedCounterInput(input) {
       "Bounded counter values must be safe integers within the configured bounds."
     );
   }
-  return { featureId, name, subject, min, max, initial, operation, amount, value };
+  const subjectLabel = input?.subjectLabel;
+  if (
+    subjectLabel !== undefined &&
+    (
+      typeof subjectLabel !== "string" ||
+      subjectLabel.trim().length === 0 ||
+      subjectLabel.length > MAX_COUNTER_SUBJECT_LABEL_LENGTH ||
+      Array.from(subjectLabel).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 31 || codePoint === 127;
+      })
+    )
+  ) {
+    throw new FeatureStorageUserFacingError(
+      `Bounded counter subject labels must contain between 1 and ` +
+      `${MAX_COUNTER_SUBJECT_LABEL_LENGTH} characters.`
+    );
+  }
+  return {
+    featureId,
+    name,
+    subject,
+    ...(subjectLabel === undefined ? {} : { subjectLabel: subjectLabel.trim() }),
+    min,
+    max,
+    initial,
+    operation,
+    amount,
+    value
+  };
 }
 
 async function boundedCounterKey(name, subject) {
@@ -367,6 +466,102 @@ async function boundedCounterKey(name, subject) {
     (value) => value.toString(16).padStart(2, "0")
   ).join("");
   return `bc_${hexadecimal.slice(0, 60)}`;
+}
+
+function counterSubjectMetadata(sql, descriptor, key) {
+  const byIdentity = sql.exec(
+    `SELECT value_key, subject_label
+     FROM framework_feature_counter_subjects
+     WHERE feature_id = ? AND counter_name = ? AND subject_identity = ?`,
+    descriptor.featureId,
+    descriptor.name,
+    descriptor.subject
+  ).toArray()[0];
+  if (byIdentity && byIdentity.value_key !== key) {
+    throw new FeatureStorageUserFacingError(
+      "The bounded counter subject identity conflicts with stored metadata.",
+      409
+    );
+  }
+  const byKey = sql.exec(
+    `SELECT counter_name, subject_identity
+     FROM framework_feature_counter_subjects
+     WHERE feature_id = ? AND value_key = ?`,
+    descriptor.featureId,
+    key
+  ).toArray()[0];
+  if (
+    byKey &&
+    (byKey.counter_name !== descriptor.name || byKey.subject_identity !== descriptor.subject)
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "The bounded counter storage key conflicts with stored subject metadata.",
+      409
+    );
+  }
+  return byIdentity ?? null;
+}
+
+function recordCounterSubject(sql, descriptor, key) {
+  if (descriptor.subjectLabel === undefined) return false;
+  const existing = counterSubjectMetadata(sql, descriptor, key);
+  if (existing) return false;
+  sql.exec(
+    `INSERT INTO framework_feature_counter_subjects
+      (feature_id, counter_name, subject_identity, subject_label,
+       value_key, created_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    descriptor.featureId,
+    descriptor.name,
+    descriptor.subject,
+    descriptor.subjectLabel,
+    key,
+    Date.now()
+  );
+  return true;
+}
+
+function boundedCounterSubjects(state, input) {
+  const featureId = requireFeatureId(input?.featureId);
+  const name = requireKey(input?.name);
+  const subjects = state.storage.sql.exec(
+    `SELECT metadata.subject_identity, metadata.subject_label, values_table.value_json
+     FROM framework_feature_counter_subjects AS metadata
+     INNER JOIN framework_feature_values AS values_table
+       ON values_table.value_kind = 'state'
+      AND values_table.feature_id = metadata.feature_id
+      AND values_table.value_key = metadata.value_key
+     WHERE metadata.feature_id = ? AND metadata.counter_name = ?
+     ORDER BY metadata.subject_identity`,
+    featureId,
+    name
+  ).toArray().map((entry) => ({
+    identity: entry.subject_identity,
+    label: entry.subject_label,
+    value: JSON.parse(entry.value_json)
+  }));
+  const unidentified = state.storage.sql.exec(
+    `SELECT COUNT(*) AS total
+     FROM framework_feature_values AS values_table
+     LEFT JOIN framework_feature_counter_subjects AS metadata
+       ON metadata.feature_id = values_table.feature_id
+      AND metadata.value_key = values_table.value_key
+     WHERE values_table.value_kind = 'state'
+       AND values_table.feature_id = ?
+       AND length(values_table.value_key) = 63
+       AND values_table.value_key GLOB 'bc_[0-9a-f]*'
+       AND metadata.value_key IS NULL`,
+    featureId
+  ).toArray()[0];
+  const unidentifiedCount = Number(unidentified?.total ?? 0);
+  return {
+    subjects,
+    coverage: {
+      complete: unidentifiedCount === 0,
+      identifiedCount: subjects.length,
+      unidentifiedCount
+    }
+  };
 }
 
 async function boundedCounterState(state, input) {
@@ -409,6 +604,13 @@ async function boundedCounterState(state, input) {
       );
     }
     if (!existing && value === descriptor.initial) return { value };
+    const valueJson = JSON.stringify(value);
+    if (existing?.value_json === valueJson) {
+      if (recordCounterSubject(state.storage.sql, descriptor, key)) {
+        touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+      }
+      return { value };
+    }
     if (!existing && namespaceAtCapacity(
       state.storage.sql,
       "state",
@@ -428,9 +630,11 @@ async function boundedCounterState(state, input) {
          updated_at_ms = excluded.updated_at_ms`,
       descriptor.featureId,
       key,
-      JSON.stringify(value),
+      valueJson,
       Date.now()
     );
+    recordCounterSubject(state.storage.sql, descriptor, key);
+    touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
     return { value };
   });
 }
@@ -506,6 +710,10 @@ export async function handleFeatureStateStorageOperation(state, operation, input
   switch (operation) {
     case "state/get":
       return getValue(state.storage.sql, "state", input);
+    case "state/query-read":
+      return queryReadValue(state.storage.sql, input);
+    case "state/revision":
+      return featureStateRevision(state.storage.sql, input);
     case "state/set":
       return setValue(state, "state", input);
     case "state/delete":
@@ -514,17 +722,27 @@ export async function handleFeatureStateStorageOperation(state, operation, input
       return incrementState(state, input);
     case "state/bounded-counter":
       return await boundedCounterState(state, input);
+    case "state/bounded-counter-subjects":
+      return boundedCounterSubjects(state, input);
     default:
       return null;
   }
 }
 
-export async function handleFeatureStorageRequest(state, request, pathname) {
+export async function handleFeatureStorageRequest(
+  state,
+  request,
+  pathname,
+  { beforeStateMutation = null } = {}
+) {
   if (request.method !== "POST" || !pathname.startsWith(FEATURE_STORAGE_PATH_PREFIX)) {
     return null;
   }
   const input = await request.json();
   const operation = pathname.slice(FEATURE_STORAGE_PATH_PREFIX.length);
+  if (featureStateOperationMutates(operation, input) && beforeStateMutation) {
+    await beforeStateMutation(input, operation);
+  }
   switch (operation) {
     case "config/get":
       return getValue(state.storage.sql, "config", input);

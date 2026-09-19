@@ -24,6 +24,14 @@ Framework API: v1.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | fun.deaths | `game_deaths` | Per-game death counts | 1 | 1 | entry_count | 100 entries; 16384 bytes/value | integrationState |
 
+## Readable state exports
+
+| Feature | Export | Version | Kind | Platforms | Scope | Access eligibility | Parameters | Result | Absence | Legacy coverage |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fun.deaths | `remembered_game` | 1 | value | discord, twitch | group_local | operator_grant | — | string | unselected | — |
+| fun.deaths | `count` | 1 | lookup | discord, twitch | effective_shareable | operator_grant | game | object | default | — |
+| fun.deaths | `counts` | 1 | collection | discord, twitch | effective_shareable | operator_grant | — | array | default | explicit |
+
 ## Workspace packages
 
 | Package | Feature | Installed by Worker |

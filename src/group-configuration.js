@@ -4,6 +4,23 @@ import {
   handleFeatureStorageRequest,
   initializeFeatureStorageTables
 } from "./framework/feature-storage.js";
+import {
+  drainStateQueryGrantInvalidations,
+  handleStateQueryGrantStorageRequest,
+  hasPendingStateQueryGrantInvalidations,
+  initializeStateQueryGrantTables,
+  recoverStateQueryGrantInvalidations,
+  StateQueryGrantStorageError
+} from "./state-querying/grant-storage.js";
+import {
+  drainStateQueryNotifications,
+  handleLocalStateQuerySourceWatchRequest,
+  initializeLocalStateNotificationTables,
+  prepareStateQueryMutation,
+  recoverStateQueryNotificationDelivery,
+  stateQueryNotificationTablesExist,
+  StateQueryNotificationError
+} from "./state-querying/source-notifications.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -191,6 +208,19 @@ export class GroupConfig {
     this.env = env;
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
+    initializeStateQueryGrantTables(state);
+    const hasNotificationTables = stateQueryNotificationTablesExist(state);
+    if (hasNotificationTables) {
+      initializeLocalStateNotificationTables(state);
+    }
+    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state)) {
+      state.blockConcurrencyWhile(async () => {
+        await recoverStateQueryGrantInvalidations(state);
+        if (hasNotificationTables) {
+          await recoverStateQueryNotificationDelivery(state);
+        }
+      });
+    }
   }
 
   async exportConfig() {
@@ -279,9 +309,34 @@ export class GroupConfig {
       const featureStorageResult = await handleFeatureStorageRequest(
         this.state,
         request,
-        url.pathname
+        url.pathname,
+        {
+          beforeStateMutation: async (input) => await prepareStateQueryMutation(
+            this.state,
+            {
+              kind: "group_local",
+              featureId: input.featureId,
+              namespaceId: ""
+            }
+          )
+        }
       );
       if (featureStorageResult !== null) return jsonResponse(featureStorageResult);
+
+      const stateQueryWatchResult = await handleLocalStateQuerySourceWatchRequest(
+        this.state,
+        this.env,
+        request,
+        url.pathname
+      );
+      if (stateQueryWatchResult !== null) return stateQueryWatchResult;
+
+      const stateQueryGrantResult = await handleStateQueryGrantStorageRequest(
+        this.state,
+        request,
+        url.pathname
+      );
+      if (stateQueryGrantResult !== null) return stateQueryGrantResult;
 
       const pathHandlers = requestHandlers[request.method];
       const pathHandler = pathHandlers && pathHandlers[url.pathname];
@@ -290,7 +345,9 @@ export class GroupConfig {
     } catch (e) {
       if (
         e instanceof GroupConfigUserFacingError ||
-        e instanceof FeatureStorageUserFacingError
+        e instanceof FeatureStorageUserFacingError ||
+        e instanceof StateQueryGrantStorageError ||
+        e instanceof StateQueryNotificationError
       ) {
         return jsonResponse({ userFacingError: e.message }, e.status);
       }
@@ -303,6 +360,13 @@ export class GroupConfig {
         route: url.pathname
       }, e);
       return jsonResponse({ error: "Unknown error.", correlationId }, 500);
+    }
+  }
+
+  async alarm() {
+    await drainStateQueryGrantInvalidations(this.state, this.env);
+    if (stateQueryNotificationTablesExist(this.state)) {
+      await drainStateQueryNotifications(this.state, this.env);
     }
   }
 }

@@ -3,6 +3,7 @@ import {
   frameworkApiVersion,
   supportedFrameworkApiVersions
 } from "./api-version.js";
+import { isReadableStateExport } from "./readable-state.js";
 
 const FEATURE_ID_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
@@ -26,6 +27,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "events",
   "schedules",
   "shareableState",
+  "readableState",
   "effectAdapters"
 ]);
 const SUPPORTED_PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -258,6 +260,26 @@ function shareableState(value) {
   return Object.freeze(namespaces);
 }
 
+function readableState(value) {
+  const path = "Feature definition.readableState";
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 50) {
+    fail(path, "must be an array of at most 50 entries.");
+  }
+  const identities = new Set();
+  return Object.freeze(value.map((entry, index) => {
+    if (!isReadableStateExport(entry)) {
+      fail(`${path}[${index}]`, "must use defineReadableStateExport().");
+    }
+    const identity = `${entry.id}:v${entry.version}`;
+    if (identities.has(identity)) {
+      fail(`${path}[${index}]`, "duplicates an export ID and version.");
+    }
+    identities.add(identity);
+    return entry;
+  }));
+}
+
 export function defineFeature(input) {
   requirePlainObject(input, "Feature definition");
   for (const field of Object.keys(input)) {
@@ -303,6 +325,7 @@ export function defineFeature(input) {
     events: definitionArray(input.events, "Feature definition.events"),
     schedules: definitionArray(input.schedules, "Feature definition.schedules"),
     shareableState: shareableState(input.shareableState),
+    readableState: readableState(input.readableState),
     effectAdapters: platformCollections(
       input.effectAdapters,
       "Feature definition.effectAdapters"

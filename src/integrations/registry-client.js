@@ -103,6 +103,18 @@ export async function resolveEffectiveShareableStateRealm(env, input) {
   return postRegistry(env, "/shareable-state/resolve", input);
 }
 
+export async function getStateQueryBinding(env, input) {
+  return postRegistry(env, "/state-query/bindings/get", input);
+}
+
+export async function registerStateQueryBindingWatcher(env, input) {
+  return postRegistry(env, "/state-query/bindings/register", input);
+}
+
+export async function unregisterStateQueryBindingWatcher(env, input) {
+  return postRegistry(env, "/state-query/bindings/unregister", input);
+}
+
 export async function setIntegrationDefaultLink(env, input) {
   return postRegistry(env, "/default-links/set", input);
 }

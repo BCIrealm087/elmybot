@@ -104,4 +104,42 @@ describe("recipe.shareable", () => {
       expect(allowed.stateAfter).toEqual({ message: `Score: ${expected}` });
     }
   });
+
+  it("exposes ordinary mutations through its readable state", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const group = discordTestGroup();
+    const query = {
+      version: 1,
+      target: { platform: "discord", groupId: group.id },
+      bindings: {
+        score: {
+          read: { feature: "recipe.shareable", export: "score", version: 1 }
+        }
+      },
+      select: { score: { ref: "score" } }
+    };
+    const subscription = await runtime.query.watch(query);
+    expect(subscription.initial.envelope.data.score)
+      .toEqual({ state: "present", value: 0 });
+
+    const initialRevision = subscription.initial.envelope.resultRevision;
+    runtime.links.set([defaultTestLink({
+      sourceGroup: group,
+      targetGroup: twitchTestGroup()
+    })]);
+    const handoff = await subscription.next();
+    expect(handoff.envelope.reason).toBe("source_changed");
+    expect(handoff.envelope.resultRevision).not.toBe(initialRevision);
+    expect(handoff.envelope.data.score)
+      .toEqual({ state: "present", value: 0 });
+
+    await runtime.discord.command("shareable", {
+      group,
+      actor: discordTestModerator(),
+      args: { operation: "plus" }
+    });
+    expect((await subscription.next()).envelope.data.score)
+      .toEqual({ state: "present", value: 1 });
+    subscription.close();
+  });
 });

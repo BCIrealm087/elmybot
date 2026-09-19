@@ -1,4 +1,14 @@
 import { jsonResponse, logError } from "../common.js";
+import { alarmDrainTimeRemaining } from "../alarm-drain.js";
+import {
+  advanceStateQueryBinding,
+  drainStateQueryBindingNotifications,
+  prepareStateQueryBindingMutation,
+  pruneStateQueryBindingNotifications,
+  registerStateQueryBindingWatcher,
+  unregisterStateQueryBindingWatcher
+} from "../state-querying/binding-notifications.js";
+import { StateQueryNotificationError } from "../state-querying/source-notifications.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
   cloneShareableStateSnapshot,
@@ -46,11 +56,13 @@ export {
   getIntegrationById,
   getIntegrationDefaultLink,
   getIntegrationManagementStatus,
+  getStateQueryBinding,
   INTEGRATION_REGISTRY_NAME,
   integrationRegistryStub,
   listIntegrationAudit,
   listIntegrationsForGroup,
   reserveIntegrationInvitation,
+  registerStateQueryBindingWatcher,
   resolvePendingIntegrationState,
   resolveEffectiveShareableStateRealm,
   resumePendingIntegration,
@@ -58,6 +70,7 @@ export {
   revokeIntegration,
   revokeIntegrationsForGroup,
   setIntegrationDefaultLink,
+  unregisterStateQueryBindingWatcher,
   updateIntegrationRoute,
   verifyIntegrationInvitation
 } from "./registry-client.js";
@@ -76,6 +89,13 @@ const MAX_PENDING_STATE_SELECTIONS = 500;
 const PENDING_STATE_SELECTIONS = new Set(["discord", "twitch", "reset"]);
 const FINALIZATION_SEAL_LEASE_MS = 60 * 1000;
 const REGISTRY_REVOCATION_RETRY_MS = 5 * 1000;
+const BINDING_LIFECYCLE_MUTATION_PATHS = new Set([
+  "/invitations/activate",
+  "/default-links/set",
+  "/shareable-state/resolve",
+  "/integrations/revoke",
+  "/groups/revoke"
+]);
 
 function noStoreJson(value, status = 200) {
   const response = jsonResponse(value, status);
@@ -130,9 +150,14 @@ export class IntegrationRegistry {
     this.integrationRevocations = new Map();
     this.groupRevocations = new Map();
     initializeRegistryTables(state);
+    state.blockConcurrencyWhile(async () => {
+      await this.armNextExpiration();
+    });
   }
 
   async armNextExpiration() {
+    const nowMs = Date.now();
+    pruneStateQueryBindingNotifications(this.state.storage.sql, nowMs);
     const nextMaintenance = this.state.storage.sql.exec(
       `WITH next_maintenance(next_at_ms) AS (VALUES
          ((SELECT MIN(expires_at_ms)
@@ -152,7 +177,11 @@ export class IntegrationRegistry {
          ((SELECT MIN(requested_at_ms) + ?
            FROM integration_group_revocations)),
          ((SELECT MIN(requested_at_ms) + ?
-           FROM integration_revocation_jobs))
+           FROM integration_revocation_jobs)),
+         ((SELECT MIN(next_attempt_at_ms)
+           FROM state_query_binding_outbox)),
+         ((SELECT MIN(lease_expires_at_ms)
+           FROM state_query_binding_watchers))
        )
        SELECT MIN(next_at_ms) AS next_at_ms FROM next_maintenance`,
       INTEGRATION_INVITATION_RETENTION_MS,
@@ -160,7 +189,7 @@ export class IntegrationRegistry {
       REGISTRY_REVOCATION_RETRY_MS
     ).one().next_at_ms;
     if (nextMaintenance === null) await this.state.storage.deleteAlarm();
-    else await this.state.storage.setAlarm(Math.max(Date.now(), nextMaintenance));
+    else await this.state.storage.setAlarm(Math.max(nowMs, nextMaintenance));
   }
 
   async createInvitation(input) {
@@ -411,6 +440,88 @@ export class IntegrationRegistry {
     return row ? publicDefaultLink(row) : null;
   }
 
+  stateQueryBinding(sourceGroupInput, targetPlatformInput) {
+    const sourceGroup = validatedGroup(sourceGroupInput);
+    const targetPlatform = validatedPlatform(
+      targetPlatformInput,
+      "State-query binding target platform"
+    );
+    if (sourceGroup.platform === targetPlatform) {
+      throw new IntegrationRegistryError(
+        "A state-query binding must target another platform.",
+        { status: 422, code: "integration_default_platform_invalid" }
+      );
+    }
+    const recorded = this.state.storage.sql.exec(
+      `SELECT binding_revision, binding_status, source_key, reason
+       FROM state_query_binding_revisions
+       WHERE source_group_key = ? AND target_platform = ?`,
+      sourceGroup.key,
+      targetPlatform
+    ).toArray()[0];
+    let status;
+    let sourceKey;
+    let defaultReason;
+    const transition = this.defaultLinkTransition(sourceGroup, targetPlatform);
+    if (transition && transition !== "active") {
+      status = "transitioning";
+      sourceKey = null;
+      defaultReason = "transition_started";
+    } else {
+      const defaultLink = this.getDefaultLink(sourceGroup, targetPlatform);
+      if (defaultLink) {
+        status = "ready";
+        sourceKey = shareableStateRealmObjectName(createIntegrationRealmIdentity(
+          defaultLink.integration,
+          { generation: defaultLink.integration.shareableStateGeneration ?? 1 }
+        ));
+        defaultReason = "integration_selected";
+      } else {
+        const successor = this.state.storage.sql.exec(
+          `SELECT generation, status FROM shareable_state_standalone_successors
+           WHERE group_key = ?`,
+          sourceGroup.key
+        ).toArray()[0];
+        if (successor && successor.status !== "ready") {
+          status = successor.status === "pending" ? "transitioning" : "unavailable";
+          sourceKey = null;
+          defaultReason = successor.status === "pending"
+            ? "successor_pending"
+            : "successor_unavailable";
+        } else {
+          status = "ready";
+          sourceKey = shareableStateRealmObjectName(createStandaloneRealmIdentity(
+            sourceGroup,
+            { generation: successor?.generation ?? 1 }
+          ));
+          defaultReason = successor ? "successor_ready" : "initial";
+        }
+      }
+    }
+    const recordedMatches = recorded &&
+      recorded.binding_status === status &&
+      (recorded.source_key ?? null) === sourceKey;
+    return {
+      revision: Number(recorded?.binding_revision ?? 0),
+      status,
+      sourceKey,
+      reason: recordedMatches ? recorded.reason : defaultReason
+    };
+  }
+
+  advanceStateQueryBinding(input) {
+    return advanceStateQueryBinding(this.state, input);
+  }
+
+  registerStateQueryBindingWatcher(input) {
+    const binding = this.stateQueryBinding(input?.sourceGroup, input?.targetPlatform);
+    return registerStateQueryBindingWatcher(this.state, this.env, input, binding);
+  }
+
+  unregisterStateQueryBindingWatcher(input) {
+    return unregisterStateQueryBindingWatcher(this.state, this.env, input);
+  }
+
   requireDefaultLinkTarget({
     sourceGroup: sourceGroupInput,
     targetGroup: targetGroupInput,
@@ -486,6 +597,18 @@ export class IntegrationRegistry {
         groupKey: sourceGroup.key,
         occurredAtMs: nowMs
       });
+      const integration = this.getIntegration(integrationId);
+      this.advanceStateQueryBinding({
+        sourceGroup,
+        targetPlatform: targetGroup.platform,
+        status: "ready",
+        sourceKey: shareableStateRealmObjectName(createIntegrationRealmIdentity(
+          integration,
+          { generation: integration.shareableStateGeneration ?? 1 }
+        )),
+        reason: "integration_activated",
+        nowMs
+      });
     }
     return this.getDefaultLink(sourceGroup, targetGroup.platform);
   }
@@ -543,6 +666,18 @@ export class IntegrationRegistry {
         actor,
         groupKey: sourceGroup.key,
         occurredAtMs: nowMs
+      });
+      const integration = this.getIntegration(integrationId);
+      this.advanceStateQueryBinding({
+        sourceGroup,
+        targetPlatform: targetGroup.platform,
+        status: "ready",
+        sourceKey: shareableStateRealmObjectName(createIntegrationRealmIdentity(
+          integration,
+          { generation: integration.shareableStateGeneration ?? 1 }
+        )),
+        reason: "default_changed",
+        nowMs
       });
       return {
         changed: true,
@@ -607,6 +742,18 @@ export class IntegrationRegistry {
           event: "integration.default.fallback.v1",
           groupKey: edge.source_group_key,
           occurredAtMs: nowMs
+        });
+        const fallbackIntegration = this.getIntegration(fallback.integration_id);
+        this.advanceStateQueryBinding({
+          sourceGroup: parseGroupKey(edge.source_group_key),
+          targetPlatform: edge.target_platform,
+          status: "ready",
+          sourceKey: shareableStateRealmObjectName(createIntegrationRealmIdentity(
+            fallbackIntegration,
+            { generation: fallbackIntegration.shareableStateGeneration ?? 1 }
+          )),
+          reason: "fallback_selected",
+          nowMs
         });
         reassigned += 1;
         continue;
@@ -955,8 +1102,12 @@ export class IntegrationRegistry {
     ).toArray()[0]?.status ?? null;
   }
 
-  async ensureStandaloneSuccessor(groupInput, correlationId) {
+  async ensureStandaloneSuccessor(groupInput, targetPlatformInput, correlationId) {
     const group = validatedGroup(groupInput);
+    const targetPlatform = validatedPlatform(
+      targetPlatformInput,
+      "State-query binding target platform"
+    );
     const successor = this.state.storage.sql.exec(
       `SELECT group_key, generation, status, source_integration_id,
               source_generation
@@ -1078,6 +1229,14 @@ export class IntegrationRegistry {
         groupKey: group.key,
         occurredAtMs: readyAtMs
       });
+      this.advanceStateQueryBinding({
+        sourceGroup: group,
+        targetPlatform,
+        status: "ready",
+        sourceKey: shareableStateRealmObjectName(targetRealm),
+        reason: "successor_ready",
+        nowMs: readyAtMs
+      });
     });
     return targetRealm;
   }
@@ -1102,20 +1261,37 @@ export class IntegrationRegistry {
       );
     }
     let defaultLink = this.getDefaultLink(sourceGroup, targetPlatform);
-    if (defaultLink) return { defaultLink, standaloneRealm: null };
+    if (defaultLink) {
+      return {
+        defaultLink,
+        standaloneRealm: null,
+        bindingRevision: this.stateQueryBinding(sourceGroup, targetPlatform).revision
+      };
+    }
     const standaloneRealm = await this.ensureStandaloneSuccessor(
       sourceGroup,
+      targetPlatform,
       input?.correlationId
     );
     defaultLink = this.getDefaultLink(sourceGroup, targetPlatform);
-    if (defaultLink) return { defaultLink, standaloneRealm: null };
+    if (defaultLink) {
+      return {
+        defaultLink,
+        standaloneRealm: null,
+        bindingRevision: this.stateQueryBinding(sourceGroup, targetPlatform).revision
+      };
+    }
     if (this.defaultLinkTransition(sourceGroup, targetPlatform)) {
       throw new IntegrationRegistryError(
         "Shareable state changed while its standalone successor was prepared.",
         { status: 409, code: "shareable_state_transition" }
       );
     }
-    return { defaultLink: null, standaloneRealm };
+    return {
+      defaultLink: null,
+      standaloneRealm,
+      bindingRevision: this.stateQueryBinding(sourceGroup, targetPlatform).revision
+    };
   }
 
   async ensureEffectiveCandidateRealm(group, targetPlatform, correlationId) {
@@ -2508,6 +2684,13 @@ export class IntegrationRegistry {
         );
       }
       if (integration.status === "active") {
+        const selectedBindings = this.state.storage.sql.exec(
+          `SELECT source_group_key, target_platform
+           FROM integration_default_links
+           WHERE integration_id = ?
+           ORDER BY source_group_key, target_platform`,
+          integrationId
+        ).toArray();
         this.state.storage.sql.exec(
           `UPDATE integrations
            SET status = 'revoking', updated_at_ms = ?, revoked_reason = ?
@@ -2523,6 +2706,16 @@ export class IntegrationRegistry {
           groupKey: group.key,
           occurredAtMs: requestedAtMs
         });
+        for (const binding of selectedBindings) {
+          this.advanceStateQueryBinding({
+            sourceGroup: parseGroupKey(binding.source_group_key),
+            targetPlatform: binding.target_platform,
+            status: "transitioning",
+            sourceKey: null,
+            reason: "revocation_started",
+            nowMs: requestedAtMs
+          });
+        }
       }
       this.state.storage.sql.exec(
         `INSERT INTO integration_revocation_jobs
@@ -2624,6 +2817,14 @@ export class IntegrationRegistry {
       event: "integration.state_successor.recorded.v1",
       groupKey: sourceGroup.key,
       occurredAtMs: nowMs
+    });
+    this.advanceStateQueryBinding({
+      sourceGroup,
+      targetPlatform: edge.targetPlatform,
+      status: "transitioning",
+      sourceKey: null,
+      reason: "successor_pending",
+      nowMs
     });
   }
 
@@ -2800,6 +3001,7 @@ export class IntegrationRegistry {
   }
 
   async performGroupRevocationBatch(groupKey) {
+    const startedAtMs = Date.now();
     const job = this.state.storage.sql.exec(
       `SELECT group_key, actor_platform, actor_id, reason
        FROM integration_group_revocations
@@ -2824,7 +3026,8 @@ export class IntegrationRegistry {
       ? { platform: job.actor_platform, id: job.actor_id }
       : null;
     let revoked = 0;
-    for (const row of rows) {
+    for (const [processed, row] of rows.entries()) {
+      if (!alarmDrainTimeRemaining(startedAtMs, processed)) break;
       const integration = this.getIntegration(row.integration_id);
       if (integration.status === "active") {
         this.beginIntegrationRevocation({
@@ -3039,6 +3242,7 @@ export class IntegrationRegistry {
       this.pruneTerminalInvitations();
       await this.processNextGroupRevocation();
       await this.processNextIntegrationRevocation();
+      await drainStateQueryBindingNotifications(this.state, this.env);
     } finally {
       await this.armNextExpiration();
     }
@@ -3047,6 +3251,12 @@ export class IntegrationRegistry {
   async fetch(request) {
     const url = new URL(request.url);
     try {
+      if (
+        request.method === "POST" &&
+        BINDING_LIFECYCLE_MUTATION_PATHS.has(url.pathname)
+      ) {
+        await prepareStateQueryBindingMutation(this.state);
+      }
       if (request.method === "POST" && url.pathname === "/invitations") {
         return noStoreJson(await this.createInvitation(await request.json()), 201);
       }
@@ -3084,7 +3294,31 @@ export class IntegrationRegistry {
         });
       }
       if (request.method === "POST" && url.pathname === "/default-links/set") {
-        return noStoreJson(this.setDefaultLink(await request.json()));
+        const result = this.setDefaultLink(await request.json());
+        await this.armNextExpiration();
+        return noStoreJson(result);
+      }
+      if (request.method === "POST" && url.pathname === "/state-query/bindings/get") {
+        const input = await request.json();
+        return noStoreJson({
+          binding: this.stateQueryBinding(input?.sourceGroup, input?.targetPlatform)
+        });
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/state-query/bindings/register"
+      ) {
+        const result = this.registerStateQueryBindingWatcher(await request.json());
+        await this.armNextExpiration();
+        return noStoreJson(result);
+      }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/state-query/bindings/unregister"
+      ) {
+        const result = this.unregisterStateQueryBindingWatcher(await request.json());
+        await this.armNextExpiration();
+        return noStoreJson(result);
       }
       if (
         request.method === "POST" &&
@@ -3124,7 +3358,10 @@ export class IntegrationRegistry {
       }
       return new Response("Not found", { status: 404 });
     } catch (error) {
-      if (error instanceof IntegrationRegistryError) {
+      if (
+        error instanceof IntegrationRegistryError ||
+        error instanceof StateQueryNotificationError
+      ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }
       logError("integration.registry_failed", {

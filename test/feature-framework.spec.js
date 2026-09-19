@@ -44,6 +44,7 @@ function feature({
   events = [],
   schedules = [],
   shareableState = [],
+  readableState = [],
   discord = [],
   twitch = []
 } = {}) {
@@ -56,6 +57,7 @@ function feature({
     events,
     schedules,
     shareableState,
+    readableState,
     commands: { discord, twitch }
   });
 }
@@ -90,6 +92,7 @@ describe("Command and feature framework", () => {
       events: [],
       schedules: [],
       shareableState: [],
+      readableState: [],
       effectAdapters: { discord: [], twitch: [] }
     });
     expect(Object.isFrozen(definition)).toBe(true);
@@ -492,7 +495,8 @@ describe("Command and feature framework", () => {
         await ctx.state.set("last_roll", 4);
         const total = await ctx.state.increment("total", 2);
         const streak = ctx.state.boundedCounter("streak", "Dark Souls", {
-          max: 10
+          max: 10,
+          subjectLabel: " Dark Souls "
         });
         const boundedTotal = await streak.increment(2);
         return {
@@ -563,6 +567,7 @@ describe("Command and feature framework", () => {
       {
         name: "streak",
         subject: "Dark Souls",
+        subjectLabel: "Dark Souls",
         min: 0,
         max: 10,
         initial: 0
@@ -900,6 +905,30 @@ describe("Command and feature framework", () => {
       invocation,
       { featureServices: { state: { boundedCounter: vi.fn() } } }
     )).rejects.toMatchObject({ code: "feature_counter_bounds_invalid" });
+
+    const invalidLabelAction = defineAction({
+      kind: "test.counter.invalid-label.v1",
+      supportedOrigins: ["discord"],
+      uses: { services: ["state"] },
+      async execute(ctx) {
+        await ctx.state.boundedCounter("score", "game", {
+          subjectLabel: "x".repeat(81)
+        }).get();
+        return { output: {}, effects: [] };
+      }
+    });
+    const invalidLabelRegistry = createFeatureRegistry([
+      feature({ actions: [invalidLabelAction] })
+    ], { availableServices: ["state"] });
+    await expect(executeAction(
+      createActionRegistry(invalidLabelRegistry.actions),
+      createCommandInvocation({
+        ...invocation,
+        kind: invalidLabelAction.kind,
+        sourceEventId: "discord:interaction:invalid-counter-label"
+      }),
+      { featureServices: { state: { boundedCounter: vi.fn() } } }
+    )).rejects.toMatchObject({ code: "feature_counter_subject_label_invalid" });
   });
 
   it("validates bounded-counter assignments at the author API", async () => {

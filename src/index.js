@@ -19,6 +19,8 @@ import { createTwitchEventSubRegistry } from "./platforms/twitch/eventsub-regist
 import { TwitchEventSubServiceBackend } from "./platforms/twitch/eventsub-service.js";
 import { featureRegistry } from "./features/index.js";
 import { ShareableStateRealmBackend } from "./shareable-state/index.js";
+import { handleStateQueryRequest } from "./state-querying/http.js";
+import { StateQueryObserverBackend } from "./state-querying/observer.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers,
@@ -65,6 +67,7 @@ export class ShareableStateRealm extends ShareableStateRealmBackend {
     super(state, env, featureRegistry);
   }
 }
+export class StateQueryObserver extends StateQueryObserverBackend {}
 export { GroupConfig } from "./group-configuration.js";
 export { TwitchAppAuth } from "./platforms/twitch/app-auth.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
@@ -90,6 +93,9 @@ export default {
     }
     if (url.pathname === "/twitch" || url.pathname.startsWith("/twitch/")) {
       return handleTwitchRequest(request, env, ctx, twitchEventSubRegistry);
+    }
+    if (url.pathname === "/state-query" || url.pathname.startsWith("/state-query/")) {
+      return handleStateQueryRequest(request, env);
     }
     return new Response("Not found", { status: 404 });
   },

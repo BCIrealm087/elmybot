@@ -167,6 +167,51 @@ function normalizeSnapshot(snapshot) {
     }
     return Object.freeze({ key: entry.key, value: freezeJson(entry.value) });
   });
+  const entryKeys = new Set(entries.map((entry) => entry.key));
+  const counterSubjectsInput = snapshot.counterSubjects ?? [];
+  if (!Array.isArray(counterSubjectsInput) || counterSubjectsInput.length > entries.length) {
+    throw new ShareableStateRealmError(
+      "The shareable-state snapshot counter subjects are invalid.",
+      { status: 502, code: "shareable_state_snapshot_invalid" }
+    );
+  }
+  const subjectIdentities = new Set();
+  const subjectValueKeys = new Set();
+  const counterSubjects = counterSubjectsInput.map((subject) => {
+    const identityKey = `${subject?.counterName}\u0000${subject?.identity}`;
+    if (
+      typeof subject?.counterName !== "string" ||
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(subject.counterName) ||
+      typeof subject?.identity !== "string" ||
+      subject.identity.length === 0 ||
+      subject.identity.length > 300 ||
+      typeof subject?.label !== "string" ||
+      subject.label.length === 0 ||
+      subject.label.length > 80 ||
+      Array.from(subject.label).some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint <= 31 || codePoint === 127;
+      }) ||
+      typeof subject?.valueKey !== "string" ||
+      !/^[a-z][a-z0-9_-]{0,63}$/.test(subject.valueKey) ||
+      !entryKeys.has(subject.valueKey) ||
+      subjectIdentities.has(identityKey) ||
+      subjectValueKeys.has(subject.valueKey)
+    ) {
+      throw new ShareableStateRealmError(
+        "The shareable-state snapshot counter subjects are invalid.",
+        { status: 502, code: "shareable_state_snapshot_invalid" }
+      );
+    }
+    subjectIdentities.add(identityKey);
+    subjectValueKeys.add(subject.valueKey);
+    return Object.freeze({
+      counterName: subject.counterName,
+      identity: subject.identity,
+      label: subject.label,
+      valueKey: subject.valueKey
+    });
+  });
   const summary = snapshot.summary.kind === "presence"
     ? { kind: "presence", used: snapshot.summary.used }
     : snapshot.summary.kind === "entry_count"
@@ -201,7 +246,10 @@ function normalizeSnapshot(snapshot) {
     fingerprint: snapshot.fingerprint,
     meaningful: snapshot.meaningful,
     summary: Object.freeze(summary),
-    entries: Object.freeze(entries)
+    entries: Object.freeze(entries),
+    ...(counterSubjects.length > 0
+      ? { counterSubjects: Object.freeze(counterSubjects) }
+      : {})
   });
 }
 

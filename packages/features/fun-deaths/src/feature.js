@@ -2,6 +2,7 @@ import {
   access,
   defineAction,
   defineFeature,
+  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -40,8 +41,52 @@ function gameIdentity(game) {
   return displayName(game).normalize("NFKC").toLowerCase();
 }
 
+export function normalizeGameSubject(game) {
+  const label = displayName(game);
+  return Object.freeze({ value: gameIdentity(label), label });
+}
+
+function queryTarget(target) {
+  return { platform: target.platform, groupId: target.groupId };
+}
+
+export function fixedGameDeathsQuery(target, game) {
+  return {
+    version: 1,
+    target: queryTarget(target),
+    bindings: {
+      count: {
+        read: { feature: "fun.deaths", export: "count", version: 1 },
+        arguments: { game: { literal: game } }
+      }
+    },
+    select: { deaths: { ref: "count" } }
+  };
+}
+
+export function currentGameDeathsQuery(target) {
+  return {
+    version: 1,
+    target: queryTarget(target),
+    bindings: {
+      remembered: {
+        read: { feature: "fun.deaths", export: "remembered_game", version: 1 }
+      },
+      current: {
+        read: { feature: "fun.deaths", export: "count", version: 1 },
+        arguments: { game: { ref: "remembered" } }
+      }
+    },
+    select: { deaths: { ref: "current" } }
+  };
+}
+
 function countMessage(game, count) {
   return `${game} deaths: ${count}`;
+}
+
+function present(value) {
+  return Object.freeze({ state: "present", value });
 }
 
 function otherPlatform(platform) {
@@ -73,6 +118,101 @@ export const feature = defineFeature({
     // See this package's README for the migration handoff and fresh-state example.
     adoptLegacyIntegrationState: true
   }],
+  readableState: [
+    defineReadableStateExport({
+      id: "remembered_game",
+      version: 1,
+      label: "Remembered game",
+      description: "The game currently selected by this Discord guild or Twitch channel.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "group_local" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: { type: "string", minLength: 1, maxLength: 80 },
+        absence: { kind: "unselected" }
+      },
+      async resolve(ctx) {
+        const remembered = await ctx.state.get(LAST_GAME_KEY);
+        return remembered.found
+          ? present(remembered.value)
+          : Object.freeze({ state: "unselected" });
+      }
+    }),
+    defineReadableStateExport({
+      id: "count",
+      version: 1,
+      label: "Death count",
+      description: "The effective standalone or shared death count for one game.",
+      kind: "lookup",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable", namespace: "game_deaths" },
+      access: { kind: "operator_grant" },
+      parameters: {
+        game: {
+          label: "Game",
+          schema: { type: "string", minLength: 1, maxLength: 80 },
+          normalize: normalizeGameSubject
+        }
+      },
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            game: { type: "string", minLength: 1, maxLength: 80 },
+            count: { type: "integer", minimum: 0, maximum: MAX_COUNT }
+          },
+          required: ["game", "count"]
+        },
+        absence: { kind: "default" }
+      },
+      async resolve(ctx, { game }) {
+        const [count, collection] = await Promise.all([
+          ctx.state.boundedCounter("game", game, { min: 0, max: MAX_COUNT }),
+          ctx.state.boundedCounterSubjects("game")
+        ]);
+        const known = collection.subjects.find(({ identity }) => identity === game);
+        return present({ game: known?.label ?? game, count });
+      }
+    }),
+    defineReadableStateExport({
+      id: "counts",
+      version: 1,
+      label: "Materialized death counts",
+      description: "Known game subjects with materialized counters in the effective state.",
+      kind: "collection",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable", namespace: "game_deaths" },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              game: { type: "string", minLength: 1, maxLength: 80 },
+              count: { type: "integer", minimum: 0, maximum: MAX_COUNT }
+            },
+            required: ["game", "count"]
+          },
+          maxItems: 100
+        },
+        absence: { kind: "default" }
+      },
+      collection: {
+        membership: "materialized",
+        order: "canonical_subject",
+        legacyCoverage: "explicit"
+      },
+      async resolve(ctx) {
+        const collection = await ctx.state.boundedCounterSubjects("game");
+        return present(collection.subjects.map((subject) => ({
+          game: subject.label,
+          count: subject.value
+        })));
+      }
+    })
+  ],
   actions: [
     defineAction({
       kind: FUN_DEATHS_ACTION_KIND,
@@ -132,8 +272,12 @@ export const feature = defineFeature({
           otherPlatform(ctx.origin.group.platform),
           "game_deaths"
         );
-        const deaths = sharedState
-          .boundedCounter("game", gameIdentity(selectedGame));
+        const gameSubject = normalizeGameSubject(selectedGame);
+        const deaths = sharedState.boundedCounter(
+          "game",
+          gameSubject.value,
+          { subjectLabel: gameSubject.label }
+        );
 
         let count;
         if (selectedOperation.kind === "plus") {
