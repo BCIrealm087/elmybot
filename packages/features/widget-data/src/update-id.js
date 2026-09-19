@@ -44,7 +44,7 @@ export async function deriveWidgetDataUpdateId({
   ]);
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(serialized)
+    new globalThis.TextEncoder().encode(serialized)
   ));
   return UPDATE_ID_PREFIX + encodeBase64Url(digest);
 }
