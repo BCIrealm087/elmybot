@@ -6,6 +6,7 @@ import {
 const READABLE_STATE_EXPORT_TYPE = "readable-state-export";
 const EXPORT_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const FIELD_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+const RESULT_FIELD_PATTERN = /^[a-z][A-Za-z0-9_-]{0,63}$/;
 const SUPPORTED_PLATFORMS = Object.freeze(["discord", "twitch"]);
 const EXPORT_KINDS = new Set(["value", "lookup", "collection"]);
 const SCOPE_KINDS = new Set(["group_local", "effective_shareable"]);
@@ -159,7 +160,9 @@ function normalizeSchema(value, path, depth = 0) {
     fail(`${path}.properties`, `must contain 1–${MAX_SCHEMA_PROPERTIES} fields.`);
   }
   const properties = Object.freeze(Object.fromEntries(entries.map(([name, schema]) => {
-    if (!FIELD_ID_PATTERN.test(name)) fail(`${path}.properties.${name}`, "has an invalid name.");
+    if (!RESULT_FIELD_PATTERN.test(name)) {
+      fail(`${path}.properties.${name}`, "has an invalid name.");
+    }
     return [name, normalizeSchema(schema, `${path}.properties.${name}`, depth + 1)];
   })));
   if (
