@@ -66,13 +66,43 @@ function inventory(side) {
   };
 }
 
-function finalizingRealmBinding({ failOnceAt = null } = {}) {
+function widgetInventory(side, outcome) {
+  const meaningful = outcome === "both_empty"
+    ? false
+    : outcome === "discord_only"
+      ? side === "discord"
+      : outcome === "twitch_only"
+        ? side === "twitch"
+        : true;
+  const same = outcome === "identical";
+  const character = meaningful
+    ? same ? "7" : side === "discord" ? "8" : "9"
+    : "0";
+  return {
+    namespaces: [{
+      featureId: "widget.data",
+      featureLabel: "Widget data",
+      namespaceId: "published_data",
+      namespaceLabel: "Published widget data",
+      schemaVersion: 1,
+      mutationVersion: meaningful ? 1 : 0,
+      fingerprint: fingerprint(character),
+      meaningful,
+      summary: { kind: "presence", used: meaningful }
+    }]
+  };
+}
+
+function finalizingRealmBinding({
+  failOnceAt = null,
+  inventoryFor = inventory
+} = {}) {
   const targets = new Map();
   const materializations = new Map();
   const overrides = new Map();
   let failed = false;
   const currentInventory = (side) => ({
-    namespaces: inventory(side).namespaces.map((namespace) =>
+    namespaces: inventoryFor(side).namespaces.map((namespace) =>
       overrides.get(`${side}\u0000${namespace.namespaceId}`) ?? namespace
     )
   });
@@ -174,6 +204,14 @@ function finalizingRealmBinding({ failOnceAt = null } = {}) {
               }, { status: 503 });
             }
             const targetFingerprint = fingerprint("e");
+            const declared = currentInventory("discord").namespaces.find(
+              (namespace) =>
+                namespace.featureId === body.namespace.featureId &&
+                namespace.namespaceId === body.namespace.namespaceId
+            );
+            const summary = declared.summary.kind === "presence"
+              ? { kind: "presence", used: false }
+              : { kind: "entry_count", used: false, entryCount: 0 };
             targets.set(namespaceKey, {
               formatVersion: 1,
               namespace: {
@@ -184,7 +222,7 @@ function finalizingRealmBinding({ failOnceAt = null } = {}) {
               mutationVersion: 1,
               fingerprint: targetFingerprint,
               meaningful: false,
-              summary: { kind: "entry_count", used: false, entryCount: 0 },
+              summary,
               entries: []
             });
             const result = {
@@ -213,6 +251,102 @@ function finalizingRealmBinding({ failOnceAt = null } = {}) {
 }
 
 describe("Pending integration shareable-state discovery", () => {
+  it("classifies every widget-data presence outcome and applies its resolution", async () => {
+    const cases = [
+      ["both_empty", "reset"],
+      ["discord_only", "discord"],
+      ["twitch_only", "twitch"],
+      ["identical", "discord"],
+      ["collision", null]
+    ];
+    for (const [outcome, automaticSelection] of cases) {
+      const discord = discordGroup();
+      const twitch = twitchGroup();
+      await runInDurableObject(
+        integrationRegistryStub(env),
+        async (_registryInstance, registryState) => {
+          const realms = finalizingRealmBinding({
+            inventoryFor: (side) => widgetInventory(side, outcome)
+          });
+          const registry = new IntegrationRegistry(registryState, {
+            ...env,
+            SHAREABLE_STATE_REALM: realms.binding
+          });
+          const invitation = await registry.createInvitation({
+            group: discord,
+            actor: { platform: "discord", id: uniqueId("manager"), claims: [] },
+            connectUrl: "https://example.com/twitch/integrations/connect"
+          });
+          const reservationId = crypto.randomUUID();
+          const reservation = await registry.reserveInvitation({
+            token: invitationToken(invitation),
+            reservationId,
+            reservationExpiresAtMs: Date.now() + 10 * 60 * 1000
+          });
+          const verification = await registry.verifyInvitation({
+            invitationId: reservation.invitationId,
+            reservationId,
+            group: twitch,
+            actor: {
+              platform: "twitch",
+              id: twitch.id,
+              claims: ["twitch.broadcaster"]
+            }
+          });
+          const namespace = verification.pendingIntegration.stateDiscovery.namespaces[0];
+          expect(namespace).toMatchObject({
+            featureId: "widget.data",
+            namespaceId: "published_data",
+            outcome,
+            automaticSelection,
+            discordSummary: {
+              kind: "presence",
+              used: widgetInventory("discord", outcome).namespaces[0].meaningful
+            },
+            twitchSummary: {
+              kind: "presence",
+              used: widgetInventory("twitch", outcome).namespaces[0].meaningful
+            }
+          });
+
+          if (outcome === "collision") {
+            await registry.resolveInvitationState({
+              reservationId,
+              discoveryVersion: 1,
+              selections: [{
+                featureId: "widget.data",
+                namespaceId: "published_data",
+                selection: "twitch"
+              }]
+            });
+          }
+          const activated = await registry.activateInvitation({
+            invitationId: invitation.invitationId,
+            reservationId
+          });
+          expect(activated.integration.status).toBe("active");
+          const materialized = realms.targets.get("widget.data\u0000published_data");
+          if (outcome === "both_empty") {
+            expect(materialized.meaningful).toBe(false);
+            expect(materialized.summary).toEqual({
+              kind: "presence",
+              used: false
+            });
+            expect(materialized.entries).toEqual([]);
+          } else {
+            const selectedSide = outcome === "twitch_only" || outcome === "collision"
+              ? "twitch"
+              : "discord";
+            expect(materialized.entries).toEqual([{
+              key: "value",
+              value: `${selectedSide}:published_data`
+            }]);
+          }
+        }
+      );
+    }
+  }, 10_000);
+
   it("classifies automatic outcomes and persists only safe collision metadata", async () => {
     const discord = discordGroup();
     const twitch = twitchGroup();

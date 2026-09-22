@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { actionRegistry, executeAction } from "../src/actions/index.js";
 import { env, runInDurableObject } from "cloudflare:test";
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { featureRegistry } from "../src/features/index.js";
@@ -64,6 +65,14 @@ function read(exportId, args) {
   };
 }
 
+function widgetQuery(selectedTarget) {
+  return query(selectedTarget, {
+    widget: {
+      read: { feature: "widget.data", export: "latest", version: 1 }
+    }
+  }, { widget: { ref: "widget" } });
+}
+
 function query(selectedTarget, bindings, select) {
   return { version: 1, target: selectedTarget, bindings, select };
 }
@@ -92,6 +101,67 @@ function servicesFor(selectedTarget) {
     },
     sourceEventId: `${selectedTarget.platform}:${unique("event")}`
   })).featureServices;
+}
+
+async function publishWidgetData(selectedTarget, data) {
+  const invocation = createCommandInvocation({
+    kind: "widget.data.publish.v1",
+    origin: {
+      group: group(selectedTarget),
+      actor: {
+        platform: selectedTarget.platform,
+        id: "moderator",
+        claims: []
+      }
+    },
+    args: { data },
+    sourceEventId: `${selectedTarget.platform}:${unique("widget-event")}`
+  });
+  const runtime = createFeatureServiceRuntime(liveEnv, invocation);
+  const result = await executeAction(actionRegistry, invocation, {
+    triggerKind: "command",
+    featureServices: runtime.featureServices,
+    authorize: async () => true,
+    claimFeatureCooldown: async () => ({
+      allowed: true,
+      retryAfterSeconds: 0
+    })
+  });
+  const targetPlatform = selectedTarget.platform === "discord"
+    ? "twitch"
+    : "discord";
+  const scope = await runtime.featureServices.shareableState.current(
+    "widget.data",
+    targetPlatform,
+    "published_data"
+  );
+  return {
+    publication: await runtime.featureServices.shareableState.get(
+      "widget.data",
+      scope,
+      "latest"
+    ),
+    result,
+    scope
+  };
+}
+
+function widgetValue(character, data) {
+  return {
+    updateId: "wdu1." + character.repeat(43),
+    data,
+    origin: "discord"
+  };
+}
+
+async function setRealmWidget(realm, value) {
+  await requestShareableStateRealm(liveEnv, {
+    realm,
+    featureId: "widget.data",
+    namespaceId: "published_data",
+    operation: "set",
+    storage: { key: "latest", value }
+  });
 }
 
 async function shareableScope(selectedTarget) {
@@ -178,6 +248,17 @@ async function drainShareable(selectedTarget) {
   await settleDrain(async () => {
     await runInDurableObject(
       shareableStateRealmStub(liveEnv, scope.realm),
+      async (instance) => {
+        await instance.alarm();
+      }
+    );
+  });
+}
+
+async function drainRealm(realm) {
+  await settleDrain(async () => {
+    await runInDurableObject(
+      shareableStateRealmStub(liveEnv, realm),
       async (instance) => {
         await instance.alarm();
       }
@@ -529,6 +610,234 @@ describe("live state-query dependency coordination", () => {
       expect(JSON.stringify(sources)).not.toContain(firstId);
     });
   });
+
+  it("keeps widget commands and reads on the selected realm and rejects an old source", async () => {
+    const selectedTarget = target();
+    const discord = group(selectedTarget);
+    const firstTwitch = createPlatformGroupRef({
+      platform: "twitch",
+      kind: "channel",
+      id: unique("widget-first-twitch")
+    });
+    const secondTwitch = createPlatformGroupRef({
+      platform: "twitch",
+      kind: "channel",
+      id: unique("widget-second-twitch")
+    });
+    const firstId = unique("widget-first-integration");
+    const secondId = unique("widget-second-integration");
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, liveEnv);
+        installIntegration(state, registry, {
+          integrationId: firstId,
+          discord,
+          twitch: firstTwitch,
+          createdAtMs: 1,
+          assignDiscordDefault: true
+        });
+        installIntegration(state, registry, {
+          integrationId: secondId,
+          discord,
+          twitch: secondTwitch,
+          createdAtMs: 2,
+          assignDiscordDefault: false
+        });
+        expect(registry.getDefaultLink(discord, "twitch").integration.id)
+          .toBe(firstId);
+      }
+    );
+    const firstRealm = createIntegrationRealmIdentity({ id: firstId });
+    const secondRealm = createIntegrationRealmIdentity({ id: secondId });
+    const initialValue = widgetValue("a", "initial selected value");
+    await setRealmWidget(firstRealm, initialValue);
+    await setRealmWidget(secondRealm, widgetValue("b", "nondefault value"));
+
+    const grant = await issue(selectedTarget, "widget.data:latest:v1");
+    const attached = await attachLiveStateQuery(liveEnv, {
+      queryId: "widget-source-handoff",
+      grantId: grant.grant.id,
+      query: widgetQuery(selectedTarget)
+    });
+    expect(attached.envelope.data.widget).toEqual({
+      state: "present",
+      value: initialValue
+    });
+
+    const firstCommand = await publishWidgetData(selectedTarget, "first realm command");
+    expect(firstCommand.result.output).toEqual({ message: "Widget data updated." });
+    expect(firstCommand.scope.realm).toEqual(firstRealm);
+    await drainRealm(firstRealm);
+    const beforeHandoff = await waitForCurrent(
+      selectedTarget,
+      "widget-source-handoff",
+      (active) => {
+        expect(active.envelope.data.widget.value).toEqual(firstCommand.publication);
+      }
+    );
+
+    await setRealmWidget(secondRealm, firstCommand.publication);
+    const obsolete = widgetValue("c", "obsolete queued value");
+    await setRealmWidget(firstRealm, obsolete);
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, liveEnv);
+        registry.setDefaultLink({
+          sourceGroup: discord,
+          targetGroup: secondTwitch,
+          integrationId: secondId,
+          actor: { platform: "discord", id: "manager", claims: [] }
+        });
+      }
+    );
+    await drainBindings();
+    const afterHandoff = await waitForCurrent(
+      selectedTarget,
+      "widget-source-handoff",
+      (active) => {
+        expect(active.envelope.data.widget.value).toEqual(firstCommand.publication);
+        expect(active.sequence).toBe(beforeHandoff.sequence + 1);
+        expect(active.envelope.bindingRevision)
+          .not.toBe(beforeHandoff.envelope.bindingRevision);
+      }
+    );
+
+    await drainRealm(firstRealm);
+    await drainObserver(selectedTarget);
+    const afterObsoleteDelivery = await current(
+      selectedTarget,
+      "widget-source-handoff"
+    );
+    expect(afterObsoleteDelivery.sequence).toBe(afterHandoff.sequence);
+    expect(afterObsoleteDelivery.envelope.data.widget.value)
+      .toEqual(firstCommand.publication);
+
+    const secondCommand = await publishWidgetData(selectedTarget, "second realm command");
+    expect(secondCommand.scope.realm).toEqual(secondRealm);
+    await drainRealm(secondRealm);
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value).toEqual(secondCommand.publication);
+      expect(active.envelope.data.widget.value).not.toEqual(obsolete);
+    });
+
+    const fallbackValue = widgetValue("d", "fallback realm value");
+    await setRealmWidget(firstRealm, fallbackValue);
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, liveEnv);
+        await registry.revokeIntegration({
+          integrationId: secondId,
+          group: discord,
+          actor: { platform: "discord", id: "manager", claims: [] }
+        });
+        expect(registry.getDefaultLink(discord, "twitch").integration.id)
+          .toBe(firstId);
+      }
+    );
+    await drainBindings();
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value).toEqual(fallbackValue);
+    });
+    const fallbackCommand = await publishWidgetData(
+      selectedTarget,
+      "fallback command"
+    );
+    expect(fallbackCommand.scope.realm).toEqual(firstRealm);
+    await drainRealm(firstRealm);
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value)
+        .toEqual(fallbackCommand.publication);
+    });
+
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, liveEnv);
+        await registry.revokeIntegration({
+          integrationId: firstId,
+          group: discord,
+          actor: { platform: "discord", id: "manager", claims: [] }
+        });
+        expect(registry.getDefaultLink(discord, "twitch")).toBeNull();
+      }
+    );
+    const successorServices = servicesFor(selectedTarget);
+    const successorScope = await successorServices.shareableState.current(
+      "widget.data",
+      "twitch",
+      "published_data"
+    );
+    expect(successorScope.realm.kind).toBe("standalone");
+    await drainBindings();
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value)
+        .toEqual(fallbackCommand.publication);
+    });
+    const successorCommand = await publishWidgetData(
+      selectedTarget,
+      "standalone successor command"
+    );
+    expect(successorCommand.scope.realm).toEqual(successorScope.realm);
+    await drainRealm(successorScope.realm);
+    const beforeRelink = await waitForCurrent(
+      selectedTarget,
+      "widget-source-handoff",
+      (active) => {
+        expect(active.envelope.data.widget.value)
+          .toEqual(successorCommand.publication);
+      }
+    );
+
+    const thirdTwitch = createPlatformGroupRef({
+      platform: "twitch",
+      kind: "channel",
+      id: unique("widget-third-twitch")
+    });
+    const thirdId = unique("widget-third-integration");
+    const thirdRealm = createIntegrationRealmIdentity({ id: thirdId });
+    await setRealmWidget(thirdRealm, successorCommand.publication);
+    await runInDurableObject(
+      integrationRegistryStub(liveEnv),
+      async (_instance, state) => {
+        const registry = new IntegrationRegistry(state, liveEnv);
+        installIntegration(state, registry, {
+          integrationId: thirdId,
+          discord,
+          twitch: thirdTwitch,
+          createdAtMs: 3,
+          assignDiscordDefault: true
+        });
+      }
+    );
+    await drainBindings();
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value)
+        .toEqual(successorCommand.publication);
+      expect(active.sequence).toBe(beforeRelink.sequence + 1);
+    });
+    const relinkedCommand = await publishWidgetData(
+      selectedTarget,
+      "relinked command"
+    );
+    expect(relinkedCommand.scope.realm).toEqual(thirdRealm);
+    await drainRealm(thirdRealm);
+    await waitForCurrent(selectedTarget, "widget-source-handoff", (active) => {
+      expect(active.envelope.data.widget.value)
+        .toEqual(relinkedCommand.publication);
+    });
+
+    await runInDurableObject(observerStub(selectedTarget), async (_instance, state) => {
+      const sources = state.storage.sql.exec(
+        "SELECT source_kind, attachment_json " +
+        "FROM state_query_observer_sources ORDER BY source_kind"
+      ).toArray();
+      expect(JSON.stringify(sources)).not.toContain(firstId);
+      expect(JSON.stringify(sources)).toContain(thirdId);
+    });
+  }, 20_000);
 
   it("expires query leases and removes their orphaned source interest", async () => {
     const selectedTarget = target();
