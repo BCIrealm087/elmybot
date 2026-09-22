@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: implementation roadmap; Steps 1–5 completed through 2026-09-22.
+Status: implementation roadmap; Steps 1–6 completed through 2026-09-22.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -313,7 +313,7 @@ documentation accidentally upgrades the contract to exhaustive delivery.
 
 ### 6. Verify linking and source-handoff lifecycle
 
-**Status:** pending. **Depends on:** steps 3–5.
+**Status:** completed on 2026-09-22. **Depends on:** steps 3–5.
 
 Exercise empty/nonempty/identical/colliding standalone candidates and confirm the
 existing namespace-level resolution choices. Verify activation, directional
@@ -425,3 +425,4 @@ log.
 | 2026-09-19 | 3 | `0b44ffd`, `d274571` | CI run 35474663099 passed | Added atomic effective-shareable `latest` publication, exact success acknowledgement, lifecycle/concurrency coverage, and multi-namespace integration discovery assertions; readable export remains step 4 |
 | 2026-09-22 | 4 | `f13b2d1`, `4c8de22`, `c3cfbe0`, `e49a1a3` | CI run 35717200571 passed | Added discoverable `latest:v1` effective-shareable export, exact absence/present schema validation, ordinary-query snapshot and projection proof on both platforms, grant/catalog denial coverage, result-size bounds, and camelCase public-field projection support; no feature-specific query builder added |
 | 2026-09-22 | 5 | `2b658a7` | CI run 35755726387 passed | Proved real command-driven live invalidation, exact acknowledgement, hibernating-socket recovery, reconnect resynchronization, same-data update identity, and burst convergence on the final accepted publication without requiring exhaustive delivery; 433 tests passed |
+| 2026-09-22 | 6 | `8572ff5` | CI run 35758823670 passed | Proved all five `published_data` presence-resolution outcomes and command/query agreement through activation, directional defaults, nondefault links, same-value default handoff, delayed obsolete-source delivery, revocation with fallback, lazy standalone successor creation, and relinking; no production lifecycle changes were required; 435 tests passed |
