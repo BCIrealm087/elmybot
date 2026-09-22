@@ -198,12 +198,12 @@ describe("@elmybot/feature-widget-data", () => {
       const projected = await runtime.query.snapshot(widgetQuery(group, {
         data: { ref: "widget", path: ["data"] },
         origin: { ref: "widget", path: ["origin"] },
-        updateId: { ref: "widget", path: ["updateId"] }
+        update_id: { ref: "widget", path: ["updateId"] }
       }));
       expect(projected.envelope.data).toEqual({
         data: { state: "present", value: expected.data },
         origin: { state: "present", value: expected.origin },
-        updateId: { state: "present", value: expected.updateId }
+        update_id: { state: "present", value: expected.updateId }
       });
     }
   });

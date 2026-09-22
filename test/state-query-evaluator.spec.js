@@ -135,7 +135,7 @@ describe("state-query evaluator", () => {
       { widget: widgetRead() },
       {
         data: { ref: "widget", path: ["data"] },
-        updateId: { ref: "widget", path: ["updateId"] }
+        update_id: { ref: "widget", path: ["updateId"] }
       }
     );
     const plan = await prepareStateQuery(featureRegistry, document);
@@ -171,7 +171,7 @@ describe("state-query evaluator", () => {
     });
     expect(result.envelope.data).toEqual({
       data: { state: "present", value: publication.data },
-      updateId: { state: "present", value: publication.updateId }
+      update_id: { state: "present", value: publication.updateId }
     });
     expect(result.observation.dependencies).toContainEqual({
       source: "shareable:widget-data",
