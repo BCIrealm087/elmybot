@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: implementation roadmap; Steps 1–3 completed on 2026-09-19.
+Status: implementation roadmap; Steps 1–4 completed through 2026-09-22.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -269,7 +269,7 @@ redirect state.
 
 ### 4. Add the readable export and snapshot/query proof
 
-**Status:** pending. **Depends on:** step 3.
+**Status:** completed on 2026-09-22. **Depends on:** step 3.
 
 Declare `latest:v1` as an effective-shareable readable value with the exact
 public schema and operator-grant access. Return `absent` before publication and
@@ -423,3 +423,4 @@ log.
 | 2026-09-19 | 1 | `aad7dd8`, `6ace057` | CI run 35435837932 passed | Approved `widget-data-contract.md`; implementation not started |
 | 2026-09-19 | 2 | `c0750bd`, `83fccc8` | CI run 35446952598 passed | Installed private widget-data package, cross-platform bounded command definitions, deterministic update-ID helper, and package/registration tests; persistence remains step 3 |
 | 2026-09-19 | 3 | `0b44ffd`, `d274571` | CI run 35474663099 passed | Added atomic effective-shareable `latest` publication, exact success acknowledgement, lifecycle/concurrency coverage, and multi-namespace integration discovery assertions; readable export remains step 4 |
+| 2026-09-22 | 4 | `f13b2d1`, `4c8de22`, `c3cfbe0`, `e49a1a3` | CI run 35717200571 passed | Added discoverable `latest:v1` effective-shareable export, exact absence/present schema validation, ordinary-query snapshot and projection proof on both platforms, grant/catalog denial coverage, result-size bounds, and camelCase public-field projection support; no feature-specific query builder added |
