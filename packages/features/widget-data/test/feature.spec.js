@@ -208,6 +208,38 @@ describe("@elmybot/feature-widget-data", () => {
     }
   });
 
+  it("invalidates a live watch for distinct same-data commands", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const group = discordTestGroup({ id: "widget-live-discord" });
+    const actor = discordTestModerator();
+    const watch = await runtime.query.watch(widgetQuery(group));
+    const observedUpdateIds = new Set();
+
+    try {
+      expect(watch.initial.envelope.data.widget).toEqual({ state: "absent" });
+      for (let index = 0; index < 2; index += 1) {
+        if (index > 0) runtime.clock.advance({ seconds: 1 });
+        (await runtime.discord.command("widget_data", {
+          group,
+          actor,
+          args: { data: "same live data" }
+        })).toReply(UPDATED_MESSAGE);
+
+        const update = await watch.next();
+        const cell = update.envelope.data.widget;
+        expect(cell).toMatchObject({
+          state: "present",
+          value: { data: "same live data", origin: "discord" }
+        });
+        expect(observedUpdateIds.has(cell.value.updateId)).toBe(false);
+        observedUpdateIds.add(cell.value.updateId);
+      }
+      expect(observedUpdateIds.size).toBe(2);
+    } finally {
+      watch.close();
+    }
+  });
+
   it("rejects invalid persisted publication identities without exposing them", async () => {
     const { readable } = definitions();
     const resolve = (value) => readable.resolve({

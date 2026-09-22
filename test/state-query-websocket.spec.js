@@ -4,6 +4,7 @@ import {
   runInDurableObject
 } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
+import { actionRegistry, executeAction } from "../src/actions/index.js";
 import { createFeatureServiceRuntime } from "../src/framework/service-runtime.js";
 import { featureRegistry } from "../src/features/index.js";
 import {
@@ -68,13 +69,26 @@ function countQuery(target) {
   };
 }
 
-async function issue(target) {
+function widgetQuery(target) {
+  return {
+    version: 1,
+    target,
+    bindings: {
+      widget: {
+        read: { feature: "widget.data", export: "latest", version: 1 }
+      }
+    },
+    select: { widget: { ref: "widget" } }
+  };
+}
+
+async function issue(target, exportList = "fun.deaths:count:v1") {
   return await issueStateQueryGrant(socketEnv, featureRegistry, {
     target,
     permissions: grantPermissionsForExportList(
       featureRegistry,
       target.platform,
-      "fun.deaths:count:v1"
+      exportList
     ),
     expiresInSeconds: 3600
   }, { actor: { platform: target.platform, id: "operator" } });
@@ -89,6 +103,40 @@ function servicesFor(target) {
     },
     sourceEventId: `discord:state-query-socket:${++sequence}`
   })).featureServices;
+}
+
+async function publishWidgetData(target, data) {
+  const invocation = createCommandInvocation({
+    kind: "widget.data.publish.v1",
+    origin: {
+      group: group(target),
+      actor: { platform: target.platform, id: "moderator", claims: [] }
+    },
+    args: { data },
+    sourceEventId: `${target.platform}:state-query-widget:${++sequence}`
+  });
+  const runtime = createFeatureServiceRuntime(socketEnv, invocation);
+  const result = await executeAction(actionRegistry, invocation, {
+    triggerKind: "command",
+    featureServices: runtime.featureServices,
+    authorize: async () => true,
+    claimFeatureCooldown: async () => ({
+      allowed: true,
+      retryAfterSeconds: 0
+    })
+  });
+  const otherPlatform = target.platform === "discord" ? "twitch" : "discord";
+  const scope = await runtime.featureServices.shareableState.current(
+    "widget.data",
+    otherPlatform,
+    "published_data"
+  );
+  const publication = await runtime.featureServices.shareableState.get(
+    "widget.data",
+    scope,
+    "latest"
+  );
+  return { publication, result, scope };
 }
 
 async function setCount(target, value) {
@@ -181,15 +229,31 @@ async function openSocket(target, credential, {
   return { response, socket: response.webSocket };
 }
 
-async function register(socket, target, recovery = {}) {
+async function register(socket, target, recovery = {}, queries = [{
+  id: "deaths",
+  query: countQuery(target)
+}]) {
   const received = nextMessage(socket);
   socket.send(JSON.stringify({
     protocol: STATE_QUERY_SOCKET_PROTOCOL,
     type: STATE_QUERY_SOCKET_MESSAGE_TYPES.register,
-    queries: [{ id: "deaths", query: countQuery(target) }],
+    queries,
     ...recovery
   }));
   return await received;
+}
+
+function registerWidget(socket, target, recovery = {}) {
+  return register(socket, target, recovery, [{
+    id: "widget",
+    query: widgetQuery(target)
+  }]);
+}
+
+function widgetPublication(message) {
+  return message.event.payload.results.find(({ queryId }) =>
+    queryId === "widget"
+  )?.result?.data?.widget?.value;
 }
 
 function closeQuietly(socket) {
@@ -429,6 +493,126 @@ describe("hibernating state-query WebSockets", () => {
       });
     });
   });
+
+  it("delivers command-driven widget replacements through hibernation and reconnect", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target, "widget.data:latest:v1");
+    const first = await openSocket(target, grant.credential);
+    const initial = await registerWidget(first.socket, target);
+    const subscriptionId = initial.event.payload.subscriptionId;
+    const observedUpdateIds = new Set();
+
+    try {
+      expect(initial).toMatchObject({
+        type: STATE_QUERY_SOCKET_MESSAGE_TYPES.event,
+        event: {
+          eventType: "snapshot",
+          payload: {
+            results: [{
+              queryId: "widget",
+              result: { data: { widget: { state: "absent" } } }
+            }]
+          }
+        }
+      });
+      await acknowledge(first.socket, target, initial.event);
+
+      const firstMessage = nextMessage(first.socket);
+      const firstCommand = await publishWidgetData(target, "same live value");
+      expect(firstCommand.result.output).toEqual({ message: "Widget data updated." });
+      await drainMutation(target, firstCommand.scope);
+      const firstUpdate = await firstMessage;
+      const firstPublication = widgetPublication(firstUpdate);
+      expect(firstPublication).toEqual(firstCommand.publication);
+      expect(observedUpdateIds.has(firstPublication.updateId)).toBe(false);
+      observedUpdateIds.add(firstPublication.updateId);
+      await acknowledge(first.socket, target, firstUpdate.event);
+
+      await evictDurableObject(observerStub(target));
+      const recoveredMessage = nextMessage(first.socket);
+      const secondCommand = await publishWidgetData(target, "same live value");
+      expect(secondCommand.result.output).toEqual({ message: "Widget data updated." });
+      await drainMutation(target, secondCommand.scope);
+      const secondUpdate = await recoveredMessage;
+      const secondPublication = widgetPublication(secondUpdate);
+      expect(secondPublication).toEqual(secondCommand.publication);
+      expect(observedUpdateIds.has(secondPublication.updateId)).toBe(false);
+      observedUpdateIds.add(secondPublication.updateId);
+      expect(secondPublication.updateId).not.toBe(firstPublication.updateId);
+      await acknowledge(first.socket, target, secondUpdate.event);
+      closeQuietly(first.socket);
+
+      const reconnectCommand = await publishWidgetData(target, "after reconnect");
+      expect(reconnectCommand.result.output).toEqual({ message: "Widget data updated." });
+      const second = await openSocket(target, grant.credential);
+      try {
+        const resynchronized = await registerWidget(second.socket, target, {
+          subscriptionId,
+          cursor: secondUpdate.event.cursor
+        });
+        expect(resynchronized).toMatchObject({
+          event: {
+            eventType: "snapshot",
+            payload: {
+              subscriptionId,
+              results: [{
+                queryId: "widget",
+                reason: "resynchronized"
+              }]
+            }
+          }
+        });
+        expect(widgetPublication(resynchronized)).toEqual(
+          reconnectCommand.publication
+        );
+      } finally {
+        closeQuietly(second.socket);
+      }
+      expect(observedUpdateIds.size).toBe(2);
+    } finally {
+      closeQuietly(first.socket);
+    }
+  }, 10_000);
+
+  it("coalesces a command burst to its final current widget publication", async () => {
+    const target = selectedTarget();
+    const grant = await issue(target, "widget.data:latest:v1");
+    const { socket } = await openSocket(target, grant.credential);
+    try {
+      const initial = await registerWidget(socket, target);
+      expect(widgetPublication(initial)).toBeUndefined();
+
+      const accepted = [];
+      for (const data of ["repeat value", "middle value", "repeat value"]) {
+        const command = await publishWidgetData(target, data);
+        expect(command.result.output).toEqual({ message: "Widget data updated." });
+        accepted.push(command.publication);
+        await drainMutation(target, command.scope);
+      }
+      expect(new Set(accepted.map(({ updateId }) => updateId)).size).toBe(3);
+
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        const attachment = state.getWebSockets()[0].deserializeAttachment();
+        expect(attachment.sentSequence).toBe(initial.event.sequence);
+        expect(attachment.acknowledgedSequence).toBeUndefined();
+      });
+
+      const replacementMessage = nextMessage(socket);
+      await acknowledge(socket, target, initial.event);
+      const replacement = await replacementMessage;
+      const finalPublication = accepted.at(-1);
+      expect(widgetPublication(replacement)).toEqual(finalPublication);
+      expect(finalPublication.data).toBe("repeat value");
+      expect(finalPublication.updateId).not.toBe(accepted[0].updateId);
+      await runInDurableObject(observerStub(target), async (_instance, state) => {
+        expect(
+          stateQueryOperationalSnapshot(state).counters.backpressureCoalesced
+        ).toBeGreaterThanOrEqual(1);
+      });
+    } finally {
+      closeQuietly(socket);
+    }
+  }, 10_000);
 
   it("coalesces durable replacements while one socket event is unacknowledged", async () => {
     const target = selectedTarget();
