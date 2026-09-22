@@ -167,8 +167,11 @@ function projectionSchema(schema, path, errorPath) {
   let current = schema;
   for (let index = 0; index < path.length; index += 1) {
     const field = path[index];
-    identifier(field, `${errorPath}[${index}]`, "query_reference_invalid");
-    if (current.type !== "object" || !(field in current.properties)) {
+    if (
+      typeof field !== "string" ||
+      current.type !== "object" ||
+      !Object.prototype.hasOwnProperty.call(current.properties, field)
+    ) {
       fail(errorPath, "does not identify a declared result field.", "query_reference_invalid");
     }
     current = current.properties[field];
