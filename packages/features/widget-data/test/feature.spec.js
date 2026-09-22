@@ -14,6 +14,7 @@ import feature, {
   WIDGET_DATA_ACTION_KIND,
   WIDGET_DATA_MAX_LENGTH,
   WIDGET_DATA_NAMESPACE_ID,
+  WIDGET_DATA_READABLE_EXPORT_ID,
   WIDGET_DATA_STATE_KEY
 } from "../src/feature.js";
 
@@ -24,8 +25,26 @@ const INTEGRATION_ID = "widget-data-integration";
 function definitions() {
   return {
     action: feature.actions[0],
+    readable: feature.readableState[0],
     discord: feature.commands.discord[0],
     twitch: feature.commands.twitch[0]
+  };
+}
+
+function widgetQuery(group, select = { widget: { ref: "widget" } }) {
+  return {
+    version: 1,
+    target: { platform: group.platform, groupId: group.id },
+    bindings: {
+      widget: {
+        read: {
+          feature: FEATURE_ID,
+          export: WIDGET_DATA_READABLE_EXPORT_ID,
+          version: 1
+        }
+      }
+    },
+    select
   };
 }
 
@@ -76,6 +95,33 @@ describe("@elmybot/feature-widget-data", () => {
         collisionSummary: { kind: "presence" }
       }]
     });
+    expect(feature.readableState).toHaveLength(1);
+    expect(feature.readableState[0]).toMatchObject({
+      id: WIDGET_DATA_READABLE_EXPORT_ID,
+      version: 1,
+      label: "Latest widget data",
+      description: "The current string published for subscribed widgets.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: {
+        kind: "effective_shareable",
+        namespace: WIDGET_DATA_NAMESPACE_ID
+      },
+      access: { kind: "operator_grant" },
+      parameters: {},
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            updateId: { type: "string", minLength: 48, maxLength: 48 },
+            data: { type: "string", minLength: 1, maxLength: WIDGET_DATA_MAX_LENGTH },
+            origin: { type: "string", minLength: 6, maxLength: 7 }
+          },
+          required: ["updateId", "data", "origin"]
+        },
+        absence: { kind: "absent" }
+      }
+    });
     expect(action).toMatchObject({
       kind: WIDGET_DATA_ACTION_KIND,
       capability: "framework.moderators",
@@ -99,6 +145,84 @@ describe("@elmybot/feature-widget-data", () => {
       name: "widgetdata",
       parse: { kind: "rest-text" }
     });
+  });
+
+  it("returns absent snapshots before the first publication on either platform", async () => {
+    const runtime = createFeatureTestRuntime(feature);
+    const [discord, twitch] = await Promise.all([
+      runtime.query.snapshot(widgetQuery(discordTestGroup())),
+      runtime.query.snapshot(widgetQuery(twitchTestGroup()))
+    ]);
+
+    expect(discord.envelope.data.widget).toEqual({ state: "absent" });
+    expect(twitch.envelope.data.widget).toEqual({ state: "absent" });
+  });
+
+  it("reads and projects the exact current publication from either platform target", async () => {
+    for (const platform of ["discord", "twitch"]) {
+      const runtime = createFeatureTestRuntime(feature);
+      const group = platform === "discord"
+        ? discordTestGroup({ id: "widget-query-discord" })
+        : twitchTestGroup({ id: "widget-query-twitch" });
+      const actor = platform === "discord"
+        ? discordTestModerator()
+        : twitchTestModerator();
+      const data = `${platform} projected data`;
+
+      if (platform === "discord") {
+        await runtime.discord.command("widget_data", {
+          group,
+          actor,
+          args: { data }
+        });
+      } else {
+        await runtime.twitch.commandText(`!widgetdata ${data}`, {
+          group,
+          actor
+        });
+      }
+
+      const expected = await publication({
+        group,
+        sourceEventId: `${platform}:feature-test:command:1`,
+        data
+      });
+      const full = await runtime.query.snapshot(widgetQuery(group));
+      expect(full.envelope.data.widget).toEqual({
+        state: "present",
+        value: expected
+      });
+      expect(Object.keys(full.envelope.data.widget.value).sort())
+        .toEqual(["data", "origin", "updateId"]);
+
+      const projected = await runtime.query.snapshot(widgetQuery(group, {
+        data: { ref: "widget", path: ["data"] },
+        origin: { ref: "widget", path: ["origin"] },
+        updateId: { ref: "widget", path: ["updateId"] }
+      }));
+      expect(projected.envelope.data).toEqual({
+        data: { state: "present", value: expected.data },
+        origin: { state: "present", value: expected.origin },
+        updateId: { state: "present", value: expected.updateId }
+      });
+    }
+  });
+
+  it("rejects invalid persisted publication identities without exposing them", async () => {
+    const { readable } = definitions();
+    const resolve = (value) => readable.resolve({
+      state: { get: async () => ({ found: true, value }) }
+    });
+    const base = {
+      updateId: "wdu1." + "a".repeat(43),
+      data: "safe",
+      origin: "discord"
+    };
+
+    await expect(resolve({ ...base, updateId: "discord:interaction:raw-id" }))
+      .rejects.toThrow("Stored widget data is invalid.");
+    await expect(resolve({ ...base, origin: "youtube" }))
+      .rejects.toThrow("Stored widget data is invalid.");
   });
 
   it("derives deterministic opaque update IDs from the frozen digest contract", async () => {

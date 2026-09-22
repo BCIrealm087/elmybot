@@ -2,6 +2,7 @@ import {
   access,
   defineAction,
   defineFeature,
+  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -18,9 +19,27 @@ export { deriveWidgetDataUpdateId };
 export const WIDGET_DATA_ACTION_KIND = "widget.data.publish.v1";
 export const WIDGET_DATA_MAX_LENGTH = 400;
 export const WIDGET_DATA_NAMESPACE_ID = "published_data";
+export const WIDGET_DATA_READABLE_EXPORT_ID = "latest";
 export const WIDGET_DATA_STATE_KEY = "latest";
 
 const UPDATED_MESSAGE = "Widget data updated.";
+const UPDATE_ID_PATTERN = /^wdu1\.[A-Za-z0-9_-]{43}$/;
+const ORIGINS = new Set(["discord", "twitch"]);
+
+function present(value) {
+  return Object.freeze({ state: "present", value });
+}
+
+function isValidPublication(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value.updateId === "string" &&
+    UPDATE_ID_PATTERN.test(value.updateId) &&
+    ORIGINS.has(value.origin)
+  );
+}
 
 function otherPlatform(platform) {
   return platform === "discord" ? "twitch" : "discord";
@@ -30,6 +49,45 @@ export const widgetDataFeature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "widget.data",
   description: "Publishes current widget data for state-query clients.",
+  readableState: [
+    defineReadableStateExport({
+      id: WIDGET_DATA_READABLE_EXPORT_ID,
+      version: 1,
+      label: "Latest widget data",
+      description: "The current string published for subscribed widgets.",
+      kind: "value",
+      platforms: ["discord", "twitch"],
+      scope: {
+        kind: "effective_shareable",
+        namespace: WIDGET_DATA_NAMESPACE_ID
+      },
+      access: { kind: "operator_grant" },
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            updateId: { type: "string", minLength: 48, maxLength: 48 },
+            data: {
+              type: "string",
+              minLength: 1,
+              maxLength: WIDGET_DATA_MAX_LENGTH
+            },
+            origin: { type: "string", minLength: 6, maxLength: 7 }
+          },
+          required: ["updateId", "data", "origin"]
+        },
+        absence: { kind: "absent" }
+      },
+      async resolve(ctx) {
+        const latest = await ctx.state.get(WIDGET_DATA_STATE_KEY);
+        if (!latest.found) return Object.freeze({ state: "absent" });
+        if (!isValidPublication(latest.value)) {
+          throw new Error("Stored widget data is invalid.");
+        }
+        return present(latest.value);
+      }
+    })
+  ],
   shareableState: [{
     id: WIDGET_DATA_NAMESPACE_ID,
     label: "Published widget data",

@@ -25,6 +25,12 @@ function read(exportId, args) {
   };
 }
 
+function widgetRead() {
+  return {
+    read: { feature: "widget.data", export: "latest", version: 1 }
+  };
+}
+
 function literal(game) {
   return { game: { literal: game } };
 }
@@ -115,6 +121,75 @@ describe("state-query evaluator", () => {
     expect(first.query.bindings.count.arguments.game.literal).toBe("dark souls");
     expect(Object.isFrozen(first.query)).toBe(true);
     expect(Object.isFrozen(first.query.bindings)).toBe(true);
+  });
+
+  it("prepares, evaluates, projects, and size-bounds the ordinary widget query", async () => {
+    const selectedTarget = target("discord");
+    const publication = {
+      updateId: "wdu1." + "a".repeat(43),
+      data: "x".repeat(400),
+      origin: "discord"
+    };
+    const document = query(
+      selectedTarget,
+      { widget: widgetRead() },
+      {
+        data: { ref: "widget", path: ["data"] },
+        updateId: { ref: "widget", path: ["updateId"] }
+      }
+    );
+    const plan = await prepareStateQuery(featureRegistry, document);
+    expect(plan.query).toEqual(document);
+    expect(Object.isFrozen(plan.query)).toBe(true);
+    expect(plan.bindings.widget.definition).toMatchObject({
+      id: "latest",
+      version: 1,
+      kind: "value",
+      scope: { kind: "effective_shareable", namespace: "published_data" }
+    });
+
+    const source = {
+      bindingKey: "shareable:widget-data",
+      async revision() {
+        return 1;
+      },
+      async get(key) {
+        expect(key).toBe("latest");
+        return { found: true, value: publication };
+      }
+    };
+    const sourceRuntime = {
+      async open(featureId, definition) {
+        expect(featureId).toBe("widget.data");
+        expect(definition.id).toBe("latest");
+        return source;
+      }
+    };
+    const result = await evaluateStateQuery(featureRegistry, document, {
+      preparedPlan: plan,
+      sourceRuntime
+    });
+    expect(result.envelope.data).toEqual({
+      data: { state: "present", value: publication.data },
+      updateId: { state: "present", value: publication.updateId }
+    });
+    expect(result.observation.dependencies).toContainEqual({
+      source: "shareable:widget-data",
+      feature: "widget.data",
+      scope: "effective_shareable",
+      kind: "value",
+      key: "latest"
+    });
+
+    await expect(evaluateStateQuery(featureRegistry, document, {
+      preparedPlan: plan,
+      sourceRuntime,
+      maxResultBytes: 64
+    })).rejects.toMatchObject({
+      code: "query_result_too_large",
+      status: 413,
+      path: "query.select"
+    });
   });
 
   it("composes direct, literal, dynamic, repeated, and collection reads", async () => {

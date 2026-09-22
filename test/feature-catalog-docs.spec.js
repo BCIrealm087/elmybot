@@ -83,5 +83,9 @@ describe("Generated feature catalog", () => {
       "fun.deaths | `counts` | 1 | collection | discord, twitch | " +
       "effective_shareable | operator_grant | — | array | default | explicit"
     );
+    expect(generateFeatureCatalogMarkdown(featureRegistry)).toContain(
+      "widget.data | `latest` | 1 | value | discord, twitch | " +
+      "effective_shareable | operator_grant | — | object | absent | —"
+    );
   });
 });

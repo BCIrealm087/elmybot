@@ -33,6 +33,7 @@ Framework API: v1.
 | fun.deaths | `remembered_game` | 1 | value | discord, twitch | group_local | operator_grant | — | string | unselected | — |
 | fun.deaths | `count` | 1 | lookup | discord, twitch | effective_shareable | operator_grant | game | object | default | — |
 | fun.deaths | `counts` | 1 | collection | discord, twitch | effective_shareable | operator_grant | — | array | default | explicit |
+| widget.data | `latest` | 1 | value | discord, twitch | effective_shareable | operator_grant | — | object | absent | — |
 
 ## Workspace packages
 

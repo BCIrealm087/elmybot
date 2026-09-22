@@ -48,6 +48,12 @@ function read(exportId, args) {
   };
 }
 
+function widgetRead() {
+  return {
+    read: { feature: "widget.data", export: "latest", version: 1 }
+  };
+}
+
 function query(selectedTarget, bindings, select) {
   return { version: 1, target: selectedTarget, bindings, select };
 }
@@ -120,6 +126,32 @@ async function seedDeaths(selectedTarget, { remembered = "Hades", count = 9 } = 
   );
 }
 
+async function seedWidgetData(selectedTarget, publication) {
+  const kind = selectedTarget.platform === "discord" ? "guild" : "channel";
+  const group = {
+    platform: selectedTarget.platform,
+    kind,
+    id: selectedTarget.groupId,
+    key: `${selectedTarget.platform}:${kind}:${selectedTarget.groupId}`
+  };
+  const invocation = createCommandInvocation({
+    kind: "widget.data.publish.v1",
+    origin: {
+      group,
+      actor: { platform: selectedTarget.platform, id: "operator", claims: [] }
+    },
+    sourceEventId: `${selectedTarget.platform}:state-query-http:${selectedTarget.groupId}`
+  });
+  const services = createFeatureServiceRuntime(env, invocation).featureServices;
+  const otherPlatform = selectedTarget.platform === "discord" ? "twitch" : "discord";
+  const scope = await services.shareableState.current(
+    "widget.data",
+    otherPlatform,
+    "published_data"
+  );
+  await services.shareableState.set("widget.data", scope, "latest", publication);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -164,6 +196,79 @@ describe("state-query read grants and HTTP snapshots", () => {
       "remembered_game"
     ]);
     expect(catalog.exports[0].grantScope.arguments.game.values).toEqual({ kind: "any" });
+  });
+
+  it("discovers, grants, reads, projects, and wholly denies widget data", async () => {
+    const selectedTarget = target("twitch");
+    const publication = {
+      updateId: "wdu1." + "b".repeat(43),
+      data: "consumer-defined widget text",
+      origin: "twitch"
+    };
+    await seedWidgetData(selectedTarget, publication);
+    const issued = await issue(selectedTarget, "widget.data:latest:v1");
+
+    const catalogResponse = await request("/state-query/catalog", {
+      headers: bearer(issued.credential)
+    });
+    const catalog = await catalogResponse.json();
+    expect(catalogResponse.status).toBe(200);
+    expect(catalog.exports).toHaveLength(1);
+    expect(catalog.exports[0]).toMatchObject({
+      feature: "widget.data",
+      export: "latest",
+      version: 1,
+      kind: "value",
+      scope: "effective_shareable",
+      absence: { kind: "absent" },
+      resultSchema: {
+        type: "object",
+        properties: {
+          updateId: { type: "string", minLength: 48, maxLength: 48 },
+          data: { type: "string", minLength: 1, maxLength: 400 },
+          origin: { type: "string", minLength: 6, maxLength: 7 }
+        },
+        required: ["updateId", "data", "origin"]
+      }
+    });
+
+    const body = query(selectedTarget, {
+      widget: widgetRead()
+    }, {
+      widget: { ref: "widget" },
+      data: { ref: "widget", path: ["data"] }
+    });
+    const response = await request("/state-query/snapshot", {
+      method: "POST",
+      headers: bearer(issued.credential, { "content-type": "application/json" }),
+      body: JSON.stringify(body)
+    });
+    const result = await response.json();
+    expect(response.status).toBe(200);
+    expect(result.data).toEqual({
+      data: { state: "present", value: publication.data },
+      widget: { state: "present", value: publication }
+    });
+    expect(Object.keys(result.data.widget.value).sort())
+      .toEqual(["data", "origin", "updateId"]);
+    expect(JSON.stringify(result.data.widget.value)).not.toMatch(
+      /actor|sourceEvent|group|integration|realm|storage/i
+    );
+
+    const deathsOnly = await issue(selectedTarget, "fun.deaths:remembered_game:v1");
+    const denied = await request("/state-query/snapshot", {
+      method: "POST",
+      headers: bearer(deathsOnly.credential, { "content-type": "application/json" }),
+      body: JSON.stringify(query(selectedTarget, {
+        remembered: read("remembered_game"),
+        widget: widgetRead()
+      }, {
+        remembered: { ref: "remembered" },
+        widget: { ref: "widget" }
+      }))
+    });
+    expect(denied.status).toBe(403);
+    expect((await denied.json()).error.code).toBe("query_access_denied");
   });
 
   it("evaluates an authorized literal and dynamic snapshot without changing state", async () => {
