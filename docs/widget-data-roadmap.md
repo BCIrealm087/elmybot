@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: implementation roadmap; Steps 1–7 completed through 2026-09-23.
+Status: completed implementation roadmap; Steps 1–8 completed through 2026-09-23.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -373,7 +373,29 @@ coalesced without reading internal implementation files.
 
 ### 8. Harden, verify, and prepare the reviewed milestone
 
-**Status:** pending. **Depends on:** steps 1–7.
+**Status:** completed on 2026-09-23. **Depends on:** steps 1–7.
+
+The final audit confirmed that command acknowledgements, expected errors,
+operational logs, metrics, grants, and public results do not reflect payloads or
+expose actor, raw source-event, group, integration, realm, or storage identity.
+Writers remain moderator-only, readers remain scoped to an operator grant, and
+Discord interaction IDs plus Twitch EventSub message IDs provide stable
+same-source update identity.
+
+Hardening now rejects any persisted publication that is not one plain, exactly
+three-field object with a normalized bounded string, supported origin, and valid
+opaque update ID. Discord deliberately leaves the platform's pre-trim raw
+`max_length` unset so the shared action applies the same post-trim 400-unit
+limit as Twitch. Regression coverage proves the accepted boundary and bounded
+payload-free rejection. A CI-only Durable Object eviction/recovery wait was
+increased for that one test after a previously observed timing failure; no
+product timeout changed.
+
+Implementation commit `e901ef1` passed CI run 35820436991 with 439 tests
+across 47 files, feature-workspace validation through lint, the Chromium browser
+smoke, JavaScript syntax checks, and the non-deploying Wrangler dry run.
+Guaranteed per-command delivery, history, replay, topics, and alternate
+transports remain explicitly deferred.
 
 Review all new paths for payload leakage, unsafe error reflection, overbroad
 grants, unbounded values, accidental actor exposure, platform-specific parsing
@@ -436,3 +458,4 @@ log.
 | 2026-09-22 | 5 | `2b658a7` | CI run 35755726387 passed | Proved real command-driven live invalidation, exact acknowledgement, hibernating-socket recovery, reconnect resynchronization, same-data update identity, and burst convergence on the final accepted publication without requiring exhaustive delivery; 433 tests passed |
 | 2026-09-22 | 6 | `8572ff5` | CI run 35758823670 passed | Proved all five `published_data` presence-resolution outcomes and command/query agreement through activation, directional defaults, nondefault links, same-value default handoff, delayed obsolete-source delivery, revocation with fallback, lazy standalone successor creation, and relinking; no production lifecycle changes were required; 435 tests passed |
 | 2026-09-23 | 7 | `57d871b`, `78d171e`, `0bf0432` | CI run 35818145526 passed | Added the widget consumer/contributor guide, exact snapshot and WebSocket examples, safe synchronous OBS/browser replacement handling, grant and ownership guidance, catalog/README links, and documentation contract tests; 438 tests across 47 files passed with lint, browser smoke, syntax checks, and the Wrangler dry run; no deployment or runtime behavior changed |
+| 2026-09-23 | 8 | `e901ef1` | CI run 35820436991 passed | Audited payload, authorization, identity, bounds, parsing, and delivery-language boundaries; enforced the exact persisted publication shape, aligned Discord and Twitch on the post-trim 400-unit policy, added payload non-reflection and malformed-state coverage, and scoped a longer wait to the CI-sensitive eviction/recovery test; 439 tests across 47 files passed with every authoritative CI gate; no deployment was performed |
