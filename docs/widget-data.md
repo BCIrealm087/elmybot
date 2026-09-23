@@ -168,8 +168,7 @@ time.
 ## WebSocket subscription
 
 Connect to the same-origin `/state-query/socket` route after establishing a
-session, or supply the Bearer header from a non-browser WebSocket library. The
-URL has no query parameters. The first application frame registers the same
+session, or supply the Bearer header from a non-browser WebSocket library. The URL has no query parameters. The first application frame registers the same
 query document:
 
 ```json
