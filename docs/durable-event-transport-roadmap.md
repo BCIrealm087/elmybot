@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: planned; implementation steps 1–10 are pending.
+Status: implementation roadmap; step 1 is complete and steps 2–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -47,9 +47,9 @@ grants, snapshots, and `state-query-socket/v1` behavior.
 
 ## Recommended first-release contract
 
-Step 1 will turn these decisions into a normative contract and freeze exact
-public names. Later steps may refine spellings without weakening the semantics
-below.
+The approved [durable-event version-1 contract](durable-event-contract.md)
+freezes the public names and the semantics below. Later implementation steps
+must preserve that contract unless an explicit compatibility decision amends it.
 
 ### Delivery guarantee
 
@@ -82,6 +82,9 @@ The proposed version-1 defaults are:
 | Retained unacknowledged events | 1,000 |
 | Retained event bytes | 1 MiB |
 | Event retention | 30 minutes |
+| Serialized payload per event | 4 KiB |
+| Accepted ingress | 10 events/second per physical stream |
+| Event receipt tombstone window | 2 hours |
 | Widget-data payload | 1–400 UTF-16 code units after trimming |
 | Widget-data command cooldown | 1 second per origin group |
 
@@ -207,14 +210,19 @@ addressed by the canonical physical stream identity. It owns:
 
 - monotonically increasing per-stream sequence allocation;
 - retained payload rows and byte accounting;
-- source-event idempotency tombstones;
+- event-ID receipt tombstones;
 - one durable consumer acknowledgement position;
 - bounded socket attachments and replay state;
 - exact expiry, grant, cleanup, and binding-movement deadlines; and
 - the hibernating consumer WebSocket.
 
-Publishing and consumer delivery therefore meet in one serialized owner. The
-public Worker does not poll the object, and Cloudflare Queues are not required
+Publishing and consumer delivery therefore meet in one serialized owner. A
+bounded source-publication ledger in the origin group's existing `GroupConfig`
+object first pins the event ID, canonical payload fingerprint, physical route,
+and binding revision. That ledger closes the retry-versus-binding-handoff race
+without merging logs or letting one platform source append to two realms.
+
+The public Worker does not poll the stream object, and Cloudflare Queues are not required
 for the first release. The object wakes for publication, registration,
 acknowledgement, close/error, lifecycle invalidation, revocation, or a real
 deadline. It creates no heartbeat timer; Cloudflare’s WebSocket auto-response
@@ -278,7 +286,12 @@ exit criteria.
 
 ### 1. Freeze the durable-event version-1 contract
 
-**Status:** pending. **Depends on:** this roadmap.
+**Status:** complete (2026-09-23). **Depends on:** this roadmap.
+
+Completed in [`durable-event-contract.md`](durable-event-contract.md). The
+contract freezes the author API, physical ownership, source-publication ledger,
+event/grant identities, bounded storage, operator reset, hibernating protocol,
+widget migration, failures, and compatibility boundary.
 
 Write a normative `durable-event-contract.md`. Freeze declaration, stream,
 grant, route, protocol, event-envelope, close-code, status, acknowledgement, and
@@ -303,6 +316,13 @@ cover ordinary delivery, same-source retry, duplicate replay, reconnect, full
 capacity, expired backlog, consumer absence, handler failure, revocation, and
 binding movement; no unresolved choice changes the persistence or authorization
 model.
+
+**Completion evidence:** contract commit
+[`24b9164`](https://github.com/BCIrealm087/elmybot/commit/24b9164ba4a8caccc893904aa17af79fee978303);
+authoritative CI
+[#225](https://github.com/BCIrealm087/elmybot/actions/runs/35934236757) passed
+439 tests across 47 files, lint, Chromium WebSocket smoke, JavaScript syntax,
+and the non-deploying Wrangler dry run.
 
 ### 2. Add the declarative event-stream feature API
 
@@ -335,8 +355,10 @@ errors; framework API tests demonstrate a feature selecting either mode or both.
 
 Add the SQLite-backed `DurableEventStream` class, Wrangler binding and additive
 migration. Implement canonical object naming, schema initialization, sequence
-allocation, bounded JSON validation, byte accounting, source-event deduplication,
-dedupe tombstones, cumulative acknowledgement storage, and transactional pruning.
+allocation, bounded JSON validation, byte accounting, event-ID receipts,
+cumulative acknowledgement storage, and transactional pruning. Add the bounded
+source-publication ledger to `GroupConfig` so the first attempt pins its physical
+route before append and supported source retries cannot cross a binding handoff.
 
 Implement the feature runtime’s `current(...).publish(payload)` path. Resolve
 only declarations owned by the invoking feature, validate the normalized
