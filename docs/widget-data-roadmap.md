@@ -1,6 +1,6 @@
 # Widget data publication and state-query integration roadmap
 
-Status: implementation roadmap; Steps 1–6 completed through 2026-09-22.
+Status: implementation roadmap; Steps 1–7 completed through 2026-09-23.
 Created: 2026-09-19.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `47d6e3fb974157b7ea70621241ae05191e81e949`.
@@ -336,7 +336,16 @@ or overwrite the selected result.
 
 ### 7. Add widget-consumer and contributor guidance
 
-**Status:** pending. **Depends on:** steps 4–6.
+**Status:** completed on 2026-09-23. **Depends on:** steps 4–6.
+
+The consumer and contributor handoff is
+[`widget-data.md`](widget-data.md). It documents publishing and grant setup,
+snapshot and WebSocket shapes, complete-replacement handling, safe rendering,
+`updateId` de-duplication, effective ownership, and a same-origin OBS/browser
+example whose synchronous application completes before the maintained client
+acknowledges the cursor. The README, browser guide, and generated feature
+catalog link to it. Documentation contract tests protect the required semantics
+and reject credential, query, or cursor parameters in example URLs.
 
 Document:
 
@@ -426,3 +435,4 @@ log.
 | 2026-09-22 | 4 | `f13b2d1`, `4c8de22`, `c3cfbe0`, `e49a1a3` | CI run 35717200571 passed | Added discoverable `latest:v1` effective-shareable export, exact absence/present schema validation, ordinary-query snapshot and projection proof on both platforms, grant/catalog denial coverage, result-size bounds, and camelCase public-field projection support; no feature-specific query builder added |
 | 2026-09-22 | 5 | `2b658a7` | CI run 35755726387 passed | Proved real command-driven live invalidation, exact acknowledgement, hibernating-socket recovery, reconnect resynchronization, same-data update identity, and burst convergence on the final accepted publication without requiring exhaustive delivery; 433 tests passed |
 | 2026-09-22 | 6 | `8572ff5` | CI run 35758823670 passed | Proved all five `published_data` presence-resolution outcomes and command/query agreement through activation, directional defaults, nondefault links, same-value default handoff, delayed obsolete-source delivery, revocation with fallback, lazy standalone successor creation, and relinking; no production lifecycle changes were required; 435 tests passed |
+| 2026-09-23 | 7 | `57d871b`, `78d171e`, `0bf0432` | CI run 35818145526 passed | Added the widget consumer/contributor guide, exact snapshot and WebSocket examples, safe synchronous OBS/browser replacement handling, grant and ownership guidance, catalog/README links, and documentation contract tests; 438 tests across 47 files passed with lint, browser smoke, syntax checks, and the Wrangler dry run; no deployment or runtime behavior changed |
