@@ -25,24 +25,38 @@ export const WIDGET_DATA_STATE_KEY = "latest";
 const UPDATED_MESSAGE = "Widget data updated.";
 const UPDATE_ID_PATTERN = /^wdu1\.[A-Za-z0-9_-]{43}$/;
 const ORIGINS = new Set(["discord", "twitch"]);
+const PUBLICATION_FIELDS = Object.freeze(["data", "origin", "updateId"]);
 
 function present(value) {
   return Object.freeze({ state: "present", value });
 }
 
 function isValidPublication(value) {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const fields = Object.keys(value).sort();
   return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
+    fields.length === PUBLICATION_FIELDS.length &&
+    fields.every((field, index) => field === PUBLICATION_FIELDS[index]) &&
     typeof value.updateId === "string" &&
     UPDATE_ID_PATTERN.test(value.updateId) &&
+    typeof value.data === "string" &&
+    value.data.length >= 1 &&
+    value.data.length <= WIDGET_DATA_MAX_LENGTH &&
+    value.data.trim() === value.data &&
     ORIGINS.has(value.origin)
   );
 }
 
 function otherPlatform(platform) {
-  return platform === "discord" ? "twitch" : "discord";
+  if (platform === "discord") return "twitch";
+  if (platform === "twitch") return "discord";
+  throw new Error("Widget data origin platform is invalid.");
 }
 
 export const widgetDataFeature = defineFeature({
@@ -145,8 +159,9 @@ export const widgetDataFeature = defineFeature({
             description: "Data to publish to subscribed widgets.",
             type: "string",
             required: true,
-            minLength: 1,
-            maxLength: WIDGET_DATA_MAX_LENGTH
+            minLength: 1
+            // The action schema owns the post-trim maximum. A Discord
+            // maxLength would reject outer whitespace before normalization.
           })
         ],
         render: discordTextResult

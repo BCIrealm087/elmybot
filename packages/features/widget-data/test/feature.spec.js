@@ -138,7 +138,7 @@ describe("@elmybot/feature-widget-data", () => {
         type: "string",
         required: true,
         minLength: 1,
-        maxLength: WIDGET_DATA_MAX_LENGTH
+        maxLength: null
       }]
     });
     expect(twitch).toMatchObject({
@@ -240,7 +240,7 @@ describe("@elmybot/feature-widget-data", () => {
     }
   });
 
-  it("rejects invalid persisted publication identities without exposing them", async () => {
+  it("rejects malformed or overbroad persisted publications without exposing them", async () => {
     const { readable } = definitions();
     const resolve = (value) => readable.resolve({
       state: { get: async () => ({ found: true, value }) }
@@ -250,11 +250,22 @@ describe("@elmybot/feature-widget-data", () => {
       data: "safe",
       origin: "discord"
     };
+    const invalid = [
+      { ...base, updateId: "discord:interaction:raw-id" },
+      { ...base, origin: "youtube" },
+      { ...base, data: 42 },
+      { ...base, data: "" },
+      { ...base, data: " padded " },
+      { ...base, data: "a".repeat(WIDGET_DATA_MAX_LENGTH + 1) },
+      { ...base, actorId: "private-actor" },
+      Object.assign(new Date(0), base)
+    ];
 
-    await expect(resolve({ ...base, updateId: "discord:interaction:raw-id" }))
-      .rejects.toThrow("Stored widget data is invalid.");
-    await expect(resolve({ ...base, origin: "youtube" }))
-      .rejects.toThrow("Stored widget data is invalid.");
+    for (const value of invalid) {
+      await expect(resolve(value)).rejects.toThrow(
+        "Stored widget data is invalid."
+      );
+    }
   });
 
   it("derives deterministic opaque update IDs from the frozen digest contract", async () => {
@@ -285,6 +296,14 @@ describe("@elmybot/feature-widget-data", () => {
       { data: "🔥".repeat(200) },
       { path: "arguments" }
     )).toEqual({ data: "🔥".repeat(200) });
+
+    const maximum = "x".repeat(WIDGET_DATA_MAX_LENGTH);
+    const paddedMaximum = `  ${maximum}  `;
+    expect(action.input.parse(
+      { data: paddedMaximum },
+      { path: "arguments" }
+    )).toEqual({ data: maximum });
+    expect(twitch.parse.parse(paddedMaximum)).toEqual({ data: maximum });
   });
 
   it.each([

@@ -75,6 +75,9 @@ It is guild-only and has one required string option:
 | `data` | string | yes | ECMAScript `String.prototype.trim()` | 1–400 UTF-16 code units after trimming |
 
 Recommended registration description: “Publish the current widget data.”
+The Discord option intentionally leaves its raw `max_length` unset because
+Discord applies that limit before the shared trim normalization. The action
+schema remains the authoritative 400-unit post-trim bound, matching Twitch.
 
 ### Twitch
 
@@ -339,10 +342,13 @@ defineReadableStateExport({
 })
 ```
 
-The resolver additionally validates that `origin` is exactly `discord` or
-`twitch` and that `updateId` matches the `wdu1` format before returning a
+The resolver additionally requires one plain object with exactly the three
+declared fields, verifies that `data` is already trimmed and contains 1–400
+UTF-16 code units, validates that `origin` is exactly `discord` or `twitch`,
+and checks that `updateId` matches the `wdu1` format before returning a
 present value. An invalid persisted value is an internal/source failure, not
-partially repaired public data.
+partially repaired public data. Undeclared actor, source-event, group,
+integration, realm, or storage fields cause rejection rather than exposure.
 
 Version 1 has no parameter and no collection export. It provides no topic
 lookup, history enumeration, or arbitrary storage read.

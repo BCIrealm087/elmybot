@@ -193,11 +193,11 @@ async function drainMutation(target, scope, rounds = 3) {
   }
 }
 
-function nextSocketEvent(socket, type = "message") {
+function nextSocketEvent(socket, type = "message", timeoutMs = 2_000) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`Timed out waiting for WebSocket ${type}.`)),
-      2_000
+      timeoutMs
     );
     socket.addEventListener(type, (event) => {
       clearTimeout(timeout);
@@ -206,8 +206,8 @@ function nextSocketEvent(socket, type = "message") {
   });
 }
 
-async function nextMessage(socket) {
-  const event = await nextSocketEvent(socket);
+async function nextMessage(socket, timeoutMs = 2_000) {
+  const event = await nextSocketEvent(socket, "message", timeoutMs);
   return JSON.parse(event.data);
 }
 
@@ -810,7 +810,9 @@ describe("hibernating state-query WebSockets", () => {
     try {
       await acknowledge(first.socket, target, initial.event);
       await evictDurableObject(observerStub(target));
-      const afterRestart = nextMessage(first.socket);
+      // CI can take longer to reconstruct the evicted Durable Object while
+      // other Miniflare suites are active; this is not a product deadline.
+      const afterRestart = nextMessage(first.socket, 10_000);
       await drainMutation(target, await setCount(target, 3));
       expect(await afterRestart).toMatchObject({
         event: { payload: { results: [{
