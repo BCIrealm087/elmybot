@@ -1,12 +1,7 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-
-const guide = readFileSync(new URL("../docs/widget-data.md", import.meta.url), "utf8");
-const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-const browserGuide = readFileSync(
-  new URL("../docs/state-query-browser.md", import.meta.url),
-  "utf8"
-);
+import readme from "../README.md?raw";
+import browserGuide from "../docs/state-query-browser.md?raw";
+import guide from "../docs/widget-data.md?raw";
 
 describe("widget-data guidance", () => {
   it("documents the complete consumer contract", () => {
