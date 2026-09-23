@@ -96,6 +96,7 @@ script. All commands except `/alive` are guild-only.
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
 | `/deaths` | optional `operation` (`check`, `plus`, `minus`, `reset`), optional `game` | Check or update shared deaths on the server's default Twitch link |
+| `/widget_data` | `data` | Replace the current authorized widget-data value |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -143,6 +144,7 @@ characters and are resolved at delivery time.
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
 | `!deaths [check|plus|minus|reset] [<game>]` | Any chatter checks; broadcaster or moderator updates | Check or update shared deaths on the channel's default Discord link |
+| `!widgetdata <text...>` | Broadcaster or moderator | Replace the current authorized widget-data value |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
 Command names are case-insensitive. `!deaths` and `!deaths check` use the last
@@ -158,6 +160,10 @@ durable inbox row.
 group has an independent count, and each actor has a five-second atomic
 cooldown. Operators can change its `label` setting with, for example,
 `/feature_config_set feature:fun.counter key:label json_value:"Wins"`.
+
+`/widget_data` and `!widgetdata` publish one current bounded string for authorized
+state-query consumers. See the [widget-data guide](docs/widget-data.md) for
+grant setup, snapshots, subscriptions, coalescing, and safe rendering.
 
 ## Cross-platform linking
 
@@ -419,7 +425,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 ## Testing and CI
 
 GitHub Actions runs the complete suite for pushes to `master` and
-`codex-state-querying`, pull requests, and manual dispatches. CI:
+`codex-querying-experiment`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -480,6 +486,7 @@ explicit catalog-regeneration action.
 - [Public state-query WebSocket delivery](docs/state-query-websocket.md)
 - [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
 - [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
+- [Widget-data consumer and contributor guide](docs/widget-data.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

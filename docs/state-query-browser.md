@@ -38,6 +38,10 @@ No access credential is embedded in the URL. The session expires with the grant;
 the widget presents a prompt when access ends. Deleting the local session does
 not revoke the grant; the existing grant-revocation API remains available.
 
+For the `widget.data:latest:v1` export, including moderator commands, grant
+setup, complete-replacement handling, `updateId` de-duplication, and a minimal
+custom OBS example, see the [widget-data guide](widget-data.md).
+
 The widget has a transparent background, reports an unselected remembered game,
 shows connecting/reconnecting and unavailable states, dims stale values, and
 clears displayed values when access ends. Counts, labels, collection values,
