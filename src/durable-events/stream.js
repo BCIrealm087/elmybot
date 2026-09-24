@@ -6,14 +6,18 @@ import {
   DurableEventError,
   serializeDurableEventPayload
 } from "./contract.js";
+import { logError } from "../common.js";
 
 export const DURABLE_EVENT_APPEND_PATH = "/internal/events/append";
 export const DURABLE_EVENT_CONSUMER_PATH = "/internal/events/consumer";
+export const DURABLE_EVENT_BINDING_PATH = "/internal/events/binding";
 const INTERNAL_HEADER = "x-elmybot-durable-event-internal";
 const INTERNAL_VALUE = "v1";
 const EVENT_ID_PATTERN = /^dev1\.[A-Za-z0-9_-]{43}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 const ROUTE_ID_PATTERN = /^des1\.[A-Za-z0-9_-]{43}$/;
+const NOTIFICATION_ID_PATTERN = /^[a-f0-9]{32}$/;
+const ENVIRONMENT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 
 function json(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -51,7 +55,8 @@ async function validateAppendInput(input, registry) {
     typeof input.streamId !== "string" ||
     !Number.isSafeInteger(input.version) ||
     !Number.isSafeInteger(input.route?.bindingRevision) ||
-    input.route.bindingRevision < 0
+    input.route.bindingRevision < 0 ||
+    (input.recoveryOnly !== undefined && typeof input.recoveryOnly !== "boolean")
   ) {
     throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
   }
@@ -82,7 +87,156 @@ async function validateAppendInput(input, registry) {
   if (normalized.serialized !== input.payload) {
     throw durableEventError(DURABLE_EVENT_CODES.payloadInvalid, { status: 422 });
   }
-  return { ...input, payloadBytes: normalized.bytes };
+  if (stream.scope.kind === "effective_shareable" && input.recoveryOnly !== true) {
+    if (
+      typeof input.binding?.sourceGroupKey !== "string" ||
+      input.binding.sourceGroupKey.length === 0 ||
+      !["discord", "twitch"].includes(input.binding?.targetPlatform) ||
+      input.binding.targetPlatform === input.binding.sourceGroupKey.split(":")[0] ||
+      input.binding.revision !== input.route.bindingRevision ||
+      input.binding.sourceKey !== descriptor.realmIdentity
+    ) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+  }
+  return { ...input, payloadBytes: normalized.bytes, definition: stream };
+}
+
+function requireEffectiveBinding(sql, input) {
+  if (input.definition.scope.kind !== "effective_shareable") return;
+  const existing = one(
+    sql,
+    `SELECT binding_revision, source_key, status
+     FROM durable_event_stream_bindings
+     WHERE source_group_key = ? AND target_platform = ?`,
+    input.binding.sourceGroupKey,
+    input.binding.targetPlatform
+  );
+  if (!existing) {
+    sql.exec(
+      `INSERT INTO durable_event_stream_bindings
+       (source_group_key, target_platform, binding_revision, source_key,
+        status, reason, updated_at_ms)
+       VALUES (?, ?, ?, ?, 'active', 'registered', ?)`,
+      input.binding.sourceGroupKey,
+      input.binding.targetPlatform,
+      input.binding.revision,
+      input.binding.sourceKey,
+      Date.now()
+    );
+    return;
+  }
+  const existingRevision = Number(existing.binding_revision);
+  if (
+    input.binding.revision < existingRevision ||
+    (input.binding.revision === existingRevision &&
+      (existing.status !== "active" || existing.source_key !== input.binding.sourceKey))
+  ) {
+    throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+  }
+  if (input.binding.revision > existingRevision) {
+    sql.exec(
+      `UPDATE durable_event_stream_bindings
+       SET binding_revision = ?, source_key = ?, status = 'active',
+           reason = 'registered', updated_at_ms = ?
+       WHERE source_group_key = ? AND target_platform = ?`,
+      input.binding.revision,
+      input.binding.sourceKey,
+      Date.now(),
+      input.binding.sourceGroupKey,
+      input.binding.targetPlatform
+    );
+    sql.exec(
+      "UPDATE durable_event_stream_metadata SET consumer_ready = 0 WHERE singleton = 1"
+    );
+  }
+}
+
+function applyBindingNotification(state, input) {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    !NOTIFICATION_ID_PATTERN.test(input.notificationId ?? "") ||
+    !ROUTE_ID_PATTERN.test(input.routeId ?? "") ||
+    !ENVIRONMENT_PATTERN.test(input.environment ?? "") ||
+    typeof input.sourceGroupKey !== "string" ||
+    input.sourceGroupKey.length === 0 ||
+    input.sourceGroupKey.length > 500 ||
+    !["discord", "twitch"].includes(input.targetPlatform) ||
+    !Number.isSafeInteger(input.previousRevision) ||
+    input.previousRevision < 0 ||
+    !Number.isSafeInteger(input.revision) ||
+    input.revision <= input.previousRevision ||
+    typeof input.previousSourceKey !== "string" ||
+    input.previousSourceKey.length === 0 ||
+    input.previousSourceKey.length > 500 ||
+    !["ready", "transitioning", "unavailable"].includes(input.status) ||
+    (input.status === "ready"
+      ? typeof input.sourceKey !== "string" || input.sourceKey.length === 0 ||
+        input.sourceKey.length > 500
+      : input.sourceKey !== null) ||
+    typeof input.reason !== "string" ||
+    input.reason.length === 0 ||
+    input.reason.length > 100 ||
+    !Number.isSafeInteger(input.committedAtMs) ||
+    input.committedAtMs < 0
+  ) {
+    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
+  }
+  return state.storage.transactionSync(() => {
+    const sql = state.storage.sql;
+    const meta = metadata(sql);
+    if (meta.route_id !== null && meta.route_id !== input.routeId) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    const row = one(
+      sql,
+      `SELECT binding_revision, source_key, status
+       FROM durable_event_stream_bindings
+       WHERE source_group_key = ? AND target_platform = ?`,
+      input.sourceGroupKey,
+      input.targetPlatform
+    );
+    if (!row || input.revision <= Number(row.binding_revision)) {
+      return { accepted: true, stale: true, moved: row?.status === "moved" };
+    }
+    if (
+      Number(row.binding_revision) !== input.previousRevision ||
+      row.source_key !== input.previousSourceKey
+    ) {
+      return { accepted: true, stale: true, moved: row.status === "moved" };
+    }
+    const descriptor = meta.descriptor_json === null
+      ? null
+      : JSON.parse(meta.descriptor_json);
+    if (
+      descriptor !== null &&
+      descriptor.deploymentEnvironment !== input.environment
+    ) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    const stillCurrent = input.status === "ready" &&
+      input.sourceKey === descriptor?.realmIdentity;
+    sql.exec(
+      `UPDATE durable_event_stream_bindings
+       SET binding_revision = ?, source_key = ?, status = ?, reason = ?,
+           updated_at_ms = ?
+       WHERE source_group_key = ? AND target_platform = ?`,
+      input.revision,
+      input.sourceKey,
+      stillCurrent ? "active" : "moved",
+      input.reason,
+      input.committedAtMs,
+      input.sourceGroupKey,
+      input.targetPlatform
+    );
+    if (stillCurrent) {
+      sql.exec(
+        "UPDATE durable_event_stream_metadata SET consumer_ready = 0 WHERE singleton = 1"
+      );
+    }
+    return { accepted: true, stale: false, moved: !stillCurrent };
+  });
 }
 
 function pruneExpired(state, nowMs) {
@@ -135,24 +289,30 @@ async function append(state, registry, rawInput) {
   const input = await validateAppendInput(rawInput, registry);
   const nowMs = Date.now();
   pruneExpired(state, nowMs);
-  const result = state.storage.transactionSync(() => {
-    const sql = state.storage.sql;
-    const existing = one(
-      sql,
-      `SELECT event_id, fingerprint, sequence, accepted_at_ms
-       FROM durable_event_stream_receipts WHERE event_id = ?`,
-      input.eventId
-    );
-    if (existing) {
-      if (existing.fingerprint !== input.fingerprint) {
-        throw durableEventError(DURABLE_EVENT_CODES.sourceConflict, { status: 409 });
-      }
-      return {
-        replayed: true,
-        sequence: Number(existing.sequence),
-        acceptedAtMs: Number(existing.accepted_at_ms)
-      };
+  const existing = one(
+    state.storage.sql,
+    `SELECT event_id, fingerprint, sequence, accepted_at_ms
+     FROM durable_event_stream_receipts WHERE event_id = ?`,
+    input.eventId
+  );
+  if (existing) {
+    if (existing.fingerprint !== input.fingerprint) {
+      throw durableEventError(DURABLE_EVENT_CODES.sourceConflict, { status: 409 });
     }
+    return {
+      replayed: true,
+      sequence: Number(existing.sequence),
+      acceptedAtMs: Number(existing.accepted_at_ms)
+    };
+  }
+  if (input.recoveryOnly === true) {
+    throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+  }
+  // Binding movement is stream lifecycle state, not part of an individual
+  // append. Commit it first so a rejected append can still require a newly
+  // connected consumer for a later incarnation of the same physical stream.
+  state.storage.transactionSync(() => {
+    const sql = state.storage.sql;
     const meta = metadata(sql);
     if (meta.route_id !== null && meta.route_id !== input.route.routeId) {
       throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
@@ -164,6 +324,38 @@ async function append(state, registry, rawInput) {
       throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
     }
     if (
+      input.definition.scope.kind === "group_local" &&
+      meta.binding_revision !== null &&
+      Number(meta.binding_revision) !== input.route.bindingRevision
+    ) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    requireEffectiveBinding(sql, input);
+    if (input.definition.scope.kind === "effective_shareable") {
+      sql.exec(
+        `UPDATE durable_event_stream_metadata
+         SET route_id = COALESCE(route_id, ?),
+             descriptor_json = COALESCE(descriptor_json, ?)
+         WHERE singleton = 1`,
+        input.route.routeId,
+        JSON.stringify(input.route.descriptor)
+      );
+    }
+  });
+  const result = state.storage.transactionSync(() => {
+    const sql = state.storage.sql;
+    const meta = metadata(sql);
+    if (meta.route_id !== null && meta.route_id !== input.route.routeId) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    if (
+      meta.descriptor_json !== null &&
+      meta.descriptor_json !== JSON.stringify(input.route.descriptor)
+    ) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    if (
+      input.definition.scope.kind === "group_local" &&
       meta.binding_revision !== null &&
       Number(meta.binding_revision) !== input.route.bindingRevision
     ) {
@@ -248,7 +440,9 @@ async function append(state, registry, rawInput) {
        WHERE singleton = 1`,
       input.route.routeId,
       JSON.stringify(input.route.descriptor),
-      input.route.bindingRevision,
+      input.definition.scope.kind === "group_local"
+        ? input.route.bindingRevision
+        : null,
       sequence + 1,
       input.payloadBytes
     );
@@ -304,6 +498,16 @@ export function initializeDurableEventStreamTables(state) {
     );
     CREATE INDEX IF NOT EXISTS durable_event_stream_ingress_time
       ON durable_event_stream_ingress(accepted_at_ms, event_id);
+    CREATE TABLE IF NOT EXISTS durable_event_stream_bindings (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL CHECK (binding_revision >= 0),
+      source_key TEXT,
+      status TEXT NOT NULL CHECK (status IN ('active', 'moved')),
+      reason TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform)
+    );
   `);
 }
 
@@ -333,11 +537,18 @@ export class DurableEventStreamBackend {
         );
         return json({ ready: input.ready });
       }
+      if (request.method === "POST" && url.pathname === DURABLE_EVENT_BINDING_PATH) {
+        return json(applyBindingNotification(this.state, await request.json()));
+      }
       return new Response("Not Found", { status: 404 });
     } catch (cause) {
       if (cause instanceof DurableEventError) {
         return json({ error: cause.message, code: cause.code }, cause.status);
       }
+      logError("durable_event.stream_failed", {
+        platform: "shared",
+        correlationId: crypto.randomUUID()
+      }, cause);
       return json({
         error: "The durable event service is temporarily unavailable.",
         code: DURABLE_EVENT_CODES.serviceUnavailable

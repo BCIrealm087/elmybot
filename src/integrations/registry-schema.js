@@ -298,6 +298,46 @@ export function initializeRegistryTables(state) {
 
     CREATE INDEX IF NOT EXISTS state_query_binding_outbox_due
       ON state_query_binding_outbox(next_attempt_at_ms);
+
+    CREATE TABLE IF NOT EXISTS durable_event_binding_watchers (
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      route_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+      expected_source_key TEXT NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      renewed_at_ms INTEGER NOT NULL,
+      PRIMARY KEY (source_group_key, target_platform, route_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS durable_event_binding_watchers_expiry
+      ON durable_event_binding_watchers(expires_at_ms);
+
+    CREATE TABLE IF NOT EXISTS durable_event_binding_outbox (
+      notification_id TEXT PRIMARY KEY,
+      source_group_key TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      route_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      previous_revision INTEGER NOT NULL CHECK (previous_revision >= 0),
+      previous_source_key TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL CHECK (binding_revision >= 0),
+      binding_status TEXT NOT NULL CHECK (
+        binding_status IN ('ready', 'transitioning', 'unavailable')
+      ),
+      source_key TEXT,
+      reason TEXT NOT NULL,
+      committed_at_ms INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+      next_attempt_at_ms INTEGER NOT NULL,
+      UNIQUE (source_group_key, target_platform, route_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS durable_event_binding_outbox_due
+      ON durable_event_binding_outbox(next_attempt_at_ms);
   `);
 
   // `pending` was the pre-lifecycle name for an invitation that had not yet

@@ -3,9 +3,13 @@ import {
   createStandaloneRealmIdentity,
   shareableStateRealmObjectName
 } from "../shareable-state/index.js";
-import { resolveEffectiveShareableStateRealm } from "../integrations/registry-client.js";
+import {
+  integrationRegistryStub,
+  resolveEffectiveShareableStateRealm
+} from "../integrations/registry-client.js";
 import {
   DURABLE_EVENT_CODES,
+  DURABLE_EVENT_LIMITS,
   durableEventError,
   durableEventId,
   durableEventRouteId,
@@ -98,6 +102,24 @@ function streamStub(env, routeId) {
 }
 
 async function appendToStream(env, input) {
+  if (input.route.binding) {
+    return checkedJson(await integrationRegistryStub(env).fetch(
+      "https://integration-registry/durable-events/append",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sourceGroup: input.route.binding.sourceGroup,
+          targetPlatform: input.route.binding.targetPlatform,
+          expectedRevision: input.route.binding.revision,
+          expectedSourceKey: input.route.binding.sourceKey,
+          expiresAtMs: Date.now() + DURABLE_EVENT_LIMITS.receiptRetentionMs,
+          environment: deploymentEnvironment(env),
+          append: input
+        })
+      }
+    ));
+  }
   return checkedJson(await streamStub(env, input.route.routeId).fetch(
     `https://durable-event-stream${DURABLE_EVENT_APPEND_PATH}`,
     {
@@ -151,6 +173,12 @@ async function effectiveRoute(env, invocation, featureId, stream) {
   return Object.freeze({
     routeId: await durableEventRouteId(descriptor),
     bindingRevision: result.bindingRevision,
+    binding: Object.freeze({
+      sourceGroup: invocation.origin.group,
+      targetPlatform: stream.targetPlatform,
+      revision: result.bindingRevision,
+      sourceKey: realmIdentity
+    }),
     descriptor
   });
 }
@@ -175,7 +203,57 @@ function safeReceipt() {
   return Object.freeze({ accepted: true });
 }
 
-async function publish(env, invocation, featureId, definition, initialRoute, payload) {
+async function publishAccepted(
+  env,
+  invocation,
+  definition,
+  eventId,
+  fingerprint,
+  serialized,
+  route
+) {
+  try {
+    const receipt = await appendToStream(env, {
+      eventId,
+      fingerprint,
+      featureId: route.descriptor.featureId,
+      streamId: definition.id,
+      version: definition.version,
+      route,
+      payload: serialized
+    });
+    await ledgerRequest(env, invocation, "finalize", {
+      eventId,
+      fingerprint,
+      state: "committed",
+      receipt: {
+        sequence: receipt.sequence,
+        acceptedAtMs: receipt.acceptedAtMs
+      }
+    });
+    return safeReceipt();
+  } catch (cause) {
+    if (cause instanceof DurableEventError && TERMINAL_REJECTIONS.has(cause.code)) {
+      await ledgerRequest(env, invocation, "finalize", {
+        eventId,
+        fingerprint,
+        state: "rejected",
+        code: cause.code
+      });
+    }
+    throw cause;
+  }
+}
+
+async function publish(
+  env,
+  invocation,
+  featureId,
+  definition,
+  initialRoute,
+  payload,
+  resolveAfterTransition = null
+) {
   const normalized = serializeDurableEventPayload(payload, definition.payload.schema);
   const eventId = await durableEventId({
     featureId,
@@ -201,35 +279,47 @@ async function publish(env, invocation, featureId, definition, initialRoute, pay
     });
   }
   try {
-    const receipt = await appendToStream(env, {
+    return await publishAccepted(
+      env,
+      invocation,
+      definition,
       eventId,
       fingerprint,
-      featureId,
-      streamId: definition.id,
-      version: definition.version,
-      route: prepared.route,
-      payload: normalized.serialized
-    });
-    await ledgerRequest(env, invocation, "finalize", {
-      eventId,
-      fingerprint,
-      state: "committed",
-      receipt: {
-        sequence: receipt.sequence,
-        acceptedAtMs: receipt.acceptedAtMs
-      }
-    });
-    return safeReceipt();
+      normalized.serialized,
+      prepared.route
+    );
   } catch (cause) {
-    if (cause instanceof DurableEventError && TERMINAL_REJECTIONS.has(cause.code)) {
-      await ledgerRequest(env, invocation, "finalize", {
-        eventId,
-        fingerprint,
-        state: "rejected",
-        code: cause.code
-      });
+    if (
+      !(cause instanceof DurableEventError) ||
+      cause.code !== DURABLE_EVENT_CODES.transition ||
+      typeof resolveAfterTransition !== "function"
+    ) {
+      throw cause;
     }
-    throw cause;
+    const nextRoute = await resolveAfterTransition();
+    if (
+      nextRoute.routeId === prepared.route.routeId &&
+      nextRoute.bindingRevision === prepared.route.bindingRevision
+    ) throw cause;
+    const repinned = await ledgerRequest(env, invocation, "repin", {
+      eventId,
+      fingerprint,
+      previousRouteId: prepared.route.routeId,
+      route: nextRoute
+    });
+    if (repinned.state === "committed") return safeReceipt();
+    if (repinned.state === "rejected") {
+      throw durableEventError(repinned.code, { status: 409 });
+    }
+    return await publishAccepted(
+      env,
+      invocation,
+      definition,
+      eventId,
+      fingerprint,
+      normalized.serialized,
+      repinned.route
+    );
   }
 }
 
@@ -291,7 +381,11 @@ export function createDurableEventStreamRuntime(env, invocation, registry) {
           featureId,
           definition,
           route,
-          payload
+          payload,
+          async () => await effectiveRoute(env, invocation, featureId, {
+            definition,
+            targetPlatform
+          })
         )
       });
     }

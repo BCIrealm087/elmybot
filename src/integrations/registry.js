@@ -9,6 +9,15 @@ import {
   unregisterStateQueryBindingWatcher
 } from "../state-querying/binding-notifications.js";
 import { StateQueryNotificationError } from "../state-querying/source-notifications.js";
+import {
+  advanceDurableEventBindings,
+  drainDurableEventBindingNotifications,
+  DurableEventBindingError,
+  prepareDurableEventBindingMutation,
+  pruneDurableEventBindingNotifications
+} from "../durable-events/binding-notifications.js";
+import { appendWithDurableEventBindingAuthority } from "../durable-events/binding-authority.js";
+import { DurableEventError } from "../durable-events/contract.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
   cloneShareableStateSnapshot,
@@ -149,6 +158,7 @@ export class IntegrationRegistry {
     this.env = env;
     this.integrationRevocations = new Map();
     this.groupRevocations = new Map();
+    this.durableEventAppendTail = Promise.resolve();
     initializeRegistryTables(state);
     state.blockConcurrencyWhile(async () => {
       await this.armNextExpiration();
@@ -158,6 +168,7 @@ export class IntegrationRegistry {
   async armNextExpiration() {
     const nowMs = Date.now();
     pruneStateQueryBindingNotifications(this.state.storage.sql, nowMs);
+    pruneDurableEventBindingNotifications(this.state.storage.sql, nowMs);
     const nextMaintenance = this.state.storage.sql.exec(
       `WITH next_maintenance(next_at_ms) AS (VALUES
          ((SELECT MIN(expires_at_ms)
@@ -181,7 +192,11 @@ export class IntegrationRegistry {
          ((SELECT MIN(next_attempt_at_ms)
            FROM state_query_binding_outbox)),
          ((SELECT MIN(lease_expires_at_ms)
-           FROM state_query_binding_watchers))
+           FROM state_query_binding_watchers)),
+         ((SELECT MIN(next_attempt_at_ms)
+           FROM durable_event_binding_outbox)),
+         ((SELECT MIN(expires_at_ms)
+           FROM durable_event_binding_watchers))
        )
        SELECT MIN(next_at_ms) AS next_at_ms FROM next_maintenance`,
       INTEGRATION_INVITATION_RETENTION_MS,
@@ -510,7 +525,24 @@ export class IntegrationRegistry {
   }
 
   advanceStateQueryBinding(input) {
-    return advanceStateQueryBinding(this.state, input);
+    const revision = advanceStateQueryBinding(this.state, input);
+    advanceDurableEventBindings(this.state, input, revision);
+    return revision;
+  }
+
+  async appendDurableEvent(input) {
+    const previous = this.durableEventAppendTail;
+    let release;
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.durableEventAppendTail = previous.then(() => current);
+    await previous;
+    try {
+      return await appendWithDurableEventBindingAuthority(this, input);
+    } finally {
+      release();
+    }
   }
 
   registerStateQueryBindingWatcher(input) {
@@ -3238,11 +3270,13 @@ export class IntegrationRegistry {
 
   async alarm() {
     try {
+      await this.durableEventAppendTail;
       await this.expireInvitations();
       this.pruneTerminalInvitations();
       await this.processNextGroupRevocation();
       await this.processNextIntegrationRevocation();
       await drainStateQueryBindingNotifications(this.state, this.env);
+      await drainDurableEventBindingNotifications(this.state, this.env);
     } finally {
       await this.armNextExpiration();
     }
@@ -3255,7 +3289,9 @@ export class IntegrationRegistry {
         request.method === "POST" &&
         BINDING_LIFECYCLE_MUTATION_PATHS.has(url.pathname)
       ) {
+        await this.durableEventAppendTail;
         await prepareStateQueryBindingMutation(this.state);
+        await prepareDurableEventBindingMutation(this.state);
       }
       if (request.method === "POST" && url.pathname === "/invitations") {
         return noStoreJson(await this.createInvitation(await request.json()), 201);
@@ -3328,6 +3364,15 @@ export class IntegrationRegistry {
           await request.json()
         ));
       }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/durable-events/append"
+      ) {
+        const input = await request.json();
+        const result = await this.appendDurableEvent(input);
+        await this.armNextExpiration();
+        return noStoreJson(result);
+      }
       if (request.method === "POST" && url.pathname === "/routes/resolve") {
         return noStoreJson(this.resolveRoutes(await request.json()));
       }
@@ -3360,7 +3405,9 @@ export class IntegrationRegistry {
     } catch (error) {
       if (
         error instanceof IntegrationRegistryError ||
-        error instanceof StateQueryNotificationError
+        error instanceof StateQueryNotificationError ||
+        error instanceof DurableEventBindingError ||
+        error instanceof DurableEventError
       ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);
       }

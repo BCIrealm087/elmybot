@@ -839,6 +839,18 @@ consumer must deduplicate by the framework-owned event ID once the browser
 transport is available. Event grants and browser registration are deliberately
 separate from feature code and are completed by later roadmap steps.
 
+For `current(...)`, directional default resolution is repeated for each command
+and the resolved realm plus binding revision are authorized atomically by the
+integration registry. If ownership changes while publication is in flight, the
+framework safely recovers an already accepted receipt or repins the still-pending
+source attempt to the new stream. The old stream keeps its retained backlog but
+accepts no publication through an obsolete binding. The new stream has its own
+sequence space and remains unavailable until its own consumer is attached; no
+event rows are copied across activation, default switching, revocation,
+fallback, or standalone-successor transitions. Even when a rapid A-to-B-to-A
+change returns to the same physical object name, it is a new binding incarnation
+and requires a new consumer attachment.
+
 ## Cookbook 7: conditionally protected command modes
 
 Keep the action public when everyone may read but only moderators may mutate.

@@ -222,6 +222,55 @@ function finalize(state, rawInput) {
   });
 }
 
+function repin(state, rawInput) {
+  if (
+    typeof rawInput !== "object" ||
+    rawInput === null ||
+    !EVENT_ID_PATTERN.test(rawInput.eventId ?? "") ||
+    !FINGERPRINT_PATTERN.test(rawInput.fingerprint ?? "") ||
+    !ROUTE_ID_PATTERN.test(rawInput.previousRouteId ?? "") ||
+    !ROUTE_ID_PATTERN.test(rawInput.route?.routeId ?? "") ||
+    !Number.isSafeInteger(rawInput.route?.bindingRevision) ||
+    rawInput.route.bindingRevision < 0
+  ) {
+    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
+  }
+  const routeJson = JSON.stringify(rawInput.route);
+  if (new TextEncoder().encode(routeJson).byteLength > 2_048) {
+    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
+  }
+  return state.storage.transactionSync(() => {
+    const sql = state.storage.sql;
+    const existing = one(
+      sql,
+      `SELECT state, fingerprint, route_id, route_json, sequence,
+              accepted_at_ms, rejection_code
+       FROM durable_event_publications WHERE event_id = ?`,
+      rawInput.eventId
+    );
+    if (!existing) {
+      throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 409 });
+    }
+    if (existing.fingerprint !== rawInput.fingerprint) {
+      throw durableEventError(DURABLE_EVENT_CODES.sourceConflict, { status: 409 });
+    }
+    if (existing.state !== "pending") return publicRow(existing);
+    if (existing.route_id !== rawInput.previousRouteId) return publicRow(existing);
+    sql.exec(
+      `UPDATE durable_event_publications
+       SET route_id = ?, binding_revision = ?, route_json = ?, updated_at_ms = ?
+       WHERE event_id = ? AND state = 'pending' AND route_id = ?`,
+      rawInput.route.routeId,
+      rawInput.route.bindingRevision,
+      routeJson,
+      Date.now(),
+      rawInput.eventId,
+      rawInput.previousRouteId
+    );
+    return { state: "pending", route: rawInput.route };
+  });
+}
+
 export function initializeDurableEventPublicationTables(state) {
   state.storage.sql.exec(`
     CREATE TABLE IF NOT EXISTS durable_event_publications (
@@ -250,13 +299,16 @@ export function initializeDurableEventPublicationTables(state) {
 
 export function handleDurableEventPublicationRequest(state, request, pathname) {
   if (pathname !== `${DURABLE_EVENT_LEDGER_PATH}/prepare` &&
-      pathname !== `${DURABLE_EVENT_LEDGER_PATH}/finalize`) return null;
+      pathname !== `${DURABLE_EVENT_LEDGER_PATH}/finalize` &&
+      pathname !== `${DURABLE_EVENT_LEDGER_PATH}/repin`) return null;
   if (request.method !== "POST") {
     throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 405 });
   }
-  return request.json().then((input) => pathname.endsWith("/prepare")
-    ? prepare(state, input)
-    : finalize(state, input));
+  return request.json().then((input) => {
+    if (pathname.endsWith("/prepare")) return prepare(state, input);
+    if (pathname.endsWith("/repin")) return repin(state, input);
+    return finalize(state, input);
+  });
 }
 
 export function isDurableEventPublicationError(error) {

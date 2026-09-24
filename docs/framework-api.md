@@ -135,6 +135,17 @@ a bounded SQLite-backed stream before returning success. A retry of the same
 source and payload returns the existing logical receipt; changing the payload
 fails with `durable_event_source_conflict`.
 
+Effective-shareable publication uses the same directional-default authority as
+shareable state. Each append pins the realm identity and ordered binding
+revision through the integration registry, which keeps bounded lifecycle
+interest for that physical stream. Activation, default switching, revocation,
+fallback, and standalone-successor changes make the prior stream drain-only;
+later commands resolve a separate stream and fail consumer-unavailable until a
+new consumer is attached. Backlogs and sequence numbers are never copied or
+merged between realms. A rapid A-to-B-to-A change still creates a new stream
+incarnation and requires a newly attached consumer, while delayed older
+invalidation cannot move the newer binding backward.
+
 Publication requires the `DURABLE_EVENT_STREAMS_ENABLED` switch and a ready,
 authorized consumer. The event-grant and WebSocket registration layers that
 make a browser consumer ready arrive in later durable-event roadmap steps, so
