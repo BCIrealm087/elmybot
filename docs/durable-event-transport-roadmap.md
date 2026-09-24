@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–2 are complete and steps 3–10 are pending.
+Status: implementation roadmap; steps 1–3 are complete and steps 4–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -334,8 +334,7 @@ value-free durable event streams with `defineDurableEventStream`, select the
 handles. The registry indexes declarations, validates publisher compatibility,
 and emits a deterministic public catalog. Contributor documentation and the new
 `event-stream` scaffold put current replacement state and every-trigger delivery
-side by side. The production publish backend remains intentionally deferred to
-step 3.
+side by side. The production publish backend was then completed in step 3.
 
 Add the approved declaration helper and optional `defineFeature` collection,
 registry indexing, public value-free catalog shape, and action service name.
@@ -367,7 +366,16 @@ smoke, JavaScript syntax, and the non-deploying Wrangler dry run.
 
 ### 3. Implement the bounded durable event log and publish service
 
-**Status:** pending. **Depends on:** steps 1–2.
+**Status:** complete (2026-09-24). **Depends on:** steps 1–2.
+
+Completed with a new SQLite-backed `DurableEventStream` object and additive
+Wrangler migration, a bounded source-publication ledger in each origin group's
+`GroupConfig`, and the production `local(...).publish()` and
+`current(...).publish()` runtime paths. Publication now validates and
+canonically serializes declared payloads, derives opaque logical and physical
+identities, pins the first resolved route, and returns success only after the
+stream transaction commits. The implementation keeps consumer readiness behind
+an internal boundary for the grant and WebSocket work in steps 5–6.
 
 Add the SQLite-backed `DurableEventStream` class, Wrangler binding and additive
 migration. Implement canonical object naming, schema initialization, sequence
@@ -392,6 +400,13 @@ text and operational metadata must never contain the payload.
 source idempotence across restart, different-source same-payload distinction,
 count/byte/age bounds, rejection without a consumer, safe retry behavior, and no
 unbounded tables or timers.
+
+**Completion evidence:** implementation commit
+[`3f50e9b`](https://github.com/BCIrealm087/elmybot/commit/3f50e9b3c98f72d88cd9e966fc7f2d9ca05b7b0d);
+authoritative CI
+[#229](https://github.com/BCIrealm087/elmybot/actions/runs/35983259347) passed
+455 tests across 49 files, lint and generated-catalog checks, Chromium WebSocket
+smoke, JavaScript syntax, and the non-deploying Wrangler dry run.
 
 ### 4. Resolve stream ownership and lifecycle transitions
 
