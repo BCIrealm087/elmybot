@@ -128,9 +128,17 @@ a command. The reserved accessors are `await ctx.eventStreams.local(streamId)`
 for group-local declarations and `await ctx.eventStreams.current(
 otherPlatform, streamId)` for effective-shareable declarations. Both yield a
 feature-bound handle with `publish(payload)`. Platform trigger declarations in
-the existing `events` collection remain a different concept. During roadmap
-step 2 the authoring, validation, catalog, and accessor surface is present; the
-production durable append behind `publish()` is implemented in step 3.
+the existing `events` collection remain a different concept. The production
+publish service validates and canonically serializes the payload, pins the
+resolved physical route in the origin group's source ledger, and commits it to
+a bounded SQLite-backed stream before returning success. A retry of the same
+source and payload returns the existing logical receipt; changing the payload
+fails with `durable_event_source_conflict`.
+
+Publication requires the `DURABLE_EVENT_STREAMS_ENABLED` switch and a ready,
+authorized consumer. The event-grant and WebSocket registration layers that
+make a browser consumer ready arrive in later durable-event roadmap steps, so
+declaring a stream does not by itself make it externally consumable.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented

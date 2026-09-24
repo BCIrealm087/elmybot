@@ -21,6 +21,11 @@ import {
   stateQueryNotificationTablesExist,
   StateQueryNotificationError
 } from "./state-querying/source-notifications.js";
+import {
+  handleDurableEventPublicationRequest,
+  initializeDurableEventPublicationTables,
+  isDurableEventPublicationError
+} from "./durable-events/source-ledger.js";
 
 class GroupConfigUserFacingError extends Error {
   constructor(message, status = 500) {
@@ -209,6 +214,7 @@ export class GroupConfig {
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
     initializeStateQueryGrantTables(state);
+    initializeDurableEventPublicationTables(state);
     const hasNotificationTables = stateQueryNotificationTablesExist(state);
     if (hasNotificationTables) {
       initializeLocalStateNotificationTables(state);
@@ -338,6 +344,16 @@ export class GroupConfig {
       );
       if (stateQueryGrantResult !== null) return stateQueryGrantResult;
 
+      const durableEventPublicationResult =
+        await handleDurableEventPublicationRequest(
+          this.state,
+          request,
+          url.pathname
+        );
+      if (durableEventPublicationResult !== null) {
+        return jsonResponse(durableEventPublicationResult);
+      }
+
       const pathHandlers = requestHandlers[request.method];
       const pathHandler = pathHandlers && pathHandlers[url.pathname];
       if (!pathHandler) return new Response("Not Found", { status: 404 });
@@ -347,9 +363,10 @@ export class GroupConfig {
         e instanceof GroupConfigUserFacingError ||
         e instanceof FeatureStorageUserFacingError ||
         e instanceof StateQueryGrantStorageError ||
-        e instanceof StateQueryNotificationError
+        e instanceof StateQueryNotificationError ||
+        isDurableEventPublicationError(e)
       ) {
-        return jsonResponse({ userFacingError: e.message }, e.status);
+        return jsonResponse({ userFacingError: e.message, code: e.code }, e.status);
       }
 
       const correlationId = request.headers.get("x-correlation-id") ?? crypto.randomUUID();

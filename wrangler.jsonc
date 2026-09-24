@@ -19,6 +19,8 @@
 		"STATE_QUERY_DIAGNOSTICS": "false",
 		"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "production",
 		"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev",
+		"DURABLE_EVENT_STREAMS_ENABLED": "true",
+		"DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT": "production",
 		"TWITCH_DEPLOYMENT_ENVIRONMENT": "production",
 		"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev"
 	},
@@ -38,7 +40,8 @@
 			{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
 			{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
 			{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" },
-			{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" }
+			{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" },
+			{ "name": "DURABLE_EVENT_STREAM", "class_name": "DurableEventStream" }
 		]
 	},
 
@@ -106,6 +109,10 @@
 		{
 			"tag": "v15",
 			"new_sqlite_classes": ["StateQueryObserver"]
+		},
+		{
+			"tag": "v16",
+			"new_sqlite_classes": ["DurableEventStream"]
 		}
 	],
 
@@ -116,6 +123,8 @@
 				"STATE_QUERY_DIAGNOSTICS": "true",
 				"STATE_QUERY_DEPLOYMENT_ENVIRONMENT": "test",
 				"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",
+				"DURABLE_EVENT_STREAMS_ENABLED": "true",
+				"DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT": "test",
 				"TWITCH_DEPLOYMENT_ENVIRONMENT": "test",
 				"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev"
 			},
@@ -134,7 +143,8 @@
 					{ "name": "INTEGRATION_REGISTRY", "class_name": "IntegrationRegistry" },
 					{ "name": "INTEGRATION_COORDINATOR", "class_name": "IntegrationCoordinator" },
 					{ "name": "SHAREABLE_STATE_REALM", "class_name": "ShareableStateRealm" },
-					{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" }
+					{ "name": "STATE_QUERY_OBSERVER", "class_name": "StateQueryObserver" },
+					{ "name": "DURABLE_EVENT_STREAM", "class_name": "DurableEventStream" }
 				]
 			}
 		}

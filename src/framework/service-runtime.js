@@ -19,6 +19,7 @@ import {
   shareableStateRealmObjectName,
   ShareableStateRealmError
 } from "../shareable-state/index.js";
+import { createDurableEventStreamRuntime } from "../durable-events/publisher.js";
 
 export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "authorization",
@@ -315,7 +316,7 @@ async function shareableStateRequest(
   }
 }
 
-export function createFeatureServiceRuntime(env, invocation) {
+export function createFeatureServiceRuntime(env, invocation, registry = null) {
   const input = (featureId, values = {}) => ({ featureId, ...values });
   const resolvedShareableStateScopes = new WeakSet();
   const shareableRequest = async (
@@ -470,6 +471,7 @@ export function createFeatureServiceRuntime(env, invocation) {
           );
         }
       }),
+      eventStreams: createDurableEventStreamRuntime(env, invocation, registry),
       state: Object.freeze({
         async get(featureId, key) {
           const result = await storageRequest(

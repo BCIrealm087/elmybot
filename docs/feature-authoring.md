@@ -831,6 +831,14 @@ delivery stream. See the
 [`event-stream` scaffold recipe](feature-quickstart.md#1-create-the-feature) and
 the [durable-event contract](durable-event-contract.md).
 
+`publish(payload)` returns only after the event is durably appended, or throws a
+bounded safe service error. The backend enforces the declared JSON schema, a
+4-KiB serialized payload limit, per-stream count/byte/rate bounds, a two-hour
+source-retry ledger, and consumer availability. Delivery is at least once, so a
+consumer must deduplicate by the framework-owned event ID once the browser
+transport is available. Event grants and browser registration are deliberately
+separate from feature code and are completed by later roadmap steps.
+
 ## Cookbook 7: conditionally protected command modes
 
 Keep the action public when everyone may read but only moderators may mutate.
