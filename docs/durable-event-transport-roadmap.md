@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; step 1 is complete and steps 2–10 are pending.
+Status: implementation roadmap; steps 1–2 are complete and steps 3–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -326,7 +326,16 @@ and the non-deploying Wrangler dry run.
 
 ### 2. Add the declarative event-stream feature API
 
-**Status:** pending. **Depends on:** step 1.
+**Status:** complete (2026-09-24). **Depends on:** step 1.
+
+Completed as an additive framework surface. Features can declare validated,
+value-free durable event streams with `defineDurableEventStream`, select the
+`eventStreams` action service, and resolve `local(...)` or `current(...)` stream
+handles. The registry indexes declarations, validates publisher compatibility,
+and emits a deterministic public catalog. Contributor documentation and the new
+`event-stream` scaffold put current replacement state and every-trigger delivery
+side by side. The production publish backend remains intentionally deferred to
+step 3.
 
 Add the approved declaration helper and optional `defineFeature` collection,
 registry indexing, public value-free catalog shape, and action service name.
@@ -348,6 +357,13 @@ trigger?” decision path without internal imports.
 before; valid stream declarations appear in a deterministic public catalog;
 invalid identities, schemas, scopes, and undeclared service use fail with stable
 errors; framework API tests demonstrate a feature selecting either mode or both.
+
+**Completion evidence:** implementation commit
+[`a99147c`](https://github.com/BCIrealm087/elmybot/commit/a99147c0a62942bdfef28029b398476fe9c2b388);
+authoritative CI
+[#227](https://github.com/BCIrealm087/elmybot/actions/runs/35975435893) passed
+446 tests across 48 files, lint and generated-catalog checks, Chromium WebSocket
+smoke, JavaScript syntax, and the non-deploying Wrangler dry run.
 
 ### 3. Implement the bounded durable event log and publish service
 
