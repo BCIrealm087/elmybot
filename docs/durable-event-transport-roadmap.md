@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–3 are complete and steps 4–10 are pending.
+Status: implementation roadmap; steps 1–4 are complete and steps 5–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -410,7 +410,7 @@ smoke, JavaScript syntax, and the non-deploying Wrangler dry run.
 
 ### 4. Resolve stream ownership and lifecycle transitions
 
-**Status:** pending. **Depends on:** step 3.
+**Status:** complete (2026-09-24). **Depends on:** step 3.
 
 Reuse the existing effective standalone/integration resolution contract to map
 a declared event stream to a physical object. Pin the resolved realm identity
@@ -432,6 +432,17 @@ creation that is not the selected default must not redirect a stream.
 Twitch publication, asymmetric defaults, A-to-B-to-A changes, revocation with
 and without fallback, interrupted transitions, delayed invalidations, old-backlog
 draining, and explicit new-stream unavailability.
+
+**Completion evidence:** implementation commit
+[`34d54ab`](https://github.com/BCIrealm087/elmybot/commit/34d54ab3a9072d9c90fd1088615ac0a60191776a);
+authoritative CI
+[#231](https://github.com/BCIrealm087/elmybot/actions/runs/36005604001) passed
+461 tests across 50 files, lint and generated-catalog checks, Chromium WebSocket
+smoke, JavaScript syntax, and the non-deploying Wrangler dry run. The lifecycle
+suite covers standalone activation, symmetric and asymmetric defaults,
+independent physical sequences, A-to-B-to-A movement both before and after
+notification delivery, stale invalidations, revocation fallback and standalone
+successors, retained old backlog, and unavailable new streams.
 
 ### 5. Add event-specific grants, sessions, and discovery
 
