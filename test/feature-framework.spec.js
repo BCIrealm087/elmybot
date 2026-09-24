@@ -93,6 +93,7 @@ describe("Command and feature framework", () => {
       schedules: [],
       shareableState: [],
       readableState: [],
+      eventStreams: [],
       effectAdapters: { discord: [], twitch: [] }
     });
     expect(Object.isFrozen(definition)).toBe(true);

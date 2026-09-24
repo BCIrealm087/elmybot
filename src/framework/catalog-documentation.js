@@ -107,6 +107,7 @@ export function generateFeatureCatalogMarkdown(
       : "repository-local",
     feature.description,
     feature.actions.length,
+    feature.eventStreams.length,
     feature.commands.discord.length,
     feature.commands.twitch.length
   ]);
@@ -135,6 +136,19 @@ export function generateFeatureCatalogMarkdown(
     entry.definition.result.schema.type,
     entry.definition.result.absence.kind,
     entry.definition.collection?.legacyCoverage ?? "—"
+  ]);
+  const eventStreamRows = registry.eventCatalog.map((entry) => [
+    entry.feature,
+    `\`${entry.stream}\``,
+    entry.version,
+    entry.platforms.join(", "),
+    entry.scope.kind,
+    entry.access.kind,
+    entry.payload.schema.type,
+    `${entry.delivery.kind}; ${entry.delivery.consumers} consumer; ` +
+      `${entry.delivery.retentionSeconds}s; ` +
+      `${entry.delivery.maxRetainedEvents} events; ` +
+      `${entry.delivery.maxRetainedBytes} bytes`
   ]);
   const workspaceRows = workspacePackages.map((workspacePackage) => [
     `\`${workspacePackage.packageName}\``,
@@ -199,6 +213,7 @@ export function generateFeatureCatalogMarkdown(
         "Source",
         "Description",
         "Actions",
+        "Event streams",
         "Discord commands",
         "Twitch commands"
       ],
@@ -237,6 +252,21 @@ export function generateFeatureCatalogMarkdown(
       ],
       readableStateRows
     ),
+    "## Durable event streams",
+    "",
+    table(
+      [
+        "Feature",
+        "Stream",
+        "Version",
+        "Platforms",
+        "Scope",
+        "Access eligibility",
+        "Payload root",
+        "Delivery"
+      ],
+      eventStreamRows
+    ),
     "## Workspace packages",
     "",
     table(["Package", "Feature", "Installed by Worker"], workspaceRows),
@@ -263,7 +293,7 @@ export function generateFeatureCatalogMarkdown(
       ],
       routeRows
     ),
-    "## Events",
+    "## Platform event triggers",
     "",
     table(["Feature", "Event kind", "Action kind"], eventRows),
     "## Schedules",

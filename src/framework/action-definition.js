@@ -23,6 +23,7 @@ const SUPPORTED_SERVICES = new Set([
   "links",
   "shareableState",
   "state",
+  "eventStreams",
   "random"
 ]);
 const COOLDOWN_SCOPES = new Set(["actor", "group"]);

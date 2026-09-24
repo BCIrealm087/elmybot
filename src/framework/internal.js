@@ -14,6 +14,11 @@ export {
   validateReadableStateSchemaValue
 } from "./readable-state.js";
 export {
+  DURABLE_EVENT_DELIVERY,
+  isDurableEventStream,
+  publicDurableEventStream
+} from "./durable-event-stream.js";
+export {
   createReadableStateReference,
   normalizeReadableStateArguments,
   normalizeReadableStateParameter,

@@ -8,6 +8,10 @@ export {
   ReadableStateDefinitionError
 } from "./readable-state.js";
 export {
+  defineDurableEventStream,
+  DurableEventStreamDefinitionError
+} from "./durable-event-stream.js";
+export {
   FEATURE_FRAMEWORK_API_VERSION,
   frameworkApiVersion,
   supportedFrameworkApiVersions

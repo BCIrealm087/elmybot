@@ -9,16 +9,16 @@ Framework API: v1.
 
 ## Features
 
-| Feature | Source | Description | Actions | Discord commands | Twitch commands |
-| --- | --- | --- | --- | --- | --- |
-| `core.alive` | `@elmybot/feature-alive` | A shared responsiveness check. | 1 | 1 | 1 |
-| `fun.deaths` | `@elmybot/feature-fun-deaths` | Tracks per-game deaths locally or across linked Discord and Twitch groups. | 1 | 1 | 1 |
-| `widget.data` | `@elmybot/feature-widget-data` | Publishes current widget data for state-query clients. | 1 | 1 | 1 |
-| `fun.counter` | repository-local | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 1 | 1 |
-| `integrations.announcements` | repository-local | Publishes immediate announcements across linked platforms. | 1 | 1 | 1 |
-| `discord.role-access` | repository-local | Manages Discord roles trusted by protected bot commands. | 0 | 1 | 0 |
-| `twitch.stream-online` | repository-local | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 |
-| `integrations.scheduled-twitch-announcements` | repository-local | Schedules recurring announcements to linked Twitch chats. | 0 | 1 | 0 |
+| Feature | Source | Description | Actions | Event streams | Discord commands | Twitch commands |
+| --- | --- | --- | --- | --- | --- | --- |
+| `core.alive` | `@elmybot/feature-alive` | A shared responsiveness check. | 1 | 0 | 1 | 1 |
+| `fun.deaths` | `@elmybot/feature-fun-deaths` | Tracks per-game deaths locally or across linked Discord and Twitch groups. | 1 | 0 | 1 | 1 |
+| `widget.data` | `@elmybot/feature-widget-data` | Publishes current widget data for state-query clients. | 1 | 0 | 1 | 1 |
+| `fun.counter` | repository-local | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 0 | 1 | 1 |
+| `integrations.announcements` | repository-local | Publishes immediate announcements across linked platforms. | 1 | 0 | 1 | 1 |
+| `discord.role-access` | repository-local | Manages Discord roles trusted by protected bot commands. | 0 | 0 | 1 | 0 |
+| `twitch.stream-online` | repository-local | Publishes authenticated Twitch stream-online events to linked Discord channels. | 1 | 0 | 0 | 0 |
+| `integrations.scheduled-twitch-announcements` | repository-local | Schedules recurring announcements to linked Twitch chats. | 0 | 0 | 1 | 0 |
 
 ## Shareable state declarations
 
@@ -35,6 +35,10 @@ Framework API: v1.
 | fun.deaths | `count` | 1 | lookup | discord, twitch | effective_shareable | operator_grant | game | object | default | — |
 | fun.deaths | `counts` | 1 | collection | discord, twitch | effective_shareable | operator_grant | — | array | default | explicit |
 | widget.data | `latest` | 1 | value | discord, twitch | effective_shareable | operator_grant | — | object | absent | — |
+
+## Durable event streams
+
+_None._
 
 ## Workspace packages
 
@@ -80,7 +84,7 @@ Framework API: v1.
 | integrations.announcements | `twitch.announce-to-discord.v1` | twitch | discord | link-channel | enabled | disabled |
 | twitch.stream-online | `twitch.stream-online-to-discord.v1` | twitch | discord | link-channel | enabled | disabled |
 
-## Events
+## Platform event triggers
 
 | Feature | Event kind | Action kind |
 | --- | --- | --- |

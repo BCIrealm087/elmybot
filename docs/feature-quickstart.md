@@ -26,6 +26,12 @@ already know that you need a common combination, select one explicitly:
 | Shared command | `npm run feature:new -- fun-hype --workspace --template shared-command` | One action bound to Discord and Twitch | The same result through Discord and raw Twitch text; add platform-specific cases only when behavior differs |
 | Local counter | `npm run feature:new -- fun-score --workspace --template local-counter` | Independent per-group scores with public reads and moderator updates | Allowed and denied updates, unchanged state after denial, counter floor, and isolation between two groups |
 | Shareable counter | `npm run feature:new -- fun-score --workspace --template shareable-counter` | Standalone scores that share through selected links, with public reads and moderator updates | Standalone isolation, two origins sharing one selected integration, protected-update safety, and counter floor |
+| Event stream | `npm run feature:new -- fun-alert --workspace --template event-stream` | Discord and Twitch commands declaring every-trigger delivery | Declaration, payload schema, both command bindings, group cooldown, and the event-only dependency boundary |
+
+The `event-stream` recipe is declaration-first during durable-transport roadmap
+step 2. Its generated test proves framework composition without invoking
+`publish()`; production append, replay, and acknowledgement behavior arrives in
+the following runtime steps. Current-state recipes remain fully executable.
 
 Choose `local-counter` when each Discord server or Twitch channel owns its
 score. Choose `shareable-counter` when each group should work before linking
@@ -57,12 +63,16 @@ Recipes are starting points, not runtime modes or restrictions.
 
 If your selected recipe is close to what you want, keep editing it and skip
 this table. If the command needs a combination not covered by a recipe, answer
-these three questions before choosing a pattern:
+these questions before choosing a pattern:
 
-1. **Does each community own its own data?** Use group-local state.
-2. **Should the command work before linking and share one value through the
+1. **Does a consumer need the complete value that is true now?** Declare
+   readable state; intermediate changes may coalesce.
+2. **Must a consumer handle every accepted command?** Declare a durable event
+   stream; delivery is bounded and at least once.
+3. **Does each community own its own data?** Use group-local state.
+4. **Should the command work before linking and share one value through the
    selected integration after linking?** Use resolved shareable state.
-3. **Does the command only need to send something to another group?** Keep its
+5. **Does the command only need to send something to another group?** Keep its
    state local and use a route; cross-platform delivery does not require shared
    storage.
 
@@ -144,6 +154,7 @@ framework suite:
 | Local preferences or state | Isolation between the groups that must remember independently |
 | Shareable state | Standalone isolation and two origins selecting the same integration |
 | Readable state | `runtime.query.snapshot()` or `runtime.query.watch()`, then an ordinary mutation that changes the result |
+| Durable event stream | Keep the declaration and command bindings compiling now; publish/replay/acknowledgement test helpers arrive with the durable runtime work |
 | Custom routes or platform options | The relevant missing-route or platform-specific behavior |
 
 The counter recipes use the test kit's `runCapabilityCases()` to exercise

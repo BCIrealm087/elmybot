@@ -27,6 +27,7 @@ export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "links",
   "shareableState",
   "state",
+  "eventStreams",
   "random"
 ]);
 

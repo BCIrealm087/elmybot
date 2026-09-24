@@ -22,6 +22,7 @@ import {
   isScheduledActionDefinition
 } from "./trigger-definitions.js";
 import { publicReadableStateExport } from "./readable-state.js";
+import { publicDurableEventStream } from "./durable-event-stream.js";
 
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -195,6 +196,7 @@ export function createFeatureRegistry(features, {
   const events = Object.create(null);
   const schedules = Object.create(null);
   const readableState = Object.create(null);
+  const eventStreams = Object.create(null);
   const adapters = collectEffectAdapters(effectAdapters);
   const services = collectAvailableServices(availableServices);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
@@ -270,6 +272,16 @@ export function createFeatureRegistry(features, {
         "duplicate_readable_state_export"
       );
     });
+    feature.eventStreams.forEach((definition) => {
+      const identity = `${feature.id}:${definition.id}:v${definition.version}`;
+      addUnique(
+        eventStreams,
+        identity,
+        Object.freeze({ featureId: feature.id, definition }),
+        "durable event stream",
+        "duplicate_durable_event_stream"
+      );
+    });
     if (PLATFORMS.some((platform) => feature.effectAdapters[platform].length > 0)) {
       throw new FeatureRegistryError(
         `Feature \`${feature.id}\` declares feature-owned effect adapters, which are ` +
@@ -308,6 +320,47 @@ export function createFeatureRegistry(features, {
         `\`${featureId}\` declares no shareable namespaces.`,
         { code: "feature_action_shareable_state_undeclared" }
       );
+    }
+    if (action.uses.services.includes("eventStreams")) {
+      const declarations = featuresById[featureId].eventStreams;
+      if (declarations.length === 0) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` requests durable event streams but feature ` +
+          `\`${featureId}\` declares none.`,
+          { code: "feature_action_event_stream_undeclared" }
+        );
+      }
+      if (
+        action.uses.services.length !== 1 ||
+        action.uses.routes.length > 0 ||
+        action.uses.effects.length > 0
+      ) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` must use durable event streams without other ` +
+          "services, routes, or effects.",
+          { code: "feature_action_event_stream_mixed_dependencies" }
+        );
+      }
+      if (action.cooldown?.scope !== "group" || action.cooldown.seconds < 1) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` must declare a group cooldown of at least one ` +
+          "second for durable event publication.",
+          { code: "feature_action_event_stream_cooldown_required" }
+        );
+      }
+      const declaredPlatforms = new Set(
+        declarations.flatMap((definition) => definition.platforms)
+      );
+      const unsupportedOrigin = action.supportedOrigins.find(
+        (platform) => !declaredPlatforms.has(platform)
+      );
+      if (unsupportedOrigin) {
+        throw new FeatureRegistryError(
+          `Feature action \`${kind}\` supports ${unsupportedOrigin}, but no durable ` +
+          "event stream declaration supports that platform.",
+          { code: "feature_action_event_stream_origin_unsupported" }
+        );
+      }
     }
     const routeTargetPlatforms = new Set();
     for (const usedRouteKind of action.uses.routes) {
@@ -357,6 +410,13 @@ export function createFeatureRegistry(features, {
         { code: "feature_event_action_unknown" }
       );
     }
+    if (action.uses.services.includes("eventStreams")) {
+      throw new FeatureRegistryError(
+        `Feature event \`${event.eventKind}\` cannot invoke a durable event-publishing ` +
+        "action in version 1.",
+        { code: "feature_event_event_stream_action_unsupported" }
+      );
+    }
     const sourcePlatform = event.eventKind.split(".")[0];
     if (!action.supportedOrigins.includes(sourcePlatform)) {
       throw new FeatureRegistryError(
@@ -387,6 +447,13 @@ export function createFeatureRegistry(features, {
         `Feature schedule \`${schedule.kind}\` refers to an uninstalled action ` +
         `\`${schedule.actionKind}\`.`,
         { code: "feature_schedule_action_unknown" }
+      );
+    }
+    if (action.uses.services.includes("eventStreams")) {
+      throw new FeatureRegistryError(
+        `Feature schedule \`${schedule.kind}\` cannot invoke a durable ` +
+        "event-publishing action in version 1.",
+        { code: "feature_schedule_event_stream_action_unsupported" }
       );
     }
     if (action.modePolicy !== null) {
@@ -476,6 +543,26 @@ export function createFeatureRegistry(features, {
     }
   }
 
+  const commandActionKinds = new Set(
+    Object.values(commands).flatMap((definitions) =>
+      Object.values(definitions)
+        .filter((command) => command.mode === ACTION_COMMAND_TYPE)
+        .map((command) => command.actionKind)
+    )
+  );
+  for (const action of Object.values(actions)) {
+    if (
+      action.uses.services.includes("eventStreams") &&
+      !commandActionKinds.has(action.kind)
+    ) {
+      throw new FeatureRegistryError(
+        `Feature action \`${action.kind}\` uses durable event streams but is not ` +
+        "invoked by a command.",
+        { code: "feature_action_event_stream_command_required" }
+      );
+    }
+  }
+
   return Object.freeze({
     apiVersion: frameworkApiVersion,
     features: Object.freeze([...features]),
@@ -492,6 +579,16 @@ export function createFeatureRegistry(features, {
       .sort((left, right) =>
         left.feature.localeCompare(right.feature) ||
         left.export.localeCompare(right.export) ||
+        left.version - right.version
+      )),
+    eventStreams: Object.freeze(eventStreams),
+    eventCatalog: Object.freeze(Object.values(eventStreams)
+      .map(({ featureId, definition }) =>
+        publicDurableEventStream(definition, featureId)
+      )
+      .sort((left, right) =>
+        left.feature.localeCompare(right.feature) ||
+        left.stream.localeCompare(right.stream) ||
         left.version - right.version
       )),
     services: Object.freeze([...services].sort()),

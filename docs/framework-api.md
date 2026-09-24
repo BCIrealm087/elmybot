@@ -45,6 +45,8 @@ surface consists of:
   `FeatureDefinitionError`;
 - readable-state helpers: `defineReadableStateExport` and
   `ReadableStateDefinitionError`;
+- durable-event helpers: `defineDurableEventStream` and
+  `DurableEventStreamDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -71,9 +73,18 @@ schema-valid result cell. A declaration only makes state eligible for a later
 read grant; it does not add a route or expose a value. See
 [`state-query-readable-state.md`](state-query-readable-state.md).
 
+`defineFeature()` also accepts up to ten optional `eventStreams` declarations
+created by `defineDurableEventStream()`. Omission normalizes to a frozen empty
+array. The helper validates stream identity and version, platforms, group-local
+or effective-shareable scope, operator-grant access, and a bounded JSON payload
+schema. Registry composition publishes a deterministic value-free event catalog;
+it never includes payload values, physical realm identities, grants, cursors, or
+consumer state. See the normative
+[`durable-event-contract.md`](durable-event-contract.md).
+
 Actions may explicitly request the controlled `authorization`, `config`,
-`integrationState`, `links`, `shareableState`, `state`, and `random` context
-services.
+`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, and
+`random` context services.
 `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
@@ -110,6 +121,16 @@ standalone realm when no directional default exists, or that default
 integration's realm otherwise. The scope mirrors the state operations. It does
 not expose links, realm IDs, generations, snapshots, or storage enumeration.
 `integrationState` remains available for compatibility.
+
+An action selecting every-trigger delivery declares only the `eventStreams`
+service, uses a group cooldown of at least one second, and is bound directly to
+a command. The reserved accessors are `await ctx.eventStreams.local(streamId)`
+for group-local declarations and `await ctx.eventStreams.current(
+otherPlatform, streamId)` for effective-shareable declarations. Both yield a
+feature-bound handle with `publish(payload)`. Platform trigger declarations in
+the existing `events` collection remain a different concept. During roadmap
+step 2 the authoring, validation, catalog, and accessor surface is present; the
+production durable append behind `publish()` is implemented in step 3.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented

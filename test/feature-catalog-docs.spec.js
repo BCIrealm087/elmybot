@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { featureRegistry } from "../src/features/index.js";
 import { generateFeatureCatalogMarkdown } from "../src/framework/catalog-documentation.js";
 import {
+  defineDurableEventStream,
   defineFeature,
   frameworkApiVersion
 } from "../src/framework/index.js";
@@ -26,6 +27,8 @@ describe("Generated feature catalog", () => {
     );
     expect(markdown).toContain("## Shareable state declarations");
     expect(markdown).toContain("## Readable state exports");
+    expect(markdown).toContain("## Durable event streams");
+    expect(markdown).toContain("## Platform event triggers");
     expect(markdown).toContain("## Workspace packages");
     expect(markdown).toContain("`@elmybot/feature-alive` | `core.alive` | yes");
     expect(markdown).toContain("`core.alive` | `@elmybot/feature-alive`");
@@ -50,6 +53,45 @@ describe("Generated feature catalog", () => {
     expect(markdown).toContain("`twitch.stream-online-to-discord.v1`");
     expect(markdown).toContain("`twitch.stream.online.v1`");
     expect(markdown).toContain("`discord.integration.announce-twitch-random.v1`");
+  });
+
+  it("documents durable event declarations without stream values or internals", () => {
+    const registry = createFeatureRegistry([
+      defineFeature({
+        apiVersion: frameworkApiVersion,
+        id: "widget.events",
+        description: "Publishes widget events.",
+        eventStreams: [
+          defineDurableEventStream({
+            id: "updates",
+            version: 1,
+            label: "Widget events",
+            description: "Events for an authorized widget.",
+            platforms: ["discord", "twitch"],
+            scope: { kind: "effective_shareable" },
+            access: { kind: "operator_grant" },
+            payload: {
+              schema: {
+                type: "object",
+                properties: {
+                  data: { type: "string", minLength: 1, maxLength: 400 }
+                },
+                required: ["data"]
+              }
+            }
+          })
+        ]
+      })
+    ]);
+    const markdown = generateFeatureCatalogMarkdown(registry);
+
+    expect(markdown).toContain(
+      "widget.events | `updates` | 1 | discord, twitch | effective_shareable | " +
+      "operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; " +
+      "1000 events; 1048576 bytes"
+    );
+    expect(markdown).not.toContain("physical stream");
+    expect(markdown).not.toContain("payload value");
   });
 
   it("documents normalized shareable-state declarations without state values", () => {

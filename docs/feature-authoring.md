@@ -138,6 +138,7 @@ form.
 | Send something to a linked platform | Action + route + routed effect |
 | Read the selected relationship to another platform | Action using the links service |
 | Run automatically from an authenticated event | Event binding + action |
+| Deliver every accepted command to a consumer | Durable event stream + command action |
 | Run later or repeatedly | Schedule definition + action |
 | Remember scores, quotes, or counters | Action using namespaced state |
 
@@ -815,6 +816,20 @@ the command action or mutate state. See the complete
 Operators can expose only selected declarations through scoped, expiring grants;
 the [state-query HTTP guide](state-query-http.md) describes discovery and
 snapshot behavior. A declaration remains private until such a grant exists.
+
+Readable state and durable events answer different questions. Use readable
+state when a client needs the complete value that is true now and may safely
+skip intermediate replacements. Use `eventStreams` when a client must handle
+every command that Elmybot accepts within explicit capacity and retention
+bounds. A stream declaration uses `defineDurableEventStream()` and an event
+action declares only `uses: { services: ["eventStreams"] }`, a group cooldown,
+and a direct command binding. Use `ctx.eventStreams.local(streamId)` for a
+group-local stream or `ctx.eventStreams.current(otherPlatform, streamId)` for
+effective-shareable ownership. The existing top-level `events` collection is
+for authenticated platform events that invoke actions; it is not a consumer
+delivery stream. See the
+[`event-stream` scaffold recipe](feature-quickstart.md#1-create-the-feature) and
+the [durable-event contract](durable-event-contract.md).
 
 ## Cookbook 7: conditionally protected command modes
 
