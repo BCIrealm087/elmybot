@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–4 are complete and steps 5–10 are pending.
+Status: implementation roadmap; steps 1–5 are complete and steps 6–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -446,7 +446,7 @@ successors, retained old backlog, and unavailable new streams.
 
 ### 5. Add event-specific grants, sessions, and discovery
 
-**Status:** pending. **Depends on:** steps 2 and 4.
+**Status:** complete (2026-09-26). **Depends on:** steps 2 and 4.
 
 Add a separate event-consumer grant type and issuance flows for Discord managers
 and Twitch broadcasters. A grant authorizes one exact target, declared stream,
@@ -468,6 +468,18 @@ never credentials.
 environment isolation, expiry, revocation, session origin/CSRF rules, one-time
 secret display, wrong-token-type rejection, catalog filtering, registration
 races, and payload-free logs/errors.
+
+**Completion evidence:** implementation commit
+[`939afcb`](https://github.com/BCIrealm087/elmybot/commit/939afcb4c17c8021204fca422dda7b224227f359);
+authoritative CI
+[#233](https://github.com/BCIrealm087/elmybot/actions/runs/36268915790) passed
+468 tests across 51 files, lint and generated-catalog checks, Chromium WebSocket
+smoke, JavaScript syntax, and the non-deploying Wrangler dry run. Event grants
+use an independent signed credential and cookie boundary, exact target/stream/
+environment scope, one-time Discord and Twitch issuance, value-free discovery,
+and stream-owned atomic replacement, validation, revocation, and future socket
+registration authority. Bounded grant tombstones and payload-free reset audits
+close races without authorization polling or an additional worker queue.
 
 ### 6. Implement the hibernating durable-event WebSocket protocol
 
