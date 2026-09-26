@@ -21,6 +21,7 @@
 		"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev",
 		"DURABLE_EVENT_STREAMS_ENABLED": "true",
 		"DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT": "production",
+		"DURABLE_EVENT_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev",
 		"TWITCH_DEPLOYMENT_ENVIRONMENT": "production",
 		"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker.cutelmy.workers.dev"
 	},
@@ -125,6 +126,7 @@
 				"STATE_QUERY_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",
 				"DURABLE_EVENT_STREAMS_ENABLED": "true",
 				"DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT": "test",
+				"DURABLE_EVENT_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev",
 				"TWITCH_DEPLOYMENT_ENVIRONMENT": "test",
 				"TWITCH_PUBLIC_ORIGIN": "https://elmybot-worker-test.cutelmy.workers.dev"
 			},

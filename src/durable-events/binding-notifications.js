@@ -52,7 +52,7 @@ function direction(sourceGroupInput, targetPlatformInput) {
 
 function environment(env) {
   const value = env?.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT;
-  if (typeof value !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(value)) {
+  if (typeof value !== "string" || !/^[a-z0-9_-]{1,40}$/.test(value)) {
     fail("Durable event binding environment is unavailable.", {
       status: 503,
       code: "durable_event_service_unavailable"

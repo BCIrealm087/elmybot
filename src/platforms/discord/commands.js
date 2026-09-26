@@ -6,6 +6,7 @@ import { discordGroupConfigFetch } from "./group-config.js";
 import { compileDiscordFeatureCommands } from "./feature-commands.js";
 import { integrationCommands } from "./integration-commands.js";
 import { issueBroadStateQueryGrant } from "../../state-querying/grant-client.js";
+import { issueDurableEventGrant } from "../../durable-events/grant-client.js";
 import {
   DISCORD_JOB_KINDS,
   discordSchedulingHandlers,
@@ -74,6 +75,64 @@ async function featureConfigFetch(interaction, env, operation, body) {
 }
 
 const managementCommands = Object.freeze({
+  "event_stream_grant": {
+    description: "Create a credential for one durable event stream",
+    guild: { capability: CAPABILITIES.EVENT_STREAM_MANAGE },
+    deferred: true,
+    options: [
+      {
+        name: "stream",
+        description: "Installed stream ID, for example widget.data:updates:v1",
+        type: 3,
+        required: true
+      },
+      {
+        name: "duration_hours",
+        description: "Credential lifetime from 1 to 720 hours (default 24)",
+        type: 4,
+        required: false,
+        min_value: 1,
+        max_value: 720
+      },
+      {
+        name: "reset_backlog",
+        description: "Acknowledge loss and reset a retention-blocked stream",
+        type: 5,
+        required: false
+      }
+    ],
+    exec: async (interaction, env) => {
+      const durationHours = getOption(interaction, "duration_hours") ?? 24;
+      try {
+        const issued = await issueDurableEventGrant(env, featureRegistry, {
+          target: { platform: "discord", groupId: interaction.guild_id },
+          stream: String(getOption(interaction, "stream") ?? ""),
+          expiresInSeconds: durationHours * 60 * 60,
+          resetBacklog: getOption(interaction, "reset_backlog") === true
+        }, {
+          actor: {
+            platform: "discord",
+            id: interaction.member?.user?.id ?? "unknown"
+          }
+        });
+        const expiresAt = Math.floor(issued.grant.expiresAtMs / 1000);
+        return ephemeralData(
+          "Durable event-stream grant created. This credential is shown once; keep it secret.\n" +
+          `Credential: \`${issued.credential}\`\n` +
+          `Expires: <t:${expiresAt}:F>\n` +
+          "Use it as a Bearer credential, or exchange it at `POST /event-stream/session`."
+        );
+      } catch (error) {
+        if (error?.code === "durable_event_grant_invalid") {
+          return ephemeralData(
+            "That event stream is not installed or is unavailable for this server."
+          );
+        }
+        throw error;
+      }
+    }
+  },
+
   "state_query_grant": {
     description: "Create a scoped read credential for web-source state queries",
     guild: { capability: CAPABILITIES.STATE_QUERY_MANAGE },

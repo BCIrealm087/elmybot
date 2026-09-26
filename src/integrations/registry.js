@@ -18,6 +18,8 @@ import {
 } from "../durable-events/binding-notifications.js";
 import { appendWithDurableEventBindingAuthority } from "../durable-events/binding-authority.js";
 import { DurableEventError } from "../durable-events/contract.js";
+import { issueWithDurableEventBindingAuthority } from "../durable-events/grant-authority.js";
+import { DurableEventGrantError } from "../durable-events/grants.js";
 import { initializeRegistryTables } from "./registry-schema.js";
 import {
   cloneShareableStateSnapshot,
@@ -540,6 +542,21 @@ export class IntegrationRegistry {
     await previous;
     try {
       return await appendWithDurableEventBindingAuthority(this, input);
+    } finally {
+      release();
+    }
+  }
+
+  async issueDurableEventGrant(input) {
+    const previous = this.durableEventAppendTail;
+    let release;
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    this.durableEventAppendTail = previous.then(() => current);
+    await previous;
+    try {
+      return await issueWithDurableEventBindingAuthority(this, input);
     } finally {
       release();
     }
@@ -3373,6 +3390,14 @@ export class IntegrationRegistry {
         await this.armNextExpiration();
         return noStoreJson(result);
       }
+      if (
+        request.method === "POST" &&
+        url.pathname === "/durable-events/grants/issue"
+      ) {
+        const result = await this.issueDurableEventGrant(await request.json());
+        await this.armNextExpiration();
+        return noStoreJson(result, 201);
+      }
       if (request.method === "POST" && url.pathname === "/routes/resolve") {
         return noStoreJson(this.resolveRoutes(await request.json()));
       }
@@ -3407,6 +3432,7 @@ export class IntegrationRegistry {
         error instanceof IntegrationRegistryError ||
         error instanceof StateQueryNotificationError ||
         error instanceof DurableEventBindingError ||
+        error instanceof DurableEventGrantError ||
         error instanceof DurableEventError
       ) {
         return noStoreJson({ error: error.message, code: error.code }, error.status);

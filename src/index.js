@@ -22,6 +22,7 @@ import { ShareableStateRealmBackend } from "./shareable-state/index.js";
 import { handleStateQueryRequest } from "./state-querying/http.js";
 import { StateQueryObserverBackend } from "./state-querying/observer.js";
 import { DurableEventStreamBackend } from "./durable-events/stream.js";
+import { handleDurableEventRequest } from "./durable-events/http.js";
 
 const schedulerJobHandlers = createJobHandlerRegistry(
   discordSchedulingHandlers,
@@ -102,6 +103,9 @@ export default {
     }
     if (url.pathname === "/state-query" || url.pathname.startsWith("/state-query/")) {
       return handleStateQueryRequest(request, env);
+    }
+    if (url.pathname === "/event-stream" || url.pathname.startsWith("/event-stream/")) {
+      return handleDurableEventRequest(request, env);
     }
     return new Response("Not found", { status: 404 });
   },

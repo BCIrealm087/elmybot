@@ -836,8 +836,10 @@ bounded safe service error. The backend enforces the declared JSON schema, a
 4-KiB serialized payload limit, per-stream count/byte/rate bounds, a two-hour
 source-retry ledger, and consumer availability. Delivery is at least once, so a
 consumer must deduplicate by the framework-owned event ID once the browser
-transport is available. Event grants and browser registration are deliberately
-separate from feature code and are completed by later roadmap steps.
+transport is available. Event grants, scoped catalog discovery, same-origin
+sessions, and revocation are implemented separately from feature code; browser
+WebSocket registration arrives in the next roadmap step. See the
+[durable-event grant and HTTP guide](durable-event-http.md).
 
 For `current(...)`, directional default resolution is repeated for each command
 and the resolved realm plus binding revision are authorized atomically by the

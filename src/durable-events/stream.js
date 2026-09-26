@@ -7,17 +7,26 @@ import {
   serializeDurableEventPayload
 } from "./contract.js";
 import { logError } from "../common.js";
+import {
+  DURABLE_EVENT_GRANT_LIMITS,
+  DurableEventGrantError
+} from "./grants.js";
 
 export const DURABLE_EVENT_APPEND_PATH = "/internal/events/append";
 export const DURABLE_EVENT_CONSUMER_PATH = "/internal/events/consumer";
 export const DURABLE_EVENT_BINDING_PATH = "/internal/events/binding";
+export const DURABLE_EVENT_GRANT_PATH = "/internal/events/grants";
 const INTERNAL_HEADER = "x-elmybot-durable-event-internal";
 const INTERNAL_VALUE = "v1";
 const EVENT_ID_PATTERN = /^dev1\.[A-Za-z0-9_-]{43}$/;
 const FINGERPRINT_PATTERN = /^[a-f0-9]{64}$/;
 const ROUTE_ID_PATTERN = /^des1\.[A-Za-z0-9_-]{43}$/;
 const NOTIFICATION_ID_PATTERN = /^[a-f0-9]{32}$/;
-const ENVIRONMENT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const ENVIRONMENT_PATTERN = /^[a-z0-9_-]{1,40}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const DIGEST_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const MAX_GRANT_ROWS = 1_000;
+const MAX_RESET_AUDIT_ROWS = 100;
 
 function json(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -276,13 +285,276 @@ async function scheduleNextAlarm(state) {
        SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_events
        UNION ALL
        SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_receipts
-     ) WHERE deadline IS NOT NULL`
+       UNION ALL
+       SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_grants
+       WHERE status = 'active' AND expires_at_ms > ?
+     ) WHERE deadline IS NOT NULL`,
+    Date.now()
   )?.deadline;
   if (next === null || next === undefined) {
     await state.storage.deleteAlarm();
     return;
   }
   await state.storage.setAlarm(Math.max(Date.now() + 1, Number(next)));
+}
+
+function sameSecret(left, right) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+function grantRow(sql, grantId) {
+  return one(sql, "SELECT * FROM durable_event_stream_grants WHERE grant_id = ?", grantId);
+}
+
+function publicGrant(row) {
+  return {
+    id: row.grant_id,
+    target: { platform: row.target_platform, groupId: row.target_group_id },
+    stream: {
+      feature: row.feature_id,
+      stream: row.stream_id,
+      version: Number(row.stream_version)
+    },
+    environment: row.environment,
+    issuedAtMs: Number(row.issued_at_ms),
+    expiresAtMs: Number(row.expires_at_ms)
+  };
+}
+
+function grantStatus(row, input, nowMs, { secret = true } = {}) {
+  if (!row || (secret && !sameSecret(row.secret_digest, input.secretDigest))) {
+    return "denied";
+  }
+  if (
+    row.environment !== input.environment ||
+    row.target_platform !== input.target.platform ||
+    row.target_group_id !== input.target.groupId ||
+    row.route_id !== input.routeId
+  ) return "denied";
+  if (row.status !== "active") return row.status;
+  if (Number(row.expires_at_ms) <= nowMs) return "expired";
+  return "active";
+}
+
+function normalizedGrantLookup(input, { secret = true } = {}) {
+  if (
+    typeof input !== "object" || input === null ||
+    !UUID_PATTERN.test(input.grantId ?? "") ||
+    (secret && !DIGEST_PATTERN.test(input.secretDigest ?? "")) ||
+    !ENVIRONMENT_PATTERN.test(input.environment ?? "") ||
+    !ROUTE_ID_PATTERN.test(input.routeId ?? "") ||
+    !["discord", "twitch"].includes(input.target?.platform) ||
+    !/^\d{1,30}$/.test(input.target?.groupId ?? "") ||
+    !Number.isSafeInteger(input.nowMs) || input.nowMs < 0
+  ) {
+    throw new DurableEventGrantError("The durable-event credential is invalid.", {
+      code: "durable_event_access_denied",
+      status: 403
+    });
+  }
+  return input;
+}
+
+async function issueGrant(state, registry, input) {
+  const grant = input?.grant;
+  const route = grant?.route;
+  const definition = declaration(
+    registry,
+    grant?.stream?.feature,
+    grant?.stream?.stream,
+    grant?.stream?.version
+  );
+  if (
+    !definition ||
+    !UUID_PATTERN.test(input?.grantId ?? "") ||
+    !DIGEST_PATTERN.test(input?.secretDigest ?? "") ||
+    !ENVIRONMENT_PATTERN.test(grant?.environment ?? "") ||
+    !["discord", "twitch"].includes(grant?.target?.platform) ||
+    !/^\d{1,30}$/.test(grant?.target?.groupId ?? "") ||
+    !definition.platforms.includes(grant.target.platform) ||
+    !Number.isSafeInteger(grant?.issuedAtMs) ||
+    !Number.isSafeInteger(grant?.expiresAtMs) ||
+    grant.expiresAtMs < grant.issuedAtMs +
+      DURABLE_EVENT_GRANT_LIMITS.minLifetimeSeconds * 1000 ||
+    grant.expiresAtMs > grant.issuedAtMs +
+      DURABLE_EVENT_GRANT_LIMITS.maxLifetimeSeconds * 1000 ||
+    !ROUTE_ID_PATTERN.test(route?.routeId ?? "") ||
+    route?.descriptor?.featureId !== grant.stream.feature ||
+    route?.descriptor?.streamId !== grant.stream.stream ||
+    route?.descriptor?.version !== grant.stream.version ||
+    route?.descriptor?.scopeKind !== definition.scope.kind ||
+    route?.descriptor?.deploymentEnvironment !== grant.environment ||
+    await durableEventRouteId(route.descriptor) !== route.routeId ||
+    typeof input?.actor?.id !== "string" || input.actor.id.length === 0 ||
+    input.actor.id.length > 200 || input.actor.platform !== grant.target.platform ||
+    typeof input?.resetBacklog !== "boolean"
+  ) {
+    throw new DurableEventGrantError("The event-grant request is invalid.");
+  }
+  if (definition.scope.kind === "effective_shareable" && (
+    !Number.isSafeInteger(route.bindingRevision) ||
+    route.bindingRevision < 0 ||
+    route.binding?.revision !== route.bindingRevision ||
+    route.binding?.sourceKey !== route.descriptor.realmIdentity ||
+    route.binding?.sourceGroup?.platform !== grant.target.platform ||
+    route.binding?.sourceGroup?.id !== grant.target.groupId
+  )) {
+    throw new DurableEventGrantError("The event-grant binding is invalid.", {
+      code: "durable_event_stream_transition",
+      status: 409
+    });
+  }
+  const nowMs = grant.issuedAtMs;
+  const resetId = crypto.randomUUID();
+  const result = state.storage.transactionSync(() => {
+    const sql = state.storage.sql;
+    let meta = metadata(sql);
+    if (meta.route_id !== null && meta.route_id !== route.routeId) {
+      throw new DurableEventGrantError("The event stream moved.", {
+        code: "durable_event_stream_transition",
+        status: 409
+      });
+    }
+    if (meta.descriptor_json !== null &&
+        meta.descriptor_json !== JSON.stringify(route.descriptor)) {
+      throw new DurableEventGrantError("The event stream moved.", {
+        code: "durable_event_stream_transition",
+        status: 409
+      });
+    }
+    if (definition.scope.kind === "effective_shareable") {
+      requireEffectiveBinding(sql, {
+        definition,
+        binding: {
+          sourceGroupKey: route.binding.sourceGroup.key,
+          targetPlatform: route.binding.targetPlatform,
+          revision: route.binding.revision,
+          sourceKey: route.binding.sourceKey
+        }
+      });
+    }
+    meta = metadata(sql);
+    if (meta.gap_first_sequence !== null && !input.resetBacklog) {
+      throw durableEventError(DURABLE_EVENT_CODES.gapRequiresReset, { status: 409 });
+    }
+    let reset = null;
+    if (input.resetBacklog) {
+      reset = meta.gap_first_sequence === null ? null : {
+        firstSequence: Number(meta.gap_first_sequence),
+        lastSequence: Number(meta.gap_last_sequence)
+      };
+      sql.exec("DELETE FROM durable_event_stream_events");
+      sql.exec(
+        `UPDATE durable_event_stream_metadata
+         SET retained_count = 0, retained_bytes = 0,
+             acknowledged_sequence = next_sequence - 1,
+             gap_first_sequence = NULL, gap_last_sequence = NULL
+         WHERE singleton = 1`
+      );
+      if (reset !== null) {
+        sql.exec(
+          `INSERT INTO durable_event_stream_resets
+           (reset_id, feature_id, stream_id, stream_version, route_id,
+            first_sequence, last_sequence, actor_json, reset_at_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          resetId,
+          grant.stream.feature,
+          grant.stream.stream,
+          grant.stream.version,
+          route.routeId,
+          reset.firstSequence,
+          reset.lastSequence,
+          JSON.stringify(input.actor),
+          nowMs
+        );
+        sql.exec(
+          `DELETE FROM durable_event_stream_resets WHERE reset_id IN (
+             SELECT reset_id FROM durable_event_stream_resets
+             ORDER BY reset_at_ms DESC, reset_id DESC LIMIT -1 OFFSET ?
+           )`,
+          MAX_RESET_AUDIT_ROWS
+        );
+      }
+    }
+    sql.exec(
+      `UPDATE durable_event_stream_grants
+       SET status = 'replaced', revoked_at_ms = ? WHERE status = 'active'`,
+      nowMs
+    );
+    sql.exec(
+      `DELETE FROM durable_event_stream_grants
+       WHERE expires_at_ms < ? OR (revoked_at_ms IS NOT NULL AND revoked_at_ms < ?)`,
+      nowMs - 7 * 24 * 60 * 60 * 1000,
+      nowMs - 7 * 24 * 60 * 60 * 1000
+    );
+    sql.exec(
+      `DELETE FROM durable_event_stream_grants WHERE grant_id IN (
+         SELECT grant_id FROM durable_event_stream_grants
+         WHERE status <> 'active'
+         ORDER BY COALESCE(revoked_at_ms, expires_at_ms) DESC, grant_id DESC
+         LIMIT -1 OFFSET ?
+       )`,
+      MAX_GRANT_ROWS - 1
+    );
+    sql.exec(
+      `INSERT INTO durable_event_stream_grants
+       (grant_id, secret_digest, environment, target_platform, target_group_id,
+        feature_id, stream_id, stream_version, route_id, binding_revision,
+        issued_by_json, issued_at_ms, expires_at_ms, status, revoked_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL)`,
+      input.grantId,
+      input.secretDigest,
+      grant.environment,
+      grant.target.platform,
+      grant.target.groupId,
+      grant.stream.feature,
+      grant.stream.stream,
+      grant.stream.version,
+      route.routeId,
+      route.bindingRevision,
+      JSON.stringify(input.actor),
+      grant.issuedAtMs,
+      grant.expiresAtMs
+    );
+    sql.exec(
+      `UPDATE durable_event_stream_metadata
+       SET route_id = COALESCE(route_id, ?),
+           descriptor_json = COALESCE(descriptor_json, ?), consumer_ready = 0
+       WHERE singleton = 1`,
+      route.routeId,
+      JSON.stringify(route.descriptor)
+    );
+    return { created: true, reset };
+  });
+  state.waitUntil(scheduleNextAlarm(state));
+  return result;
+}
+
+function validateGrant(state, rawInput, options) {
+  const input = normalizedGrantLookup(rawInput, options);
+  const row = grantRow(state.storage.sql, input.grantId);
+  const status = grantStatus(row, input, input.nowMs, options);
+  return status === "active" ? { status, grant: publicGrant(row) } : { status };
+}
+
+function revokeGrant(state, rawInput) {
+  const input = normalizedGrantLookup(rawInput);
+  const row = grantRow(state.storage.sql, input.grantId);
+  const status = grantStatus(row, input, input.nowMs);
+  if (status !== "active") return { status };
+  state.storage.sql.exec(
+    `UPDATE durable_event_stream_grants
+     SET status = 'revoked', revoked_at_ms = ?
+     WHERE grant_id = ? AND status = 'active'`,
+    input.nowMs,
+    input.grantId
+  );
+  return { status: "revoked" };
 }
 
 async function append(state, registry, rawInput) {
@@ -508,6 +780,38 @@ export function initializeDurableEventStreamTables(state) {
       updated_at_ms INTEGER NOT NULL,
       PRIMARY KEY (source_group_key, target_platform)
     );
+    CREATE TABLE IF NOT EXISTS durable_event_stream_grants (
+      grant_id TEXT PRIMARY KEY,
+      secret_digest TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      target_group_id TEXT NOT NULL,
+      feature_id TEXT NOT NULL,
+      stream_id TEXT NOT NULL,
+      stream_version INTEGER NOT NULL,
+      route_id TEXT NOT NULL,
+      binding_revision INTEGER NOT NULL,
+      issued_by_json TEXT NOT NULL,
+      issued_at_ms INTEGER NOT NULL,
+      expires_at_ms INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('active', 'revoked', 'replaced')),
+      revoked_at_ms INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS durable_event_stream_grants_expiry
+      ON durable_event_stream_grants(expires_at_ms, status);
+    CREATE TABLE IF NOT EXISTS durable_event_stream_resets (
+      reset_id TEXT PRIMARY KEY,
+      feature_id TEXT NOT NULL,
+      stream_id TEXT NOT NULL,
+      stream_version INTEGER NOT NULL,
+      route_id TEXT NOT NULL,
+      first_sequence INTEGER NOT NULL,
+      last_sequence INTEGER NOT NULL,
+      actor_json TEXT NOT NULL,
+      reset_at_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS durable_event_stream_resets_time
+      ON durable_event_stream_resets(reset_at_ms, reset_id);
   `);
 }
 
@@ -540,9 +844,27 @@ export class DurableEventStreamBackend {
       if (request.method === "POST" && url.pathname === DURABLE_EVENT_BINDING_PATH) {
         return json(applyBindingNotification(this.state, await request.json()));
       }
+      if (request.method === "POST" && url.pathname.startsWith(`${DURABLE_EVENT_GRANT_PATH}/`)) {
+        const operation = url.pathname.slice(`${DURABLE_EVENT_GRANT_PATH}/`.length);
+        const input = await request.json();
+        if (operation === "issue") {
+          return json(await issueGrant(this.state, this.registry, input), 201);
+        }
+        if (operation === "validate") {
+          return json(validateGrant(this.state, input));
+        }
+        if (operation === "reference") {
+          return json(validateGrant(this.state, input, { secret: false }));
+        }
+        if (operation === "revoke") {
+          const result = revokeGrant(this.state, input);
+          this.state.waitUntil(scheduleNextAlarm(this.state));
+          return json(result);
+        }
+      }
       return new Response("Not Found", { status: 404 });
     } catch (cause) {
-      if (cause instanceof DurableEventError) {
+      if (cause instanceof DurableEventError || cause instanceof DurableEventGrantError) {
         return json({ error: cause.message, code: cause.code }, cause.status);
       }
       logError("durable_event.stream_failed", {

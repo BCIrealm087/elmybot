@@ -147,9 +147,12 @@ incarnation and requires a newly attached consumer, while delayed older
 invalidation cannot move the newer binding backward.
 
 Publication requires the `DURABLE_EVENT_STREAMS_ENABLED` switch and a ready,
-authorized consumer. The event-grant and WebSocket registration layers that
-make a browser consumer ready arrive in later durable-event roadmap steps, so
-declaring a stream does not by itself make it externally consumable.
+authorized consumer. Event-specific grants, same-origin sessions, scoped
+discovery, Discord manager issuance, and Twitch broadcaster issuance are now
+implemented independently of state-query authorization. The WebSocket
+registration layer that makes a browser consumer ready arrives in the next
+durable-event roadmap step, so declaring or granting a stream does not yet make
+it externally consumable.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented
