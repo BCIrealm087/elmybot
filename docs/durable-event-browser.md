@@ -23,6 +23,9 @@ The setup page also produces a minimal JavaScript integration example. Existing
 `/state-query/setup`, `/state-query/widget`, and state-query client assets remain
 separate and unchanged.
 
+For the installed `widget.data:updates:v1` stream, including both moderator
+commands and its exact payload contract, see the [widget-data guide](widget-data.md).
+
 ## Client API
 
 The maintained same-origin module is `/event-stream/client.js`:

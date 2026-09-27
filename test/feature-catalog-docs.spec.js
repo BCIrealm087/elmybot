@@ -128,9 +128,11 @@ describe("Generated feature catalog", () => {
       "fun.deaths | `counts` | 1 | collection | discord, twitch | " +
       "effective_shareable | operator_grant | — | array | default | explicit"
     );
-    expect(generateFeatureCatalogMarkdown(featureRegistry)).toContain(
-      "widget.data | `latest` | 1 | value | discord, twitch | " +
-      "effective_shareable | operator_grant | — | object | absent | —"
+    const installed = generateFeatureCatalogMarkdown(featureRegistry);
+    expect(installed).toContain(
+      "widget.data | `updates` | 1 | discord, twitch | effective_shareable | " +
+      "operator_grant | object | bounded_at_least_once"
     );
+    expect(installed).not.toContain("widget.data | `latest`");
   });
 });

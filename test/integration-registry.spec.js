@@ -357,12 +357,6 @@ describe("Cross-platform integration linking", () => {
             namespaceId: "game_deaths",
             outcome: "both_empty",
             automaticSelection: "reset"
-          }),
-          expect.objectContaining({
-            featureId: "widget.data",
-            namespaceId: "published_data",
-            outcome: "both_empty",
-            automaticSelection: "reset"
           })
         ])
       }

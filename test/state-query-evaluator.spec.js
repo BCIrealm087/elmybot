@@ -25,12 +25,6 @@ function read(exportId, args) {
   };
 }
 
-function widgetRead() {
-  return {
-    read: { feature: "widget.data", export: "latest", version: 1 }
-  };
-}
-
 function literal(game) {
   return { game: { literal: game } };
 }
@@ -123,45 +117,47 @@ describe("state-query evaluator", () => {
     expect(Object.isFrozen(first.query.bindings)).toBe(true);
   });
 
-  it("prepares, evaluates, projects, and size-bounds the ordinary widget query", async () => {
+  it("prepares, evaluates, projects, and size-bounds an ordinary lookup query", async () => {
     const selectedTarget = target("discord");
-    const publication = {
-      updateId: "wdu1." + "a".repeat(43),
-      data: "x".repeat(400),
-      origin: "discord"
-    };
     const document = query(
       selectedTarget,
-      { widget: widgetRead() },
+      { count: read("count", literal("hades")) },
       {
-        data: { ref: "widget", path: ["data"] },
-        update_id: { ref: "widget", path: ["updateId"] }
+        game: { ref: "count", path: ["game"] },
+        deaths: { ref: "count", path: ["count"] }
       }
     );
     const plan = await prepareStateQuery(featureRegistry, document);
     expect(plan.query).toEqual(document);
     expect(Object.isFrozen(plan.query)).toBe(true);
-    expect(plan.bindings.widget.definition).toMatchObject({
-      id: "latest",
+    expect(plan.bindings.count.definition).toMatchObject({
+      id: "count",
       version: 1,
-      kind: "value",
-      scope: { kind: "effective_shareable", namespace: "published_data" }
+      kind: "lookup",
+      scope: { kind: "effective_shareable", namespace: "game_deaths" }
     });
 
     const source = {
-      bindingKey: "shareable:widget-data",
+      bindingKey: "shareable:death-counts",
       async revision() {
         return 1;
       },
-      async get(key) {
-        expect(key).toBe("latest");
-        return { found: true, value: publication };
+      async boundedCounter(name, subject) {
+        expect([name, subject]).toEqual(["game", "hades"]);
+        return 7;
+      },
+      async boundedCounterSubjects(name) {
+        expect(name).toBe("game");
+        return {
+          subjects: [{ identity: "hades", label: "Hades", value: 7 }],
+          coverage: { complete: true, identifiedCount: 1, unidentifiedCount: 0 }
+        };
       }
     };
     const sourceRuntime = {
       async open(featureId, definition) {
-        expect(featureId).toBe("widget.data");
-        expect(definition.id).toBe("latest");
+        expect(featureId).toBe("fun.deaths");
+        expect(definition.id).toBe("count");
         return source;
       }
     };
@@ -170,21 +166,22 @@ describe("state-query evaluator", () => {
       sourceRuntime
     });
     expect(result.envelope.data).toEqual({
-      data: { state: "present", value: publication.data },
-      update_id: { state: "present", value: publication.updateId }
+      game: { state: "present", value: "Hades" },
+      deaths: { state: "present", value: 7 }
     });
     expect(result.observation.dependencies).toContainEqual({
-      source: "shareable:widget-data",
-      feature: "widget.data",
+      source: "shareable:death-counts",
+      feature: "fun.deaths",
       scope: "effective_shareable",
-      kind: "value",
-      key: "latest"
+      kind: "bounded_counter",
+      name: "game",
+      subject: "hades"
     });
 
     await expect(evaluateStateQuery(featureRegistry, document, {
       preparedPlan: plan,
       sourceRuntime,
-      maxResultBytes: 64
+      maxResultBytes: 32
     })).rejects.toMatchObject({
       code: "query_result_too_large",
       status: 413,

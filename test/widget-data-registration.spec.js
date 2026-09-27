@@ -12,7 +12,7 @@ describe("Widget-data Discord registration", () => {
 
     expect(descriptor).toEqual({
       name: "widget_data",
-      description: "Publish the current widget data.",
+      description: "Publish a durable widget event.",
       options: [{
         name: "data",
         description: "Data to publish to subscribed widgets.",
@@ -63,10 +63,8 @@ describe("Widget-data Discord registration", () => {
     });
     expect(rejected.content).not.toContain(rejectedData);
 
-    const accepted = await execute(`  ${"x".repeat(400)}  `);
-    expect(accepted).toEqual({
-      content: "Widget data updated.",
-      allowed_mentions: { parse: [] }
+    await expect(execute(`  ${"x".repeat(400)}  `)).rejects.toMatchObject({
+      code: "durable_event_consumer_unavailable"
     });
   });
 });

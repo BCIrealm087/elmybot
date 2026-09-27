@@ -98,7 +98,7 @@ script. All commands except `/alive` are guild-only.
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
 | `/deaths` | optional `operation` (`check`, `plus`, `minus`, `reset`), optional `game` | Check or update shared deaths on the server's default Twitch link |
-| `/widget_data` | `data` | Replace the current authorized widget-data value |
+| `/widget_data` | `data` | Queue a durable event for the authorized widget consumer |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -148,7 +148,7 @@ characters and are resolved at delivery time.
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
 | `!deaths [check|plus|minus|reset] [<game>]` | Any chatter checks; broadcaster or moderator updates | Check or update shared deaths on the channel's default Discord link |
-| `!widgetdata <text...>` | Broadcaster or moderator | Replace the current authorized widget-data value |
+| `!widgetdata <text...>` | Broadcaster or moderator | Queue a durable event for the authorized widget consumer |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
 Command names are case-insensitive. `!deaths` and `!deaths check` use the last
@@ -165,9 +165,9 @@ group has an independent count, and each actor has a five-second atomic
 cooldown. Operators can change its `label` setting with, for example,
 `/feature_config_set feature:fun.counter key:label json_value:"Wins"`.
 
-`/widget_data` and `!widgetdata` publish one current bounded string for authorized
-state-query consumers. See the [widget-data guide](docs/widget-data.md) for
-grant setup, snapshots, subscriptions, coalescing, and safe rendering.
+`/widget_data` and `!widgetdata` publish every accepted bounded string to the
+selected durable-event stream. See the [widget-data guide](docs/widget-data.md)
+for event-grant setup, ordered at-least-once delivery, replay, and safe handling.
 
 ## Cross-platform linking
 

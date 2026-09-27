@@ -1,8 +1,8 @@
 import {
   access,
   defineAction,
+  defineDurableEventStream,
   defineFeature,
-  defineReadableStateExport,
   discordActionCommand,
   discordOption,
   discordTextResult,
@@ -12,46 +12,13 @@ import {
   twitchRestText,
   twitchTextResult
 } from "@elmybot/framework";
-import { deriveWidgetDataUpdateId } from "./update-id.js";
 
-export { deriveWidgetDataUpdateId };
-
-export const WIDGET_DATA_ACTION_KIND = "widget.data.publish.v1";
+export const WIDGET_DATA_ACTION_KIND = "widget.data.emit.v2";
 export const WIDGET_DATA_MAX_LENGTH = 400;
-export const WIDGET_DATA_NAMESPACE_ID = "published_data";
-export const WIDGET_DATA_READABLE_EXPORT_ID = "latest";
-export const WIDGET_DATA_STATE_KEY = "latest";
+export const WIDGET_DATA_STREAM_ID = "updates";
+export const WIDGET_DATA_STREAM_VERSION = 1;
 
-const UPDATED_MESSAGE = "Widget data updated.";
-const UPDATE_ID_PATTERN = /^wdu1\.[A-Za-z0-9_-]{43}$/;
-const ORIGINS = new Set(["discord", "twitch"]);
-const PUBLICATION_FIELDS = Object.freeze(["data", "origin", "updateId"]);
-
-function present(value) {
-  return Object.freeze({ state: "present", value });
-}
-
-function isValidPublication(value) {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value)
-  ) return false;
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return false;
-  const fields = Object.keys(value).sort();
-  return (
-    fields.length === PUBLICATION_FIELDS.length &&
-    fields.every((field, index) => field === PUBLICATION_FIELDS[index]) &&
-    typeof value.updateId === "string" &&
-    UPDATE_ID_PATTERN.test(value.updateId) &&
-    typeof value.data === "string" &&
-    value.data.length >= 1 &&
-    value.data.length <= WIDGET_DATA_MAX_LENGTH &&
-    value.data.trim() === value.data &&
-    ORIGINS.has(value.origin)
-  );
-}
+const QUEUED_MESSAGE = "Widget event queued.";
 
 function otherPlatform(platform) {
   if (platform === "discord") return "twitch";
@@ -62,25 +29,20 @@ function otherPlatform(platform) {
 export const widgetDataFeature = defineFeature({
   apiVersion: frameworkApiVersion,
   id: "widget.data",
-  description: "Publishes current widget data for state-query clients.",
-  readableState: [
-    defineReadableStateExport({
-      id: WIDGET_DATA_READABLE_EXPORT_ID,
+  description: "Publishes every accepted widget command to a durable event consumer.",
+  eventStreams: [
+    defineDurableEventStream({
+      id: WIDGET_DATA_STREAM_ID,
       version: 1,
-      label: "Latest widget data",
-      description: "The current string published for subscribed widgets.",
-      kind: "value",
+      label: "Widget events",
+      description: "Commands delivered to an authorized widget consumer.",
       platforms: ["discord", "twitch"],
-      scope: {
-        kind: "effective_shareable",
-        namespace: WIDGET_DATA_NAMESPACE_ID
-      },
+      scope: { kind: "effective_shareable" },
       access: { kind: "operator_grant" },
-      result: {
+      payload: {
         schema: {
           type: "object",
           properties: {
-            updateId: { type: "string", minLength: 48, maxLength: 48 },
             data: {
               type: "string",
               minLength: 1,
@@ -88,26 +50,11 @@ export const widgetDataFeature = defineFeature({
             },
             origin: { type: "string", minLength: 6, maxLength: 7 }
           },
-          required: ["updateId", "data", "origin"]
-        },
-        absence: { kind: "absent" }
-      },
-      async resolve(ctx) {
-        const latest = await ctx.state.get(WIDGET_DATA_STATE_KEY);
-        if (!latest.found) return Object.freeze({ state: "absent" });
-        if (!isValidPublication(latest.value)) {
-          throw new Error("Stored widget data is invalid.");
+          required: ["data", "origin"]
         }
-        return present(latest.value);
       }
     })
   ],
-  shareableState: [{
-    id: WIDGET_DATA_NAMESPACE_ID,
-    label: "Published widget data",
-    schemaVersion: 1,
-    collisionSummary: { kind: "presence" }
-  }],
   actions: [
     defineAction({
       kind: WIDGET_DATA_ACTION_KIND,
@@ -120,24 +67,19 @@ export const widgetDataFeature = defineFeature({
           trim: true
         })
       }),
-      uses: { services: ["shareableState"] },
+      uses: { services: ["eventStreams"] },
       cooldown: { scope: "group", seconds: 1 },
       async execute(ctx, { data }) {
-        const state = await ctx.shareableState.current(
+        const stream = await ctx.eventStreams.current(
           otherPlatform(ctx.origin.group.platform),
-          WIDGET_DATA_NAMESPACE_ID
+          WIDGET_DATA_STREAM_ID
         );
-        const publication = Object.freeze({
-          updateId: await deriveWidgetDataUpdateId({
-            originGroupKey: ctx.origin.group.key,
-            sourceEventId: ctx.sourceEventId
-          }),
+        await stream.publish({
           data,
           origin: ctx.origin.group.platform
         });
-        await state.set(WIDGET_DATA_STATE_KEY, publication);
         return {
-          output: { message: UPDATED_MESSAGE },
+          output: { message: QUEUED_MESSAGE },
           effects: []
         };
       }
@@ -147,7 +89,7 @@ export const widgetDataFeature = defineFeature({
     discord: [
       discordActionCommand({
         name: "widget_data",
-        description: "Publish the current widget data.",
+        description: "Publish a durable widget event.",
         usage: "/widget_data data:hello",
         availability: "guild",
         deferred: false,
@@ -170,7 +112,7 @@ export const widgetDataFeature = defineFeature({
     twitch: [
       twitchActionCommand({
         name: "widgetdata",
-        description: "Publish the current widget data.",
+        description: "Publish a durable widget event.",
         usage: "!widgetdata hello",
         actionKind: WIDGET_DATA_ACTION_KIND,
         parse: twitchRestText({

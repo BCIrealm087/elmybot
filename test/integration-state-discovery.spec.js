@@ -66,7 +66,7 @@ function inventory(side) {
   };
 }
 
-function widgetInventory(side, outcome) {
+function presenceInventory(side, outcome) {
   const meaningful = outcome === "both_empty"
     ? false
     : outcome === "discord_only"
@@ -80,10 +80,10 @@ function widgetInventory(side, outcome) {
     : "0";
   return {
     namespaces: [{
-      featureId: "widget.data",
-      featureLabel: "Widget data",
-      namespaceId: "published_data",
-      namespaceLabel: "Published widget data",
+      featureId: "test.presence",
+      featureLabel: "Presence test feature",
+      namespaceId: "presence_data",
+      namespaceLabel: "Presence data",
       schemaVersion: 1,
       mutationVersion: meaningful ? 1 : 0,
       fingerprint: fingerprint(character),
@@ -251,7 +251,7 @@ function finalizingRealmBinding({
 }
 
 describe("Pending integration shareable-state discovery", () => {
-  it("classifies every widget-data presence outcome and applies its resolution", async () => {
+  it("classifies every presence-summary outcome and applies its resolution", async () => {
     const cases = [
       ["both_empty", "reset"],
       ["discord_only", "discord"],
@@ -266,7 +266,7 @@ describe("Pending integration shareable-state discovery", () => {
         integrationRegistryStub(env),
         async (_registryInstance, registryState) => {
           const realms = finalizingRealmBinding({
-            inventoryFor: (side) => widgetInventory(side, outcome)
+            inventoryFor: (side) => presenceInventory(side, outcome)
           });
           const registry = new IntegrationRegistry(registryState, {
             ...env,
@@ -295,17 +295,17 @@ describe("Pending integration shareable-state discovery", () => {
           });
           const namespace = verification.pendingIntegration.stateDiscovery.namespaces[0];
           expect(namespace).toMatchObject({
-            featureId: "widget.data",
-            namespaceId: "published_data",
+            featureId: "test.presence",
+            namespaceId: "presence_data",
             outcome,
             automaticSelection,
             discordSummary: {
               kind: "presence",
-              used: widgetInventory("discord", outcome).namespaces[0].meaningful
+              used: presenceInventory("discord", outcome).namespaces[0].meaningful
             },
             twitchSummary: {
               kind: "presence",
-              used: widgetInventory("twitch", outcome).namespaces[0].meaningful
+              used: presenceInventory("twitch", outcome).namespaces[0].meaningful
             }
           });
 
@@ -314,8 +314,8 @@ describe("Pending integration shareable-state discovery", () => {
               reservationId,
               discoveryVersion: 1,
               selections: [{
-                featureId: "widget.data",
-                namespaceId: "published_data",
+                featureId: "test.presence",
+                namespaceId: "presence_data",
                 selection: "twitch"
               }]
             });
@@ -325,7 +325,7 @@ describe("Pending integration shareable-state discovery", () => {
             reservationId
           });
           expect(activated.integration.status).toBe("active");
-          const materialized = realms.targets.get("widget.data\u0000published_data");
+          const materialized = realms.targets.get("test.presence\u0000presence_data");
           if (outcome === "both_empty") {
             expect(materialized.meaningful).toBe(false);
             expect(materialized.summary).toEqual({
@@ -339,7 +339,7 @@ describe("Pending integration shareable-state discovery", () => {
               : "discord";
             expect(materialized.entries).toEqual([{
               key: "value",
-              value: `${selectedSide}:published_data`
+              value: `${selectedSide}:presence_data`
             }]);
           }
         }
