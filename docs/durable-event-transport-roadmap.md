@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–5 are complete and steps 6–10 are pending.
+Status: implementation roadmap; steps 1–6 are complete and steps 7–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -483,7 +483,7 @@ close races without authorization polling or an additional worker queue.
 
 ### 6. Implement the hibernating durable-event WebSocket protocol
 
-**Status:** pending. **Depends on:** steps 3–5.
+**Status:** complete (2026-09-27). **Depends on:** steps 3–5.
 
 Add an authenticated route such as `/event-stream/socket` and the frozen
 `durable-event-socket/v1` protocol. Route only from validated grant metadata to
@@ -505,6 +505,19 @@ multi-event order, disconnect/replay, duplicate delivery, asynchronous ack,
 non-ack backpressure, eviction/reconstruction, auto-response heartbeat,
 revocation, movement, expiry, oversize rejection, full-stream recovery, and no
 polling calls.
+
+**Completion evidence:** implementation commit
+[`ba19871`](https://github.com/BCIrealm087/elmybot/commit/ba1987125bc278094190f97295863b70e12f6950);
+authoritative CI
+[#235](https://github.com/BCIrealm087/elmybot/actions/runs/36281884395) passed
+476 tests across 52 files, lint and generated-catalog checks, Chromium WebSocket
+smoke, JavaScript syntax, and the non-deploying Wrangler dry run. The public
+Worker now authenticates credential or same-origin session upgrades without URL
+secrets and routes bounded trusted metadata to the pinned stream. The stream
+uses hibernating socket attachments and SQLite authority for one registered
+consumer, one in-flight event, exact cumulative acknowledgements, ordered replay
+across disconnect and eviction, terminal grant/lifecycle/gap states, and
+deadline-only alarms with automatic ping/pong.
 
 ### 7. Add the browser/OBS client and operator setup flow
 
