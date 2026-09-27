@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–6 are complete and steps 7–10 are pending.
+Status: implementation roadmap; steps 1–7 are complete and steps 8–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -521,7 +521,7 @@ deadline-only alarms with automatic ping/pong.
 
 ### 7. Add the browser/OBS client and operator setup flow
 
-**Status:** pending. **Depends on:** steps 5–6.
+**Status:** complete (2026-09-27). **Depends on:** steps 5–6.
 
 Provide a maintained same-origin browser client whose event handler may return a
 Promise. Send the acknowledgement only after that Promise fulfills. A rejected
@@ -542,6 +542,20 @@ paths working unchanged.
 handler rejection and replay, reconnect, duplicates, unsafe string rendering,
 offline/unavailable status, gap/movement/revocation termination, and separation
 between state-query and event sessions.
+
+**Completion evidence:** implementation commit
+[`846132d`](https://github.com/BCIrealm087/elmybot/commit/846132d729f47933d79713c3a7169caa7dedea67);
+authoritative CI
+[#237](https://github.com/BCIrealm087/elmybot/actions/runs/36303927189) passed
+483 tests across 54 files, lint and generated-catalog checks, both Chromium
+browser smoke flows, JavaScript syntax, and the non-deploying Wrangler dry run.
+The maintained browser client now acknowledges only after asynchronous handler
+success, reconnects and replays after handler failure, reports terminal stream
+states, and offers bounded payload-free recent-event-ID deduplication without an
+exactly-once claim. The same-origin setup flow exchanges event grants for an
+independent HttpOnly session, tests a live handler, and produces a credential-
+free OBS URL and minimal integration snippet while preserving the state-query
+client and setup flow unchanged.
 
 ### 8. Migrate `widget.data` to durable event delivery
 
