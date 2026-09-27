@@ -82,6 +82,8 @@ https://<worker-host>/event-stream/operator/twitch/callback
 | --- | --- | --- |
 | `GET /event-stream/operator/twitch` | Twitch reauthentication begins in the form flow | Stream-selection form |
 | `GET /event-stream/operator/twitch/callback` | One-use OAuth state and Twitch identity | One-time credential page and event session |
+| `GET /event-stream/setup` | None for the page; event session for stream details | Grant exchange, live test, OBS URL, and integration snippet |
+| `GET /event-stream/widget` | None for the page; event session established through OBS Interact | Safe same-origin event display and handler |
 | `GET /event-stream/catalog` | Bearer credential or event session | The one authorized, value-free stream declaration |
 | `GET /event-stream/socket` | Bearer credential, or event session plus exact same `Origin` | Hibernating, ordered, at-least-once event delivery |
 | `POST /event-stream/session` | Bearer credential plus exact same `Origin` | `elmybot_durable_event` session cookie |
@@ -198,8 +200,10 @@ publication and event-grant use without changing any state-query behavior.
 - Retention gaps require explicit operator acknowledgement; they are never
   skipped automatically.
 - Grants cannot browse event history or inspect payloads through HTTP.
-- The maintained browser/OBS client and setup flow arrive in roadmap step 7;
-  step 6 exposes the protocol for direct clients and test consumers.
+
+The maintained client, setup page, credential-free OBS flow, acknowledgement
+behavior, and bounded recent-event-ID helper are documented in the
+[`durable-event browser guide`](durable-event-browser.md).
 
 The complete frozen protocol and storage contract is in
 [`durable-event-contract.md`](durable-event-contract.md). Implementation order

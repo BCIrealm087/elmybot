@@ -26,6 +26,7 @@ import {
   DURABLE_EVENT_SOCKET_ROUTE_HEADER,
   durableEventInternalHeaders
 } from "./stream.js";
+import { durableEventBrowserResponse } from "./browser-pages.js";
 
 const SESSION_COOKIE = "elmybot_durable_event";
 const MAX_OPERATOR_FORM_BYTES = 8 * 1024;
@@ -187,6 +188,7 @@ function issuedPage(issued) {
 <p>This credential is shown once. Keep it secret and do not put it in a URL.</p>
 <p><code>${escapeHtml(issued.credential)}</code></p>
 <p>Expires: <time>${escapeHtml(new Date(issued.grant.expiresAtMs).toISOString())}</time></p>
+<p>A secure session is active. Continue to <a href="/event-stream/setup">event setup</a>.</p>
 </main></body></html>`;
 }
 
@@ -360,6 +362,13 @@ export async function handleDurableEventRequest(
 ) {
   const url = new URL(request.url);
   try {
+    if (["app.js", "client.js", "ui.js", "browser.css"].some(
+      (name) => url.pathname === `/event-stream/${name}`
+    )) {
+      return await env.BROWSER_ASSETS.fetch(request);
+    }
+    const browserResponse = durableEventBrowserResponse(request);
+    if (browserResponse) return browserResponse;
     if (url.pathname === "/event-stream/operator/twitch") {
       return await twitchOperatorResponse(request, env, registry);
     }

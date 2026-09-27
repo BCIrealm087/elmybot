@@ -413,6 +413,12 @@ routes. See the
 setup, catalog, session, replacement, reset, revocation, and direct consumer
 WebSocket behavior.
 
+After deployment, open `/event-stream/setup` to connect an event grant, test the
+asynchronous handler, and copy a credential-free `/event-stream/widget` OBS URL
+or minimal integration snippet. The
+[durable-event browser guide](docs/durable-event-browser.md) explains replay,
+acknowledgement, terminal states, and the bounded duplicate helper.
+
 After deployment, open `/state-query/setup` to compose and preview a query and
 copy a `/state-query/widget` browser-source URL. OBS uses its own session;
 enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
@@ -508,6 +514,7 @@ explicit catalog-regeneration action.
 - [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
 - [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
 - [Durable-event grants, discovery, and HTTP sessions](docs/durable-event-http.md)
+- [Durable-event browser client, setup, and OBS widget](docs/durable-event-browser.md)
 - [Durable-event transport contract](docs/durable-event-contract.md)
 - [Durable-event transport implementation roadmap](docs/durable-event-transport-roadmap.md)
 - [Widget-data consumer and contributor guide](docs/widget-data.md)
