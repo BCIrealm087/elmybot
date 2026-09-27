@@ -599,7 +599,7 @@ neither converted nor deleted.
 
 ### 9. Complete contributor tooling and dual-mode verification
 
-**Status:** pending. **Depends on:** steps 2–8.
+**Status:** complete (2026-09-27). **Depends on:** steps 2–8.
 
 Extend the feature test runtime with event-stream connection, publish, receive,
 acknowledge, disconnect, restart, expiry, and binding-handoff helpers. Keep the
@@ -621,6 +621,23 @@ transport internals.
 feature using only stable framework imports and test-runtime APIs; validation
 catches accidental undeclared service use and ambiguous dual publication;
 generated docs remain deterministic.
+
+**Completion evidence:** implementation commit
+[`bbeb510`](https://github.com/BCIrealm087/elmybot/commit/bbeb51005c7e6c20a7d036fbc4e46d39f3a4b39f);
+authoritative CI
+[#241](https://github.com/BCIrealm087/elmybot/actions/runs/36354127098) passed
+476 tests across 55 files, lint and generated-catalog checks, both Chromium
+browser smoke flows, JavaScript syntax, and the non-deploying Wrangler dry run.
+The stable test runtime now models authorized connection, direct or
+action-driven publication, ordered receive/acknowledgement, disconnect and
+restart replay, retention gaps, capacity, and effective-shareable binding
+handoff without changing query snapshot/watch behavior. The event scaffold uses
+one reusable feature contract for payload, writer authorization, source
+identity/conflict, retained capacity, replay, and value-safe envelope checks.
+The quickstart, authoring guide, API reference, framework package guide, and
+deterministic installed catalog now distinguish replacement state from bounded
+at-least-once events and require separate actions/tests for deliberate dual-mode
+features.
 
 ### 10. Harden, measure, and prepare the milestone
 
