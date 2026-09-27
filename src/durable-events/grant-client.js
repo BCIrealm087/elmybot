@@ -328,8 +328,21 @@ function statusError(status) {
 export async function validateDurableEventCredential(env, credential, {
   nowMs = Date.now()
 } = {}) {
-  const { result } = await credentialRequest(env, credential, "validate", nowMs);
-  if (result.status === "active") return result.grant;
+  return (await authenticateDurableEventCredential(env, credential, { nowMs })).grant;
+}
+
+export async function authenticateDurableEventCredential(env, credential, {
+  nowMs = Date.now()
+} = {}) {
+  const { parsed, result } = await credentialRequest(env, credential, "validate", nowMs);
+  if (result.status === "active") {
+    return Object.freeze({
+      grant: result.grant,
+      routeId: parsed.routeId,
+      grantId: parsed.grantId,
+      target: parsed.target
+    });
+  }
   throw statusError(result.status);
 }
 

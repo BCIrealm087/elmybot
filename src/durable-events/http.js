@@ -5,6 +5,7 @@ import {
 } from "../common.js";
 import { featureRegistry } from "../features/index.js";
 import {
+  authenticateDurableEventCredential,
   DurableEventCredentialError,
   revokeDurableEventCredential,
   validateDurableEventCredential
@@ -17,6 +18,14 @@ import { DURABLE_EVENT_CODES, DurableEventError } from "./contract.js";
 import {
   TWITCH_CHANNEL_OAUTH_COORDINATOR_NAME
 } from "../platforms/twitch/channel-auth-common.js";
+import {
+  DURABLE_EVENT_SOCKET_GRANT_HEADER,
+  DURABLE_EVENT_SOCKET_GROUP_HEADER,
+  DURABLE_EVENT_SOCKET_INTERNAL_PATH,
+  DURABLE_EVENT_SOCKET_PLATFORM_HEADER,
+  DURABLE_EVENT_SOCKET_ROUTE_HEADER,
+  durableEventInternalHeaders
+} from "./stream.js";
 
 const SESSION_COOKIE = "elmybot_durable_event";
 const MAX_OPERATOR_FORM_BYTES = 8 * 1024;
@@ -309,6 +318,41 @@ async function revokeResponse(request, env) {
   });
 }
 
+async function socketResponse(request, env) {
+  const url = new URL(request.url);
+  if (request.method !== "GET" || url.search !== "") {
+    return plain("Not Found", 404);
+  }
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return plain("WebSocket upgrade required", 426);
+  }
+  const selected = requestCredential(request);
+  if (selected.transport === "cookie") requireSameOrigin(request, env);
+  const authenticated = await authenticateDurableEventCredential(
+    env,
+    selected.credential
+  );
+  if (!env?.DURABLE_EVENT_STREAM) {
+    throw new Error("DURABLE_EVENT_STREAM is unavailable.");
+  }
+  const response = await env.DURABLE_EVENT_STREAM.get(
+    env.DURABLE_EVENT_STREAM.idFromName(authenticated.routeId)
+  ).fetch(`https://durable-event-stream${DURABLE_EVENT_SOCKET_INTERNAL_PATH}`, {
+    method: "GET",
+    headers: {
+      upgrade: "websocket",
+      ...durableEventInternalHeaders,
+      [DURABLE_EVENT_SOCKET_GRANT_HEADER]: authenticated.grantId,
+      [DURABLE_EVENT_SOCKET_PLATFORM_HEADER]: authenticated.target.platform,
+      [DURABLE_EVENT_SOCKET_GROUP_HEADER]: authenticated.target.groupId,
+      [DURABLE_EVENT_SOCKET_ROUTE_HEADER]: authenticated.routeId
+    }
+  });
+  if (response.status === 101) return response;
+  await response.text();
+  return plain("Durable event socket is unavailable", response.status);
+}
+
 export async function handleDurableEventRequest(
   request,
   env,
@@ -330,6 +374,9 @@ export async function handleDurableEventRequest(
     }
     if (url.pathname === "/event-stream/grant") {
       return await revokeResponse(request, env);
+    }
+    if (url.pathname === "/event-stream/socket") {
+      return await socketResponse(request, env);
     }
     return plain("Not Found", 404);
   } catch (error) {

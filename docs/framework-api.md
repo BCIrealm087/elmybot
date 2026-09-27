@@ -148,11 +148,10 @@ invalidation cannot move the newer binding backward.
 
 Publication requires the `DURABLE_EVENT_STREAMS_ENABLED` switch and a ready,
 authorized consumer. Event-specific grants, same-origin sessions, scoped
-discovery, Discord manager issuance, and Twitch broadcaster issuance are now
-implemented independently of state-query authorization. The WebSocket
-registration layer that makes a browser consumer ready arrives in the next
-durable-event roadmap step, so declaring or granting a stream does not yet make
-it externally consumable.
+discovery, Discord manager issuance, Twitch broadcaster issuance, and
+hibernating WebSocket registration are implemented independently of state-query
+authorization. Declaring or granting a stream does not make it consumable until
+its current grant registers the stream's one active socket.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented

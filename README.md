@@ -57,7 +57,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
 | `/state-query/*` | Scoped readable-state discovery, snapshots, live WebSockets, sessions, grant issuance, query setup, and widgets |
-| `/event-stream/*` | Durable-event grant issuance, scoped discovery, sessions, and revocation; WebSocket delivery arrives in the next transport step |
+| `/event-stream/*` | Durable-event grants, scoped discovery, sessions, revocation, and hibernating ordered WebSocket delivery |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -408,10 +408,10 @@ owners and members with Administrator or Manage Server use
 `/event_stream_grant`; Twitch broadcasters open
 `GET /event-stream/operator/twitch` and reauthenticate with Twitch. Event grants
 cannot read state-query routes, and state-query grants cannot authorize event
-routes. See the [durable-event grant and HTTP guide](docs/durable-event-http.md)
-for setup, catalog, session, replacement, reset, and revocation behavior. The
-consumer WebSocket endpoint is intentionally deferred to the next transport
-step.
+routes. See the
+[durable-event grant, HTTP, and socket guide](docs/durable-event-http.md) for
+setup, catalog, session, replacement, reset, revocation, and direct consumer
+WebSocket behavior.
 
 After deployment, open `/state-query/setup` to compose and preview a query and
 copy a `/state-query/widget` browser-source URL. OBS uses its own session;

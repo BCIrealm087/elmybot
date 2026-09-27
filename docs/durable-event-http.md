@@ -1,16 +1,12 @@
-# Durable-event grants, discovery, and HTTP sessions
+# Durable-event grants, discovery, HTTP sessions, and sockets
 
 ## Status
 
-The event-specific authorization boundary is implemented. Discord managers and
-Twitch broadcasters can issue a credential for one declared stream, inspect its
-value-free catalog entry, exchange it for an event-only browser session, and
-revoke it.
-
-The consumer WebSocket is intentionally not part of this step. Until the next
-transport step adds `/event-stream/socket`, a grant does not attach a consumer
-or make publication succeed. Existing state-query snapshot and WebSocket routes
-remain unchanged.
+The event-specific authorization and delivery boundary is implemented. Discord
+managers and Twitch broadcasters can issue a credential for one declared
+stream, inspect its value-free catalog entry, exchange it for an event-only
+browser session, attach one hibernating WebSocket consumer, and revoke it.
+Existing state-query snapshot and WebSocket routes remain unchanged.
 
 ## Authorization model
 
@@ -34,7 +30,7 @@ flow and is never placed in a URL, log, catalog response, or persisted record.
 
 One physical stream has one current grant. Issuing another grant atomically
 marks the prior grant as replaced while preserving the stream's acknowledgement
-position and retained backlog. Explicit revocation and future socket
+position and retained backlog. Explicit revocation and socket
 registration use the same stream-owned authority as issuance and validation;
 there is no authorization polling window or separate worker-side revocation
 queue.
@@ -87,6 +83,7 @@ https://<worker-host>/event-stream/operator/twitch/callback
 | `GET /event-stream/operator/twitch` | Twitch reauthentication begins in the form flow | Stream-selection form |
 | `GET /event-stream/operator/twitch/callback` | One-use OAuth state and Twitch identity | One-time credential page and event session |
 | `GET /event-stream/catalog` | Bearer credential or event session | The one authorized, value-free stream declaration |
+| `GET /event-stream/socket` | Bearer credential, or event session plus exact same `Origin` | Hibernating, ordered, at-least-once event delivery |
 | `POST /event-stream/session` | Bearer credential plus exact same `Origin` | `elmybot_durable_event` session cookie |
 | `DELETE /event-stream/session` | Exact same `Origin` | Clears the event session cookie |
 | `DELETE /event-stream/grant` | Bearer credential, or cookie plus exact same `Origin` | Atomically revokes the grant and clears the cookie |
@@ -116,6 +113,42 @@ The catalog includes the public target, grant ID and expiry, and exactly one
 authorized declaration. It never includes payload values, actor IDs, physical
 realm identity, integration IDs, binding revisions, consumer history, or other
 installed streams.
+
+## WebSocket delivery
+
+Connect to `/event-stream/socket` with no query parameters. Browser and OBS
+consumers first establish the event session and send the exact configured
+public origin with the upgrade. A non-browser client may instead provide the
+credential as a Bearer header. The Worker validates the whole credential before
+routing the upgrade and never forwards or stores the raw credential in the
+stream object.
+
+The first application frame is exactly:
+
+```json
+{"protocol":"durable-event-socket/v1","type":"register"}
+```
+
+After the `ready` response, the stream sends at most one `event` frame at a
+time. Apply the event successfully, then send an `ack` with that frame's opaque
+cursor. Until the exact cursor is acknowledged, later events remain queued and
+the outstanding event is replayed after reconnection. An already acknowledged
+cursor is tolerated; malformed, unknown, unsent, or future cursors close the
+connection without advancing delivery.
+
+Only one current grant and one registered consumer exist per physical stream.
+A new socket for that grant supersedes the old socket. Grant replacement,
+revocation, expiry, retention loss, and stream movement produce bounded terminal
+status frames. Movement lets an already attached consumer drain the old backlog
+before `stream_moved`; new commands resolve the new physical stream and require
+a new grant and consumer.
+
+Delivery is bounded and at least once, not exactly once. A side effect followed
+by a browser crash before acknowledgement can cause replay, so consumers should
+deduplicate by the stable framework event ID when repeating an effect is unsafe.
+The exact frames, limits, terminal statuses, close codes, heartbeat strings, and
+hibernation rules are frozen in the
+[`durable-event-contract.md`](durable-event-contract.md#websocket-protocol).
 
 ## Retention-gap reset
 
@@ -157,13 +190,16 @@ publication and event-grant use without changing any state-query behavior.
 
 ## Current limitations
 
-- There is no public consumer WebSocket until transport roadmap step 6.
-- A physical stream supports one current grant and, later, one active consumer.
-- Replacement revokes the previous credential; it does not create fan-out.
-- Delivery will be bounded and at least once, not exactly once.
+- A physical stream supports one current grant and one active consumer; there
+  is no fan-out.
+- Replacement revokes the previous credential rather than preserving parallel
+  access.
+- Delivery is bounded and at least once, not exactly once.
 - Retention gaps require explicit operator acknowledgement; they are never
   skipped automatically.
 - Grants cannot browse event history or inspect payloads through HTTP.
+- The maintained browser/OBS client and setup flow arrive in roadmap step 7;
+  step 6 exposes the protocol for direct clients and test consumers.
 
 The complete frozen protocol and storage contract is in
 [`durable-event-contract.md`](durable-event-contract.md). Implementation order

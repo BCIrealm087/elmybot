@@ -24,7 +24,6 @@ import {
 } from "../src/durable-events/binding-notifications.js";
 import {
   DURABLE_EVENT_BINDING_PATH,
-  DURABLE_EVENT_CONSUMER_PATH,
   durableEventInternalHeaders
 } from "../src/durable-events/stream.js";
 import {
@@ -149,21 +148,12 @@ async function configureStream(registry, realmIdentity, { ready = true } = {}) {
   const stub = env.DURABLE_EVENT_STREAM.get(
     env.DURABLE_EVENT_STREAM.idFromName(route.routeId)
   );
-  await runInDurableObject(stub, async (instance) => {
+  await runInDurableObject(stub, async (instance, state) => {
     instance.registry = registry;
     if (ready) {
-      const response = await instance.fetch(new Request(
-        `https://durable-event-stream${DURABLE_EVENT_CONSUMER_PATH}`,
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...durableEventInternalHeaders
-          },
-          body: JSON.stringify({ ready: true })
-        }
-      ));
-      expect(response.ok).toBe(true);
+      state.storage.sql.exec(
+        "UPDATE durable_event_stream_metadata SET consumer_ready = 1 WHERE singleton = 1"
+      );
     }
   });
   return { ...route, stub };
