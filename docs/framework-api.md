@@ -57,6 +57,28 @@ surface consists of:
 - Twitch authoring helpers: `twitchActionCommand`, `twitchNativeCommand`,
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
 
+Feature tests import the additive, test-only surface from
+`@elmybot/framework/testing`. `createFeatureTestRuntime(feature)` keeps the
+existing command, state, schedule, and `query.snapshot()`/`query.watch()` APIs.
+Its `eventStreams` facility adds these stable in-memory contract helpers:
+
+| API | Meaning |
+| --- | --- |
+| `connect({ group, stream })` | Attach the one already-authorized consumer for a public `feature:stream:vN` identity |
+| `publish({ group, stream, payload, sourceEventId? })` | Append directly for a transport-focused test, bypassing the feature action |
+| `consumer.receive()` | Receive the next ordered event, with one unacknowledged event in flight |
+| `consumer.acknowledge(eventOrCursor)` | Advance and prune the exact outstanding event |
+| `consumer.disconnect()` | Drop consumer viability while preserving retained work |
+| `restart(consumer)` | Replace the in-memory consumer and replay unacknowledged work |
+| `expire({ group, stream })` | Apply retention against the fake clock and expose a blocking gap |
+| `handoff({ sourceGroup, targetPlatform, link })` | Move later effective-shareable publication while the prior owner drains |
+
+`runDurableEventFeatureContract()` is the reusable feature-level suite for
+payload validation, command authorization, stable source identity, capacity,
+restart replay, and envelope leakage. The helpers use the production payload
+serializer, event-ID algorithm, limits, and error codes, but do not issue
+credentials, create WebSockets, or emulate Cloudflare scheduling.
+
 `defineFeature()` accepts optional, declarative `shareableState` namespace
 metadata. Omission normalizes to a frozen empty array, preserving every existing
 v1 definition. Declarations contain stable IDs, labels, schema compatibility,

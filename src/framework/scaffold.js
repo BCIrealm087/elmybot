@@ -29,8 +29,8 @@ const RECIPE_TEST_GUIDANCE = Object.freeze({
     "Keep an allowed update, denial without mutation, and the counter floor."
   ]),
   "event-stream": Object.freeze([
-    "Keep the declared payload and both command bindings compiling.",
-    "Add publish, replay, and acknowledgement tests when the event test runtime lands."
+    "Keep the reusable payload, authorization, capacity, replay, and leakage contract.",
+    "Keep both command bindings and the event-only dependency boundary."
   ])
 });
 
@@ -691,13 +691,31 @@ ${readableCounterTest(identity, { shareable: true })}
 function eventStreamTestTemplate(identity, testingSource, featureSource) {
   return `import { describe, expect, it } from "vitest";
 import feature from "${featureSource}";
-${frameworkImport(["createFeatureTestRuntime"], testingSource)}
+${frameworkImport([
+    "discordTestActor",
+    "discordTestGroup",
+    "discordTestModerator",
+    "runDurableEventFeatureContract"
+  ], testingSource)}
 
 describe("${identity.featureId}", () => {
-  it("declares its every-trigger stream and command bindings", () => {
-    const runtime = createFeatureTestRuntime(feature);
+  it("satisfies the durable-event feature contract", async () => {
+    const result = await runDurableEventFeatureContract({
+      feature,
+      stream: "${identity.featureId}:updates:v1",
+      group: discordTestGroup(),
+      payload: { data: "contract-event", origin: "discord" },
+      alternatePayload: { data: "changed-event", origin: "discord" },
+      invalidPayload: { data: "", origin: "discord" },
+      authorizedActor: discordTestModerator(),
+      unauthorizedActor: discordTestActor(),
+      publish: ({ runtime, group, actor }) => runtime.discord.command(
+        "${identity.commandName}",
+        { group, actor, args: { data: "contract-event" } }
+      )
+    });
 
-    expect(runtime).toBeDefined();
+    expect(result).toMatchObject({ replayed: true, retainedCapacity: 1_000 });
     expect(feature.eventStreams).toMatchObject([{
       id: "updates",
       version: 1,
@@ -707,7 +725,7 @@ describe("${identity.featureId}", () => {
     }]);
     expect(feature.commands.discord).toHaveLength(1);
     expect(feature.commands.twitch).toHaveLength(1);
-  });
+  }, 15_000);
 });
 `;
 }

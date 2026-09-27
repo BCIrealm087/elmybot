@@ -144,10 +144,10 @@ describe("Feature scaffold templates", () => {
     expect(eventStream.featureSource).toContain(
       'cooldown: { scope: "group", seconds: 1 }'
     );
-    expect(eventStream.testSource).toContain("createFeatureTestRuntime(feature)");
-    expect(eventStream.testSource).not.toContain("runtime.discord.command");
+    expect(eventStream.testSource).toContain("runDurableEventFeatureContract");
+    expect(eventStream.testSource).toContain('runtime.discord.command(\n        "alert"');
     expect(eventStream.readmeSource).toContain(
-      "publish, replay, and acknowledgement tests"
+      "payload, authorization, capacity, replay, and leakage contract"
     );
   });
 

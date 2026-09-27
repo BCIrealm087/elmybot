@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  discordTestActor,
+  discordTestGroup,
+  discordTestModerator,
+  runDurableEventFeatureContract
+} from "@elmybot/framework/testing";
 import feature, {
   WIDGET_DATA_ACTION_KIND,
   WIDGET_DATA_MAX_LENGTH,
@@ -30,6 +36,32 @@ function actionContext(platform, { publish = vi.fn(async () => undefined) } = {}
 }
 
 describe("@elmybot/feature-widget-data", () => {
+  it("inherits the reusable durable-event feature contract", async () => {
+    const group = discordTestGroup({ id: "widget-contract-guild" });
+
+    await expect(runDurableEventFeatureContract({
+      feature,
+      stream: "widget.data:updates:v1",
+      group,
+      payload: { data: "contract-event", origin: "discord" },
+      alternatePayload: { data: "changed-event", origin: "discord" },
+      invalidPayload: { data: "", origin: "discord" },
+      authorizedActor: discordTestModerator(),
+      unauthorizedActor: discordTestActor(),
+      publish: ({ runtime, group: origin, actor }) => runtime.discord.command(
+        "widget_data",
+        {
+          group: origin,
+          actor,
+          args: { data: "contract-event" }
+        }
+      )
+    })).resolves.toMatchObject({
+      replayed: true,
+      retainedCapacity: 1_000
+    });
+  }, 15_000);
+
   it("declares the frozen durable-event contract without a readable-state surface", () => {
     const { action, discord, stream, twitch } = definitions();
 

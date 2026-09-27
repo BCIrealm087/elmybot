@@ -28,6 +28,8 @@ Framework API: v1.
 
 ## Readable state exports
 
+Readable state is complete replacement state for counters, configuration, and current labels; intermediate updates may coalesce.
+
 | Feature | Export | Version | Kind | Platforms | Scope | Access eligibility | Parameters | Result | Absence | Legacy coverage |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | fun.deaths | `remembered_game` | 1 | value | discord, twitch | group_local | operator_grant | — | string | unselected | — |
@@ -35,6 +37,8 @@ Framework API: v1.
 | fun.deaths | `counts` | 1 | collection | discord, twitch | effective_shareable | operator_grant | — | array | default | explicit |
 
 ## Durable event streams
+
+Durable streams are bounded at-least-once delivery for alerts, animations, and commands that must each run. They are not job queues, permanent audit logs, or exactly-once effects.
 
 | Feature | Stream | Version | Platforms | Scope | Access eligibility | Payload root | Delivery |
 | --- | --- | --- | --- | --- | --- | --- | --- |

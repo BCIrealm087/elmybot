@@ -236,6 +236,9 @@ export function generateFeatureCatalogMarkdown(
     ),
     "## Readable state exports",
     "",
+    "Readable state is complete replacement state for counters, configuration, " +
+      "and current labels; intermediate updates may coalesce.",
+    "",
     table(
       [
         "Feature",
@@ -253,6 +256,10 @@ export function generateFeatureCatalogMarkdown(
       readableStateRows
     ),
     "## Durable event streams",
+    "",
+    "Durable streams are bounded at-least-once delivery for alerts, animations, " +
+      "and commands that must each run. They are not job queues, permanent audit " +
+      "logs, or exactly-once effects.",
     "",
     table(
       [
