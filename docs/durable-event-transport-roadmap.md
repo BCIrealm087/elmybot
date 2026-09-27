@@ -1,6 +1,6 @@
 # Durable feature-event delivery: development roadmap
 
-Status: implementation roadmap; steps 1–7 are complete and steps 8–10 are pending.
+Status: implementation roadmap; steps 1–8 are complete and steps 9–10 are pending.
 Created: 2026-09-23.
 Work branch: `codex-querying-experiment` in `BCIrealm087/elmybot`.
 Baseline reviewed: `68b4677bf2f06dd738155d8d6fad7500eff013a9`.
@@ -559,7 +559,7 @@ client and setup flow unchanged.
 
 ### 8. Migrate `widget.data` to durable event delivery
 
-**Status:** pending. **Depends on:** steps 1–7.
+**Status:** complete (2026-09-27). **Depends on:** steps 1–7.
 
 Update the private widget-data package to declare the frozen event stream and
 publish through the stable event service. Preserve both command names, parsing,
@@ -582,6 +582,20 @@ consumer/full stream returns a bounded failure without leaking data.
 query export is absent from the installed catalog; end-to-end Discord and Twitch
 tests receive every accepted event in order and replay unacknowledged events;
 all unrelated feature/query tests remain unchanged and passing.
+
+**Completion evidence:** implementation commit
+[`453a22e`](https://github.com/BCIrealm087/elmybot/commit/453a22e854c2d76140af3761783817e745f49062);
+authoritative CI
+[#239](https://github.com/BCIrealm087/elmybot/actions/runs/36346122836) passed
+473 tests across 55 files, lint and generated-catalog checks, both Chromium
+browser smoke flows, JavaScript syntax, and the non-deploying Wrangler dry run.
+The installed package now declares only `widget.data:updates:v1`, publishes the
+exact `{ data, origin }` payload through `eventStreams`, and keeps both moderator
+commands, their normalization, 400-unit bound, and group cooldown. End-to-end
+coverage proves linked Discord/Twitch order, distinct identical-text commands,
+same-source idempotence, and unacknowledged replay. The old readable export and
+`published_data` declaration are absent; old credentials and stored values are
+neither converted nor deleted.
 
 ### 9. Complete contributor tooling and dual-mode verification
 
