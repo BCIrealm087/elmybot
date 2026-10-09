@@ -117,6 +117,78 @@ describe("state-query evaluator", () => {
     expect(Object.isFrozen(first.query.bindings)).toBe(true);
   });
 
+  it("prepares, evaluates, projects, and size-bounds an ordinary lookup query", async () => {
+    const selectedTarget = target("discord");
+    const document = query(
+      selectedTarget,
+      { count: read("count", literal("hades")) },
+      {
+        game: { ref: "count", path: ["game"] },
+        deaths: { ref: "count", path: ["count"] }
+      }
+    );
+    const plan = await prepareStateQuery(featureRegistry, document);
+    expect(plan.query).toEqual(document);
+    expect(Object.isFrozen(plan.query)).toBe(true);
+    expect(plan.bindings.count.definition).toMatchObject({
+      id: "count",
+      version: 1,
+      kind: "lookup",
+      scope: { kind: "effective_shareable", namespace: "game_deaths" }
+    });
+
+    const source = {
+      bindingKey: "shareable:death-counts",
+      async revision() {
+        return 1;
+      },
+      async boundedCounter(name, subject) {
+        expect([name, subject]).toEqual(["game", "hades"]);
+        return 7;
+      },
+      async boundedCounterSubjects(name) {
+        expect(name).toBe("game");
+        return {
+          subjects: [{ identity: "hades", label: "Hades", value: 7 }],
+          coverage: { complete: true, identifiedCount: 1, unidentifiedCount: 0 }
+        };
+      }
+    };
+    const sourceRuntime = {
+      async open(featureId, definition) {
+        expect(featureId).toBe("fun.deaths");
+        expect(definition.id).toBe("count");
+        return source;
+      }
+    };
+    const result = await evaluateStateQuery(featureRegistry, document, {
+      preparedPlan: plan,
+      sourceRuntime
+    });
+    expect(result.envelope.data).toEqual({
+      game: { state: "present", value: "Hades" },
+      deaths: { state: "present", value: 7 }
+    });
+    expect(result.observation.dependencies).toContainEqual({
+      source: "shareable:death-counts",
+      feature: "fun.deaths",
+      scope: "effective_shareable",
+      kind: "bounded_counter",
+      name: "game",
+      subject: "hades"
+    });
+
+    await expect(evaluateStateQuery(featureRegistry, document, {
+      preparedPlan: plan,
+      sourceRuntime,
+      maxResultBytes: 32
+    })).rejects.toMatchObject({
+      code: "query_result_too_large",
+      status: 413,
+      path: "query.select"
+    });
+  });
+
   it("composes direct, literal, dynamic, repeated, and collection reads", async () => {
     const sources = fakeSources();
     const result = await evaluateStateQuery(featureRegistry, query(

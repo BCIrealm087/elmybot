@@ -3,6 +3,9 @@ import packagedAliveFeature from "@elmybot/feature-alive";
 import packagedDeathsFeature, {
   FUN_DEATHS_ACTION_KIND
 } from "@elmybot/feature-fun-deaths";
+import packagedWidgetDataFeature, {
+  WIDGET_DATA_ACTION_KIND
+} from "@elmybot/feature-widget-data";
 import {
   CORE_ACTION_KINDS,
   coreActions,
@@ -89,6 +92,7 @@ describe("Representative feature migrations", () => {
     expect(featureRegistry.services).toEqual([
       "authorization",
       "config",
+      "eventStreams",
       "integrationState",
       "links",
       "random",
@@ -112,6 +116,26 @@ describe("Representative feature migrations", () => {
       featureId: "fun.deaths",
       uses: { services: ["authorization", "shareableState", "state"] }
     });
+  });
+
+  it("installs widget data only as the durable every-trigger proof", () => {
+    expect(installedFeatures).toContain(packagedWidgetDataFeature);
+    expect(featureRegistry.eventStreams["widget.data:updates:v1"]).toMatchObject({
+      featureId: "widget.data",
+      definition: {
+        id: "updates",
+        version: 1,
+        scope: { kind: "effective_shareable" }
+      }
+    });
+    expect(featureRegistry.actions[WIDGET_DATA_ACTION_KIND]).toMatchObject({
+      featureId: "widget.data",
+      uses: { services: ["eventStreams"] }
+    });
+    expect(featureRegistry.readableCatalog.some(
+      ({ feature }) => feature === "widget.data"
+    )).toBe(false);
+    expect(featureRegistry.featuresById["widget.data"].shareableState).toEqual([]);
   });
 
   it("installs announcements as one routed action with two route directions", () => {

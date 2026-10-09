@@ -409,6 +409,40 @@ function requireShareableStateTarget(invocation, targetPlatform) {
   return targetPlatform;
 }
 
+function requireEventStreamTarget(invocation, targetPlatform) {
+  if (
+    !["discord", "twitch"].includes(targetPlatform) ||
+    targetPlatform === invocation.origin.group.platform
+  ) {
+    throw new FeatureContextError(
+      "A durable event stream must target another supported platform.",
+      { code: "feature_event_stream_target_invalid" }
+    );
+  }
+  return targetPlatform;
+}
+
+function eventStreamHandle(action, runtimeContext, method, ...args) {
+  requireDeclaredService(action, "eventStreams");
+  const implementation = runtimeContext.featureServices?.eventStreams?.[method];
+  if (typeof implementation !== "function") return unavailable("eventStreams")();
+  return Promise.resolve(implementation(action.featureId, ...args)).then((handle) => {
+    if (
+      typeof handle !== "object" ||
+      handle === null ||
+      typeof handle.publish !== "function"
+    ) {
+      throw new FeatureContextError(
+        "Feature event-stream resolution returned an invalid value.",
+        { code: "feature_event_stream_result_invalid" }
+      );
+    }
+    return Object.freeze({
+      publish: (payload) => handle.publish(payload)
+    });
+  });
+}
+
 async function currentShareableState(
   action,
   invocation,
@@ -569,6 +603,21 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         runtimeContext,
         targetPlatform,
         namespaceId
+      )
+    }),
+    eventStreams: Object.freeze({
+      local: (streamId) => eventStreamHandle(
+        action,
+        runtimeContext,
+        "local",
+        requireFeatureKey(streamId)
+      ),
+      current: (targetPlatform, streamId) => eventStreamHandle(
+        action,
+        runtimeContext,
+        "current",
+        requireEventStreamTarget(invocation, targetPlatform),
+        requireFeatureKey(streamId)
       )
     }),
     routes: routed.routes,

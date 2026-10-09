@@ -45,6 +45,8 @@ surface consists of:
   `FeatureDefinitionError`;
 - readable-state helpers: `defineReadableStateExport` and
   `ReadableStateDefinitionError`;
+- durable-event helpers: `defineDurableEventStream` and
+  `DurableEventStreamDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -54,6 +56,28 @@ surface consists of:
   and
 - Twitch authoring helpers: `twitchActionCommand`, `twitchNativeCommand`,
   `twitchNoArgs`, `twitchRestText`, `twitchTokens`, and `twitchTextResult`.
+
+Feature tests import the additive, test-only surface from
+`@elmybot/framework/testing`. `createFeatureTestRuntime(feature)` keeps the
+existing command, state, schedule, and `query.snapshot()`/`query.watch()` APIs.
+Its `eventStreams` facility adds these stable in-memory contract helpers:
+
+| API | Meaning |
+| --- | --- |
+| `connect({ group, stream })` | Attach the one already-authorized consumer for a public `feature:stream:vN` identity |
+| `publish({ group, stream, payload, sourceEventId? })` | Append directly for a transport-focused test, bypassing the feature action |
+| `consumer.receive()` | Receive the next ordered event, with one unacknowledged event in flight |
+| `consumer.acknowledge(eventOrCursor)` | Advance and prune the exact outstanding event |
+| `consumer.disconnect()` | Drop consumer viability while preserving retained work |
+| `restart(consumer)` | Replace the in-memory consumer and replay unacknowledged work |
+| `expire({ group, stream })` | Apply retention against the fake clock and expose a blocking gap |
+| `handoff({ sourceGroup, targetPlatform, link })` | Move later effective-shareable publication while the prior owner drains |
+
+`runDurableEventFeatureContract()` is the reusable feature-level suite for
+payload validation, command authorization, stable source identity, capacity,
+restart replay, and envelope leakage. The helpers use the production payload
+serializer, event-ID algorithm, limits, and error codes, but do not issue
+credentials, create WebSockets, or emulate Cloudflare scheduling.
 
 `defineFeature()` accepts optional, declarative `shareableState` namespace
 metadata. Omission normalizes to a frozen empty array, preserving every existing
@@ -71,9 +95,18 @@ schema-valid result cell. A declaration only makes state eligible for a later
 read grant; it does not add a route or expose a value. See
 [`state-query-readable-state.md`](state-query-readable-state.md).
 
+`defineFeature()` also accepts up to ten optional `eventStreams` declarations
+created by `defineDurableEventStream()`. Omission normalizes to a frozen empty
+array. The helper validates stream identity and version, platforms, group-local
+or effective-shareable scope, operator-grant access, and a bounded JSON payload
+schema. Registry composition publishes a deterministic value-free event catalog;
+it never includes payload values, physical realm identities, grants, cursors, or
+consumer state. See the normative
+[`durable-event-contract.md`](durable-event-contract.md).
+
 Actions may explicitly request the controlled `authorization`, `config`,
-`integrationState`, `links`, `shareableState`, `state`, and `random` context
-services.
+`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, and
+`random` context services.
 `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
 does not expose platform roles, badges, or authorizer functions.
@@ -110,6 +143,37 @@ standalone realm when no directional default exists, or that default
 integration's realm otherwise. The scope mirrors the state operations. It does
 not expose links, realm IDs, generations, snapshots, or storage enumeration.
 `integrationState` remains available for compatibility.
+
+An action selecting every-trigger delivery declares only the `eventStreams`
+service, uses a group cooldown of at least one second, and is bound directly to
+a command. The reserved accessors are `await ctx.eventStreams.local(streamId)`
+for group-local declarations and `await ctx.eventStreams.current(
+otherPlatform, streamId)` for effective-shareable declarations. Both yield a
+feature-bound handle with `publish(payload)`. Platform trigger declarations in
+the existing `events` collection remain a different concept. The production
+publish service validates and canonically serializes the payload, pins the
+resolved physical route in the origin group's source ledger, and commits it to
+a bounded SQLite-backed stream before returning success. A retry of the same
+source and payload returns the existing logical receipt; changing the payload
+fails with `durable_event_source_conflict`.
+
+Effective-shareable publication uses the same directional-default authority as
+shareable state. Each append pins the realm identity and ordered binding
+revision through the integration registry, which keeps bounded lifecycle
+interest for that physical stream. Activation, default switching, revocation,
+fallback, and standalone-successor changes make the prior stream drain-only;
+later commands resolve a separate stream and fail consumer-unavailable until a
+new consumer is attached. Backlogs and sequence numbers are never copied or
+merged between realms. A rapid A-to-B-to-A change still creates a new stream
+incarnation and requires a newly attached consumer, while delayed older
+invalidation cannot move the newer binding backward.
+
+Publication requires the `DURABLE_EVENT_STREAMS_ENABLED` switch and a ready,
+authorized consumer. Event-specific grants, same-origin sessions, scoped
+discovery, Discord manager issuance, Twitch broadcaster issuance, and
+hibernating WebSocket registration are implemented independently of state-query
+authorization. Declaring or granting a stream does not make it consumable until
+its current grant registers the stream's one active socket.
 
 Protected snapshot, fingerprint, comparison, sealing, cloning, collision
 discovery, finalization, and revocation-successor infrastructure is implemented

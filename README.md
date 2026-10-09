@@ -57,6 +57,7 @@ effects only where cross-platform behavior benefits from a common model.
 | `/twitch/integrations/*` | Redeem, resume, resolve/finalize shareable state for, or cancel a Discord integration invitation |
 | `/twitch/eventsub/*` | Protected subscription and desired-state administration |
 | `/state-query/*` | Scoped readable-state discovery, snapshots, live WebSockets, sessions, grant issuance, query setup, and widgets |
+| `/event-stream/*` | Durable-event grants, scoped discovery, sessions, revocation, and hibernating ordered WebSocket delivery |
 
 Signed Discord and Twitch webhook bodies are limited to 256 KiB. Oversized
 declared bodies are rejected before they are read; the actual UTF-8 size is
@@ -80,6 +81,7 @@ checked again before signature verification and JSON parsing.
 | `INTEGRATION_COORDINATOR` | `IntegrationCoordinator` | One per integration; durable execution ledger and effect outbox |
 | `SHAREABLE_STATE_REALM` | `ShareableStateRealm` | One per standalone or integration realm; shareable namespaces, revisions, and notification outboxes |
 | `STATE_QUERY_OBSERVER` | `StateQueryObserver` | One per logical platform group; deduplicated, coalesced state invalidations for future live queries |
+| `DURABLE_EVENT_STREAM` | `DurableEventStream` | One per physical declared stream; bounded events, lifecycle authority, event grants, reset audits, and future consumer delivery |
 
 All configured Durable Object classes use SQLite-backed namespaces. Migration
 tags in `wrangler.jsonc` are append-only after deployment.
@@ -96,6 +98,7 @@ script. All commands except `/alive` are guild-only.
 | `/alive` | — | Check responsiveness |
 | `/counter` | — | Increment the server's namespaced feature counter |
 | `/deaths` | optional `operation` (`check`, `plus`, `minus`, `reset`), optional `game` | Check or update shared deaths on the server's default Twitch link |
+| `/widget_data` | `data` | Queue a durable event for the authorized widget consumer |
 | `/pingroleat` | `timestamp`, `role`, optional `repeat_daily` | Schedule a role ping |
 | `/pingmeat` | `timestamp`, `user`, optional `repeat_daily` | Schedule a user ping |
 | `/sayat` | `timestamp`, `message`, optional `repeat_daily`, `gif` | Schedule a message or GIF result |
@@ -111,6 +114,7 @@ script. All commands except `/alive` are guild-only.
 | `/feature_config_show` | `feature`, `key` | Inspect a feature configuration value |
 | `/feature_config_delete` | `feature`, `key` | Delete a feature configuration value |
 | `/state_query_grant` | `exports`, optional `duration_hours` | Create a scoped read credential in an ephemeral response |
+| `/event_stream_grant` | `stream`, optional `duration_hours`, `reset_backlog` | Create a scoped durable-event consumer credential in an ephemeral response |
 | `/integration_link_twitch` | — | Create a secure Twitch linking invitation |
 | `/integration_list` | — | List active integrations and IDs |
 | `/integration_default_set` | `integration_id` | Select the server's default Twitch link |
@@ -125,10 +129,11 @@ script. All commands except `/alive` are guild-only.
 
 Scheduling create/view/cancel capabilities allow the server owner, intrinsic
 Discord moderators, and configured allowed roles. Configuration management
-allows the owner and intrinsic moderators. Integration and state-query grant
-management are stricter:
+allows the owner and intrinsic moderators. Integration, state-query grant, and
+event-stream grant management are stricter:
 only the owner or a member with Administrator or Manage Server may link,
-inspect, configure, recover, unlink integrations, or expose readable state. Announcements allow the
+inspect, configure, recover, unlink integrations, expose readable state, or
+authorize an event consumer. Announcements allow the
 owner, intrinsic moderators, and configured allowed roles.
 
 Random schedule intervals are expressed in seconds, must remain between 10
@@ -143,6 +148,7 @@ characters and are resolved at delivery time.
 | `!alive` | Any chatter | Check responsiveness |
 | `!counter` | Any chatter | Increment the channel's namespaced feature counter |
 | `!deaths [check|plus|minus|reset] [<game>]` | Any chatter checks; broadcaster or moderator updates | Check or update shared deaths on the channel's default Discord link |
+| `!widgetdata <text...>` | Broadcaster or moderator | Queue a durable event for the authorized widget consumer |
 | `!announce <message>` | Broadcaster or moderator | Send an announcement to linked Discord channels |
 
 Command names are case-insensitive. `!deaths` and `!deaths check` use the last
@@ -158,6 +164,10 @@ durable inbox row.
 group has an independent count, and each actor has a five-second atomic
 cooldown. Operators can change its `label` setting with, for example,
 `/feature_config_set feature:fun.counter key:label json_value:"Wins"`.
+
+`/widget_data` and `!widgetdata` publish every accepted bounded string to the
+selected durable-event stream. See the [widget-data guide](docs/widget-data.md)
+for event-grant setup, ordered at-least-once delivery, replay, and safe handling.
 
 ## Cross-platform linking
 
@@ -253,6 +263,10 @@ after the platform accepts a request and before local success is recorded.
 | `STATE_QUERY_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` grant boundary |
 | `STATE_QUERY_PUBLIC_ORIGIN` | No | Committed origin for grant OAuth and session cookies |
 | `STATE_QUERY_CREDENTIAL_SIGNING_SECRET` | Yes | HMAC key rejecting forged grant-routing fields before Durable Object lookup |
+| `DURABLE_EVENT_STREAMS_ENABLED` | No | Master switch for durable-event publication, grants, and public event routes |
+| `DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` event-grant boundary |
+| `DURABLE_EVENT_PUBLIC_ORIGIN` | No | Committed origin for event-grant OAuth and session cookies |
+| `DURABLE_EVENT_CREDENTIAL_SIGNING_SECRET` | Yes | Independent HMAC key rejecting forged event-grant routing fields before Durable Object lookup |
 | `TWITCH_DEPLOYMENT_ENVIRONMENT` | No | Committed `production` or `test` identity |
 | `TWITCH_PUBLIC_ORIGIN` | No | Committed canonical callback and onboarding origin |
 
@@ -298,16 +312,19 @@ npx wrangler secret put TWITCH_BOT_USER_ID --env test
 npx wrangler secret put TWITCH_EVENTSUB_SECRET --env test
 npx wrangler secret put TWITCH_OAUTH_SETUP_TOKEN --env test
 npx wrangler secret put STATE_QUERY_CREDENTIAL_SIGNING_SECRET --env test
+npx wrangler secret put DURABLE_EVENT_CREDENTIAL_SIGNING_SECRET --env test
 ```
 
 Set the environment-specific `TWITCH_PUBLIC_ORIGIN` and
-`STATE_QUERY_PUBLIC_ORIGIN` values in `wrangler.jsonc`.
+`STATE_QUERY_PUBLIC_ORIGIN` and `DURABLE_EVENT_PUBLIC_ORIGIN` values in
+`wrangler.jsonc`.
 Register these Twitch OAuth callback URLs for each Worker host:
 
 ```text
 https://<worker-host>/twitch/oauth/callback
 https://<worker-host>/twitch/channels/oauth/callback
 https://<worker-host>/state-query/operator/twitch/callback
+https://<worker-host>/event-stream/operator/twitch/callback
 ```
 
 Set the Discord interaction endpoint to:
@@ -386,6 +403,22 @@ open `GET /state-query/operator/twitch` and reauthenticate with Twitch. See the
 [state-query HTTP and grant guide](docs/state-query-http.md) for credential,
 catalog, snapshot, session, revocation, origin, and scope details.
 
+Durable-event grant issuance is independently group-authorized. Discord server
+owners and members with Administrator or Manage Server use
+`/event_stream_grant`; Twitch broadcasters open
+`GET /event-stream/operator/twitch` and reauthenticate with Twitch. Event grants
+cannot read state-query routes, and state-query grants cannot authorize event
+routes. See the
+[durable-event grant, HTTP, and socket guide](docs/durable-event-http.md) for
+setup, catalog, session, replacement, reset, revocation, and direct consumer
+WebSocket behavior.
+
+After deployment, open `/event-stream/setup` to connect an event grant, test the
+asynchronous handler, and copy a credential-free `/event-stream/widget` OBS URL
+or minimal integration snippet. The
+[durable-event browser guide](docs/durable-event-browser.md) explains replay,
+acknowledgement, terminal states, and the bounded duplicate helper.
+
 After deployment, open `/state-query/setup` to compose and preview a query and
 copy a `/state-query/widget` browser-source URL. OBS uses its own session;
 enter the read grant through **Interact**. The [browser guide](docs/state-query-browser.md)
@@ -419,7 +452,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 ## Testing and CI
 
 GitHub Actions runs the complete suite for pushes to `master` and
-`codex-state-querying`, pull requests, and manual dispatches. CI:
+`codex-querying-experiment`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -480,6 +513,11 @@ explicit catalog-regeneration action.
 - [Public state-query WebSocket delivery](docs/state-query-websocket.md)
 - [Deaths state-query proof and contributor workflow](docs/state-query-deaths-proof.md)
 - [Browser query setup, client, and OBS widget](docs/state-query-browser.md)
+- [Durable-event grants, discovery, and HTTP sessions](docs/durable-event-http.md)
+- [Durable-event browser client, setup, and OBS widget](docs/durable-event-browser.md)
+- [Durable-event transport contract](docs/durable-event-contract.md)
+- [Durable-event transport implementation roadmap](docs/durable-event-transport-roadmap.md)
+- [Widget-data consumer and contributor guide](docs/widget-data.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)
 - [Pending integration state resolution](docs/shareable-state-resolution.md)

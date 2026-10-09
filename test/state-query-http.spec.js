@@ -166,6 +166,18 @@ describe("state-query read grants and HTTP snapshots", () => {
     expect(catalog.exports[0].grantScope.arguments.game.values).toEqual({ kind: "any" });
   });
 
+  it("does not expose migrated widget events through state-query grants", () => {
+    expect(featureRegistry.readableState["widget.data:latest:v1"]).toBeUndefined();
+    expect(featureRegistry.readableCatalog.some(
+      ({ feature }) => feature === "widget.data"
+    )).toBe(false);
+    expect(() => grantPermissionsForExportList(
+      featureRegistry,
+      "twitch",
+      "widget.data:latest:v1"
+    )).toThrow(/does not identify an eligible readable export/i);
+  });
+
   it("evaluates an authorized literal and dynamic snapshot without changing state", async () => {
     const selectedTarget = target();
     await seedDeaths(selectedTarget);

@@ -3,7 +3,7 @@
 `master` is the integration branch. Substantial implementation and experiment
 work should use a dedicated task branch and reach `master` through review.
 
-The current development branch is `codex-state-querying`. Make repository
+The current development branch is `codex-querying-experiment`. Make repository
 changes only on that branch unless the user explicitly changes the target branch.
 
 For repository work:

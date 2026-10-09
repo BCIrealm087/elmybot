@@ -7,6 +7,7 @@ import {
   announcementsFeature
 } from "../src/features/announcements/feature.js";
 import { counterFeature } from "../src/features/counter/feature.js";
+import widgetDataFeature from "../packages/features/widget-data/src/feature.js";
 import { discordRoleAccessFeature } from "../src/features/discord-role-access/feature.js";
 import {
   SCHEDULED_TWITCH_ANNOUNCEMENT_KIND,
@@ -34,6 +35,7 @@ import {
   discordTestActor,
   discordTestGroup,
   linkedTestRoute,
+  discordTestModerator,
   twitchTestActor,
   twitchTestGroup
 } from "../src/framework/testing.js";
@@ -293,5 +295,102 @@ describe("Feature test kit", () => {
       group: twitchGroup,
       actor: twitchTestActor()
     })).toReply("Counter: 1");
+  });
+
+  it("replays unacknowledged durable events across disconnect and restart", async () => {
+    const group = discordTestGroup({ id: "event-replay-guild" });
+    const runtime = createFeatureTestRuntime(widgetDataFeature);
+    const firstConsumer = runtime.eventStreams.connect({
+      group,
+      stream: "widget.data:updates:v1"
+    });
+
+    (await runtime.discord.command("widget_data", {
+      group,
+      actor: discordTestModerator(),
+      args: { data: "play-intro" }
+    })).toReply("Widget event queued.");
+    const first = await firstConsumer.receive();
+    expect(first).toMatchObject({
+      type: "event",
+      stream: { feature: "widget.data", stream: "updates", version: 1 },
+      sequence: 1,
+      payload: { data: "play-intro", origin: "discord" }
+    });
+
+    firstConsumer.disconnect();
+    await expect(runtime.eventStreams.publish({
+      group,
+      stream: "widget.data:updates:v1",
+      payload: { data: "not-accepted", origin: "discord" }
+    })).rejects.toMatchObject({ code: "durable_event_consumer_unavailable" });
+    const reconnected = runtime.eventStreams.connect({
+      group,
+      stream: "widget.data:updates:v1"
+    });
+    expect(await reconnected.receive()).toEqual(first);
+
+    const restarted = runtime.eventStreams.restart(reconnected);
+    const replay = await restarted.receive();
+    expect(replay).toEqual(first);
+    expect(restarted.acknowledge(replay)).toBe(true);
+    expect(restarted.acknowledge(replay)).toBe(false);
+    restarted.disconnect();
+  });
+
+  it("models expiry gaps and binding handoff without merging physical streams", async () => {
+    const discordGroup = discordTestGroup({ id: "event-owner-guild" });
+    const twitchGroup = twitchTestGroup({ id: "event-owner-channel" });
+    const runtime = createFeatureTestRuntime(widgetDataFeature);
+    const oldConsumer = runtime.eventStreams.connect({
+      group: discordGroup,
+      stream: "widget.data:updates:v1"
+    });
+
+    await runtime.eventStreams.publish({
+      group: discordGroup,
+      stream: "widget.data:updates:v1",
+      sourceEventId: "handoff-before",
+      payload: { data: "before-handoff", origin: "discord" }
+    });
+    runtime.eventStreams.handoff({
+      sourceGroup: discordGroup,
+      targetPlatform: "twitch",
+      link: defaultTestLink({
+        sourceGroup: discordGroup,
+        targetGroup: twitchGroup,
+        integrationId: "event-integration"
+      })
+    });
+    const retained = await oldConsumer.receive();
+    oldConsumer.acknowledge(retained);
+    await expect(oldConsumer.receive()).rejects.toMatchObject({
+      code: "feature_test_event_stream_moved"
+    });
+    await expect(runtime.eventStreams.publish({
+      group: discordGroup,
+      stream: "widget.data:updates:v1",
+      payload: { data: "new-owner", origin: "discord" }
+    })).rejects.toMatchObject({ code: "durable_event_consumer_unavailable" });
+
+    const newConsumer = runtime.eventStreams.connect({
+      group: discordGroup,
+      stream: "widget.data:updates:v1"
+    });
+    await runtime.eventStreams.publish({
+      group: discordGroup,
+      stream: "widget.data:updates:v1",
+      payload: { data: "new-owner", origin: "discord" }
+    });
+    expect(await newConsumer.receive()).toMatchObject({ sequence: 1 });
+
+    runtime.clock.advance({ seconds: 1_800 });
+    expect(runtime.eventStreams.expire({
+      group: discordGroup,
+      stream: "widget.data:updates:v1"
+    })).toBe(1);
+    await expect(newConsumer.receive()).rejects.toMatchObject({
+      code: "feature_test_event_stream_retention_gap"
+    });
   });
 });

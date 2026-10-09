@@ -89,6 +89,37 @@ describe("readable state declarations", () => {
     expect(Object.isFrozen(withoutExports.readableState)).toBe(true);
   });
 
+  it("allows camelCase result fields while keeping declaration IDs canonical", () => {
+    const definition = scoreExport({
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            updateId: { type: "string", minLength: 48, maxLength: 48 }
+          },
+          required: ["updateId"]
+        },
+        absence: { kind: "default" }
+      }
+    });
+
+    expect(definition.result.schema.properties).toEqual({
+      updateId: { type: "string", minLength: 48, maxLength: 48 }
+    });
+    expect(() => scoreExport({
+      result: {
+        schema: {
+          type: "object",
+          properties: {
+            UpdateId: { type: "string", minLength: 48, maxLength: 48 }
+          },
+          required: ["UpdateId"]
+        },
+        absence: { kind: "default" }
+      }
+    })).toThrow(ReadableStateDefinitionError);
+  });
+
   it("rejects raw, duplicate, malformed, and ambiguous declarations", () => {
     expect(() => defineFeature({
       apiVersion: frameworkApiVersion,

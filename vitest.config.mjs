@@ -12,6 +12,8 @@ export default defineConfig({
           TWITCH_BOT_USER_ID: "bot-user-id",
           STATE_QUERY_CREDENTIAL_SIGNING_SECRET:
             "test-state-query-signing-secret-32-bytes-minimum",
+          DURABLE_EVENT_CREDENTIAL_SIGNING_SECRET:
+            "test-durable-event-signing-secret-32-bytes-minimum",
         },
       },
       wrangler: {

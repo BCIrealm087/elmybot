@@ -4,6 +4,7 @@ import { discordIntegrationEffectHandlers } from "../platforms/discord/integrati
 import { twitchIntegrationEffectHandlers } from "../platforms/twitch/integration-effects.js";
 import aliveFeature from "@elmybot/feature-alive";
 import deathsFeature from "@elmybot/feature-fun-deaths";
+import widgetDataFeature from "@elmybot/feature-widget-data";
 import { announcementsFeature } from "./announcements/feature.js";
 import { discordRoleAccessFeature } from "./discord-role-access/feature.js";
 import { counterFeature } from "./counter/feature.js";
@@ -17,6 +18,7 @@ import {
 export const installedFeatures = Object.freeze([
   aliveFeature,
   deathsFeature,
+  widgetDataFeature,
   counterFeature,
   announcementsFeature,
   discordRoleAccessFeature,

@@ -17,6 +17,14 @@ import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
 import { evaluateStateQuery } from "../state-querying/evaluator.js";
+import {
+  DURABLE_EVENT_CODES,
+  DURABLE_EVENT_LIMITS,
+  durableEventError,
+  durableEventId,
+  serializeDurableEventPayload,
+  sha256Base64Url
+} from "../durable-events/contract.js";
 
 const ROUTED_MESSAGE_EFFECT_KINDS = Object.freeze({
   discord: "discord.message.send.v1",
@@ -28,6 +36,7 @@ const TEST_CAPABILITIES = Object.freeze({
   manager: "framework.managers"
 });
 const MAX_DUE_SCHEDULES_PER_RUN = 100;
+const DURABLE_EVENT_SOCKET_PROTOCOL = "durable-event-socket/v1";
 
 export class FeatureTestRuntimeError extends Error {
   constructor(message, { code = "feature_test_runtime_error" } = {}) {
@@ -798,6 +807,455 @@ function createMemoryServices(clock, registry) {
   });
 }
 
+function eventStreamIdentity(definition, featureId) {
+  return `${featureId}:${definition.id}:v${definition.version}`;
+}
+
+function createMemoryEventStreams({
+  clock,
+  registry,
+  resolveDefaultLink,
+  replaceDefaultLink,
+  nextSourceId
+}) {
+  const streams = new Map();
+
+  function declaration(identity) {
+    const stream = registry.eventStreams[identity];
+    if (!stream) {
+      throw new FeatureTestRuntimeError(
+        `No durable event stream \`${identity}\` is installed.`,
+        { code: "feature_test_event_stream_not_found" }
+      );
+    }
+    return stream;
+  }
+
+  function declarationFor(featureId, streamId) {
+    const matches = Object.values(registry.eventStreams).filter((entry) =>
+      entry.featureId === featureId && entry.definition.id === streamId
+    );
+    if (matches.length !== 1) {
+      throw new FeatureTestRuntimeError(
+        `Feature \`${featureId}\` does not declare one event stream named \`${streamId}\`.`,
+        { code: "feature_test_event_stream_not_found" }
+      );
+    }
+    return matches[0];
+  }
+
+  function normalizedSelector({ group: groupInput, stream: identity }) {
+    const group = createPlatformGroupRef(groupInput);
+    if (typeof identity !== "string") {
+      throw new FeatureTestRuntimeError("A durable event stream identity is required.", {
+        code: "feature_test_event_stream_identity_invalid"
+      });
+    }
+    const entry = declaration(identity);
+    if (!entry.definition.platforms.includes(group.platform)) {
+      throw new FeatureTestRuntimeError(
+        `Durable event stream \`${identity}\` does not support ${group.platform}.`,
+        { code: "feature_test_event_stream_platform_invalid" }
+      );
+    }
+    return { group, entry, identity };
+  }
+
+  function routeFor(group, entry, targetPlatform = null) {
+    const { definition, featureId } = entry;
+    let owner;
+    if (definition.scope.kind === "group_local") {
+      owner = `group:${group.key}`;
+    } else {
+      const target = targetPlatform ?? (group.platform === "discord" ? "twitch" : "discord");
+      const link = resolveDefaultLink(group, target);
+      owner = link
+        ? `integration:${link.integration.id}:g1`
+        : `standalone:${group.key}:g1`;
+    }
+    const identity = eventStreamIdentity(definition, featureId);
+    return Object.freeze({
+      identity,
+      owner,
+      key: `${definition.scope.kind}\u0000${owner}\u0000${identity}`,
+      stream: Object.freeze({
+        feature: featureId,
+        stream: definition.id,
+        version: definition.version
+      })
+    });
+  }
+
+  function streamFor(group, entry, targetPlatform = null) {
+    const route = routeFor(group, entry, targetPlatform);
+    if (!streams.has(route.key)) {
+      streams.set(route.key, {
+        route,
+        definition: entry.definition,
+        events: [],
+        receipts: new Map(),
+        acknowledgedCursors: new Set(),
+        acceptedTimes: [],
+        retainedBytes: 0,
+        nextSequence: 1,
+        activeConnection: null,
+        moved: false,
+        gap: false
+      });
+    }
+    return streams.get(route.key);
+  }
+
+  function connectionError(code, message) {
+    return new FeatureTestRuntimeError(message, { code });
+  }
+
+  function terminalError(record) {
+    if (record.gap) {
+      return connectionError(
+        "feature_test_event_stream_retention_gap",
+        "The test event stream has a retention gap and requires reset."
+      );
+    }
+    if (record.moved && record.events.length === 0) {
+      return connectionError(
+        "feature_test_event_stream_moved",
+        "The test event stream moved after its retained backlog drained."
+      );
+    }
+    return null;
+  }
+
+  function settleWaiting(connection, outcome) {
+    if (!connection.waiting) return;
+    const { resolve, reject } = connection.waiting;
+    connection.waiting = null;
+    if (outcome instanceof Error) reject(outcome);
+    else resolve(outcome);
+  }
+
+  function nextFrame(connection) {
+    if (!connection.connected) {
+      throw connectionError(
+        "feature_test_event_stream_disconnected",
+        "The test event-stream consumer is disconnected."
+      );
+    }
+    if (connection.outstanding !== null) return null;
+    const event = connection.record.events[0];
+    if (!event) {
+      const error = terminalError(connection.record);
+      if (error) throw error;
+      return null;
+    }
+    connection.outstanding = event.cursor;
+    return event.frame;
+  }
+
+  function deliver(connection) {
+    if (!connection?.connected || !connection.waiting) return;
+    try {
+      const frame = nextFrame(connection);
+      if (frame) settleWaiting(connection, frame);
+    } catch (error) {
+      settleWaiting(connection, error);
+    }
+  }
+
+  function disconnectState(connection, code = null) {
+    if (!connection.connected) return;
+    connection.connected = false;
+    if (connection.record.activeConnection === connection) {
+      connection.record.activeConnection = null;
+    }
+    if (connection.waiting) {
+      settleWaiting(connection, connectionError(
+        code ?? "feature_test_event_stream_disconnected",
+        code === "feature_test_event_stream_consumer_replaced"
+          ? "The test event-stream consumer was replaced."
+          : "The test event-stream consumer disconnected."
+      ));
+    }
+  }
+
+  function attach(record) {
+    if (record.activeConnection?.connected) {
+      disconnectState(
+        record.activeConnection,
+        "feature_test_event_stream_consumer_replaced"
+      );
+    }
+    const state = {
+      record,
+      connected: true,
+      outstanding: null,
+      waiting: null,
+      handle: null
+    };
+    const handle = Object.freeze({
+      stream: record.route.stream,
+      receive() {
+        if (state.waiting) {
+          throw connectionError(
+            "feature_test_event_stream_read_pending",
+            "Only one pending test event-stream read is supported."
+          );
+        }
+        let frame;
+        try {
+          frame = nextFrame(state);
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        if (frame) return Promise.resolve(frame);
+        return new Promise((resolve, reject) => {
+          state.waiting = { resolve, reject };
+        });
+      },
+      acknowledge(eventOrCursor) {
+        if (!state.connected) {
+          throw connectionError(
+            "feature_test_event_stream_disconnected",
+            "The test event-stream consumer is disconnected."
+          );
+        }
+        const cursor = typeof eventOrCursor === "string"
+          ? eventOrCursor
+          : eventOrCursor?.cursor;
+        if (state.record.acknowledgedCursors.has(cursor)) return false;
+        if (typeof cursor !== "string" || cursor !== state.outstanding) {
+          throw connectionError(
+            "feature_test_event_stream_ack_invalid",
+            "The acknowledgement does not select the outstanding event."
+          );
+        }
+        const [event] = state.record.events;
+        if (!event || event.cursor !== cursor) {
+          throw connectionError(
+            "feature_test_event_stream_ack_invalid",
+            "The acknowledgement does not select the outstanding event."
+          );
+        }
+        state.record.events.shift();
+        state.record.retainedBytes -= event.bytes;
+        state.record.acknowledgedCursors.add(cursor);
+        state.outstanding = null;
+        deliver(state);
+        if (state.record.events.length === 0) deliver(state);
+        return true;
+      },
+      disconnect() {
+        disconnectState(state);
+      }
+    });
+    state.handle = handle;
+    record.activeConnection = state;
+    return state;
+  }
+
+  function expireRecord(record) {
+    const nowMs = clock.now().getTime();
+    let expired = 0;
+    while (record.events[0]?.expiresAtMs <= nowMs) {
+      const event = record.events.shift();
+      record.retainedBytes -= event.bytes;
+      expired += 1;
+    }
+    if (expired > 0) {
+      record.gap = true;
+      if (record.activeConnection) {
+        record.activeConnection.outstanding = null;
+        deliver(record.activeConnection);
+      }
+    }
+    return expired;
+  }
+
+  async function publishTo(record, group, sourceEventId, payload) {
+    const normalized = serializeDurableEventPayload(
+      payload,
+      record.definition.payload.schema
+    );
+    const eventId = await durableEventId({
+      featureId: record.route.stream.feature,
+      streamId: record.route.stream.stream,
+      version: record.route.stream.version,
+      originGroupKey: group.key,
+      sourceEventId
+    });
+    const existing = record.receipts.get(eventId);
+    if (existing) {
+      if (existing.serialized !== normalized.serialized) {
+        throw durableEventError(DURABLE_EVENT_CODES.sourceConflict, { status: 409 });
+      }
+      return Object.freeze({ accepted: true, eventId: existing.eventId });
+    }
+    expireRecord(record);
+    if (record.gap) {
+      throw durableEventError(DURABLE_EVENT_CODES.gapRequiresReset, { status: 409 });
+    }
+    if (record.moved) {
+      throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+    }
+    if (!record.activeConnection?.connected) {
+      throw durableEventError(DURABLE_EVENT_CODES.consumerUnavailable, { status: 409 });
+    }
+    const nowMs = clock.now().getTime();
+    record.acceptedTimes = record.acceptedTimes.filter((time) => time > nowMs - 1_000);
+    if (
+      record.events.length >= DURABLE_EVENT_LIMITS.maxRetainedEvents ||
+      record.retainedBytes + normalized.bytes > DURABLE_EVENT_LIMITS.maxRetainedBytes ||
+      record.acceptedTimes.length >= DURABLE_EVENT_LIMITS.maxIngressPerSecond
+    ) {
+      throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
+    }
+    const sequence = record.nextSequence;
+    record.nextSequence += 1;
+    const cursor = `dec1.${await sha256Base64Url(JSON.stringify([
+      "elmybot.test-durable-event-cursor.v1",
+      record.route.key,
+      sequence,
+      eventId
+    ]))}`;
+    const acceptedAt = new Date(nowMs).toISOString();
+    const expiresAtMs = nowMs + DURABLE_EVENT_LIMITS.retentionMs;
+    const frozenPayload = freezeJson(JSON.parse(normalized.serialized));
+    const frame = Object.freeze({
+      protocol: DURABLE_EVENT_SOCKET_PROTOCOL,
+      type: "event",
+      stream: record.route.stream,
+      eventId,
+      sequence,
+      cursor,
+      acceptedAt,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+      payload: frozenPayload
+    });
+    const event = Object.freeze({
+      eventId,
+      cursor,
+      sequence,
+      bytes: normalized.bytes,
+      expiresAtMs,
+      frame
+    });
+    record.events.push(event);
+    record.receipts.set(eventId, Object.freeze({
+      eventId,
+      serialized: normalized.serialized
+    }));
+    record.retainedBytes += normalized.bytes;
+    record.acceptedTimes.push(nowMs);
+    deliver(record.activeConnection);
+    return Object.freeze({ accepted: true, eventId });
+  }
+
+  function connect(selector) {
+    const { group, entry } = normalizedSelector(selector);
+    if (entry.definition.access.kind !== "operator_grant") {
+      throw new FeatureTestRuntimeError(
+        "The test event stream does not use operator-grant access.",
+        { code: "feature_test_event_stream_access_invalid" }
+      );
+    }
+    return attach(streamFor(group, entry)).handle;
+  }
+
+  async function directPublish({
+    group: groupInput,
+    stream: identity,
+    payload,
+    sourceEventId
+  }) {
+    const { group, entry } = normalizedSelector({ group: groupInput, stream: identity });
+    return await publishTo(
+      streamFor(group, entry),
+      group,
+      sourceEventId ?? nextSourceId(group.platform, "durable-event"),
+      payload
+    );
+  }
+
+  function service(invocation) {
+    const group = invocation.origin.group;
+    const open = async (featureId, streamId, targetPlatform = null) => {
+      const entry = declarationFor(featureId, streamId);
+      const expectedScope = targetPlatform === null ? "group_local" : "effective_shareable";
+      if (entry.definition.scope.kind !== expectedScope) {
+        throw new FeatureTestRuntimeError(
+          `Durable event stream \`${featureId}:${streamId}\` has the wrong scope.`,
+          { code: "feature_test_event_stream_scope_invalid" }
+        );
+      }
+      const record = streamFor(group, entry, targetPlatform);
+      return Object.freeze({
+        publish: (payload) => publishTo(
+          record,
+          group,
+          invocation.sourceEventId,
+          payload
+        )
+      });
+    };
+    return Object.freeze({
+      local: (featureId, streamId) => open(featureId, streamId),
+      current: (featureId, targetPlatform, streamId) =>
+        open(featureId, streamId, targetPlatform)
+    });
+  }
+
+  function restart(consumer) {
+    const state = [...streams.values()]
+      .map((record) => record.activeConnection)
+      .find((connection) => connection?.handle === consumer);
+    if (!state) {
+      throw new FeatureTestRuntimeError(
+        "The consumer is not the active test event-stream connection.",
+        { code: "feature_test_event_stream_consumer_invalid" }
+      );
+    }
+    const record = state.record;
+    disconnectState(state);
+    return attach(record).handle;
+  }
+
+  function expire(selector) {
+    const { group, entry } = normalizedSelector(selector);
+    return expireRecord(streamFor(group, entry));
+  }
+
+  function handoff({ sourceGroup: groupInput, targetPlatform, link = null }) {
+    const group = createPlatformGroupRef(groupInput);
+    const target = targetPlatform ?? link?.targetGroup?.platform;
+    if (!target || target === group.platform) {
+      throw new FeatureTestRuntimeError(
+        "A binding handoff must target the other supported platform.",
+        { code: "feature_test_event_stream_handoff_invalid" }
+      );
+    }
+    const affected = Object.values(registry.eventStreams).filter(({ definition }) =>
+      definition.scope.kind === "effective_shareable" &&
+      definition.platforms.includes(group.platform)
+    );
+    const oldRecords = affected.map((entry) => streamFor(group, entry, target));
+    replaceDefaultLink(group, target, link);
+    for (const record of oldRecords) {
+      record.moved = true;
+      deliver(record.activeConnection);
+    }
+    return Object.freeze(oldRecords.map((record) => record.route.stream));
+  }
+
+  return Object.freeze({
+    connect,
+    publish: directPublish,
+    restart,
+    expire,
+    handoff,
+    service
+  });
+}
+
 function validateMappedSchedule(mapped, schedule) {
   if (typeof mapped !== "object" || mapped === null || Array.isArray(mapped)) {
     throw new FeatureTestRuntimeError("The command produced an invalid schedule.");
@@ -847,7 +1305,6 @@ export function createFeatureTestRuntime(featureOrFeatures, {
   });
   const actions = createActionRegistry(registry.actions);
   const clock = createClock(initialTime);
-  const memory = createMemoryServices(clock, registry);
   const configuredDefaultLinks = normalizedDefaultLinks(defaultLinks);
   const configuredRoutes = [...routes];
   const pendingSchedules = [];
@@ -875,6 +1332,38 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     ) ?? null;
   }
 
+  function replaceDefaultLink(group, targetPlatform, link) {
+    const existingIndex = configuredDefaultLinks.findIndex((candidate) =>
+      candidate.sourceGroup.key === group.key &&
+      candidate.targetGroup.platform === targetPlatform
+    );
+    let normalized = null;
+    if (link !== null) {
+      [normalized] = normalizedDefaultLinks([link]);
+      if (
+        normalized.sourceGroup.key !== group.key ||
+        normalized.targetGroup.platform !== targetPlatform
+      ) {
+        throw new FeatureTestRuntimeError(
+          "The replacement default link does not match the handoff direction.",
+          { code: "feature_test_event_stream_handoff_invalid" }
+        );
+      }
+    }
+    if (existingIndex >= 0) configuredDefaultLinks.splice(existingIndex, 1);
+    if (normalized) configuredDefaultLinks.push(normalized);
+    memory.invalidate("source_changed");
+  }
+
+  const memory = createMemoryServices(clock, registry);
+  const eventStreams = createMemoryEventStreams({
+    clock,
+    registry,
+    resolveDefaultLink,
+    replaceDefaultLink,
+    nextSourceId
+  });
+
   function routeSet(inputRoutes) {
     return inputRoutes === undefined ? configuredRoutes : inputRoutes;
   }
@@ -890,6 +1379,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
       ...memoryRuntime,
       featureServices: Object.freeze({
         ...memoryRuntime.featureServices,
+        eventStreams: eventStreams.service(invocation),
         links: Object.freeze({
           async default(_featureId, targetPlatform) {
             return resolveInvocationDefaultLink(targetPlatform);
@@ -998,11 +1488,12 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     args = {},
     actor = testActor(platform),
     group: groupInput,
-    routes: inputRoutes
+    routes: inputRoutes,
+    sourceEventId: inputSourceEventId
   } = {}) {
     const definition = commandDefinition(platform, name);
     const group = normalizedGroup(platform, groupInput);
-    const sourceEventId = nextSourceId(platform, "command");
+    const sourceEventId = inputSourceEventId ?? nextSourceId(platform, "command");
 
     if (definition.mode === ACTION_COMMAND_TYPE) {
       const actionResult = await executeFeatureAction({
@@ -1305,6 +1796,13 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     }),
     event,
     clock,
+    eventStreams: Object.freeze({
+      connect: eventStreams.connect,
+      publish: eventStreams.publish,
+      restart: eventStreams.restart,
+      expire: eventStreams.expire,
+      handoff: eventStreams.handoff
+    }),
     query: Object.freeze({
       snapshot: querySnapshot,
       watch: watchQuery
@@ -1350,5 +1848,210 @@ export function createFeatureTestRuntime(featureOrFeatures, {
       }
     }),
     logs: Object.freeze({ all: () => Object.freeze([...logs]) })
+  });
+}
+
+function requireContract(condition, message) {
+  if (!condition) {
+    throw new FeatureTestRuntimeError(message, {
+      code: "feature_test_event_contract_failed"
+    });
+  }
+}
+
+async function capturedError(operation) {
+  try {
+    await operation();
+  } catch (error) {
+    return error;
+  }
+  return null;
+}
+
+// Exercises the stable guarantees every durable-event feature inherits from the
+// framework. Feature tests supply only their command invocation and payloads;
+// transport identity, replay, bounds, and envelope-leakage checks stay here.
+export async function runDurableEventFeatureContract({
+  feature,
+  stream,
+  group: groupInput,
+  payload,
+  alternatePayload,
+  invalidPayload,
+  publish,
+  authorizedActor,
+  unauthorizedActor
+}) {
+  if (
+    !feature ||
+    typeof stream !== "string" ||
+    typeof publish !== "function" ||
+    !authorizedActor ||
+    !unauthorizedActor
+  ) {
+    throw new FeatureTestRuntimeError(
+      "A durable-event feature contract requires feature, stream, actors, and publish.",
+      { code: "feature_test_event_contract_invalid" }
+    );
+  }
+  const group = createPlatformGroupRef(groupInput);
+
+  const unavailableRuntime = createFeatureTestRuntime(feature);
+  const unavailable = await capturedError(() => unavailableRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload,
+    sourceEventId: "feature-test-contract:unavailable"
+  }));
+  requireContract(
+    unavailable?.code === DURABLE_EVENT_CODES.consumerUnavailable,
+    "Publication without an authorized consumer must be rejected."
+  );
+
+  const actionRuntime = createFeatureTestRuntime(feature);
+  const definition = actionRuntime.registry.eventStreams[stream]?.definition;
+  requireContract(
+    definition !== undefined,
+    "The durable-event contract stream is not installed."
+  );
+  const expectedPayload = serializeDurableEventPayload(
+    payload,
+    definition.payload.schema
+  );
+  const actionConsumer = actionRuntime.eventStreams.connect({ group, stream });
+  const denied = await capturedError(() => publish({
+    runtime: actionRuntime,
+    group,
+    actor: unauthorizedActor
+  }));
+  requireContract(
+    denied?.code === "action_forbidden",
+    "The feature command must reject the unauthorized contract actor."
+  );
+  await publish({ runtime: actionRuntime, group, actor: authorizedActor });
+  const actionEvent = await actionConsumer.receive();
+  requireContract(
+    JSON.stringify(actionEvent.payload) === expectedPayload.serialized,
+    "The feature command did not publish the expected payload."
+  );
+  actionConsumer.acknowledge(actionEvent);
+  actionConsumer.disconnect();
+
+  const identityRuntime = createFeatureTestRuntime(feature);
+  let identityConsumer = identityRuntime.eventStreams.connect({ group, stream });
+  const sourceEventId = "feature-test-contract:stable-source";
+  const firstReceipt = await identityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload,
+    sourceEventId
+  });
+  const firstEvent = await identityConsumer.receive();
+  const retryReceipt = await identityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload,
+    sourceEventId
+  });
+  requireContract(
+    retryReceipt.eventId === firstReceipt.eventId &&
+      firstEvent.eventId === firstReceipt.eventId,
+    "A same-source retry must preserve one event identity."
+  );
+  const distinctReceipt = await identityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload,
+    sourceEventId: "feature-test-contract:distinct-source"
+  });
+  requireContract(
+    distinctReceipt.eventId !== firstReceipt.eventId,
+    "Distinct command sources must receive distinct event identities."
+  );
+  const conflict = await capturedError(() => identityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload: alternatePayload,
+    sourceEventId
+  }));
+  requireContract(
+    conflict?.code === DURABLE_EVENT_CODES.sourceConflict,
+    "A same-source retry with different data must be rejected."
+  );
+  const invalid = await capturedError(() => identityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload: invalidPayload,
+    sourceEventId: "feature-test-contract:invalid-payload"
+  }));
+  requireContract(
+    invalid?.code === DURABLE_EVENT_CODES.payloadInvalid,
+    "The declared durable-event payload schema must reject invalid data."
+  );
+
+  const eventKeys = Object.keys(firstEvent).sort();
+  requireContract(
+    JSON.stringify(eventKeys) === JSON.stringify([
+      "acceptedAt",
+      "cursor",
+      "eventId",
+      "expiresAt",
+      "payload",
+      "protocol",
+      "sequence",
+      "stream",
+      "type"
+    ]),
+    "The durable-event envelope exposed unexpected fields."
+  );
+  const serializedEnvelope = JSON.stringify({ ...firstEvent, payload: null });
+  requireContract(
+    !serializedEnvelope.includes(sourceEventId) && !serializedEnvelope.includes(group.key),
+    "The durable-event envelope leaked source or owner identity."
+  );
+
+  identityConsumer = identityRuntime.eventStreams.restart(identityConsumer);
+  const replayedEvent = await identityConsumer.receive();
+  requireContract(
+    JSON.stringify(replayedEvent) === JSON.stringify(firstEvent),
+    "An unacknowledged event must replay unchanged after restart."
+  );
+  identityConsumer.acknowledge(replayedEvent);
+  identityConsumer.disconnect();
+
+  const capacityRuntime = createFeatureTestRuntime(feature);
+  const capacityConsumer = capacityRuntime.eventStreams.connect({ group, stream });
+  const retainedCapacity = Math.min(
+    DURABLE_EVENT_LIMITS.maxRetainedEvents,
+    Math.floor(DURABLE_EVENT_LIMITS.maxRetainedBytes / expectedPayload.bytes)
+  );
+  for (let index = 0; index < retainedCapacity; index += 1) {
+    if (index > 0 && index % DURABLE_EVENT_LIMITS.maxIngressPerSecond === 0) {
+      capacityRuntime.clock.advance({ seconds: 1 });
+    }
+    await capacityRuntime.eventStreams.publish({
+      group,
+      stream,
+      payload,
+      sourceEventId: `feature-test-contract:capacity:${index}`
+    });
+  }
+  capacityRuntime.clock.advance({ seconds: 1 });
+  const full = await capturedError(() => capacityRuntime.eventStreams.publish({
+    group,
+    stream,
+    payload,
+    sourceEventId: "feature-test-contract:capacity:overflow"
+  }));
+  requireContract(
+    full?.code === DURABLE_EVENT_CODES.streamFull,
+    "A full durable-event stream must reject new work without evicting retained work."
+  );
+  capacityConsumer.disconnect();
+
+  return Object.freeze({
+    eventId: firstEvent.eventId,
+    replayed: true,
+    retainedCapacity
   });
 }

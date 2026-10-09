@@ -138,6 +138,7 @@ form.
 | Send something to a linked platform | Action + route + routed effect |
 | Read the selected relationship to another platform | Action using the links service |
 | Run automatically from an authenticated event | Event binding + action |
+| Deliver every accepted command to a consumer | Durable event stream + command action |
 | Run later or repeatedly | Schedule definition + action |
 | Remember scores, quotes, or counters | Action using namespaced state |
 
@@ -275,6 +276,9 @@ facilities:
 | Stored-plan replay | `runtime.schedules.replay(plan)` |
 | Current routes | `runtime.routes.set(routes)` |
 | Directional default links | `defaultLinks: [defaultTestLink(...)]` and `runtime.links.set(...)` |
+| Readable-state snapshot/watch | `runtime.query.snapshot(query)` and `runtime.query.watch(query)` |
+| Durable-event consumer | `runtime.eventStreams.connect({ group, stream })` |
+| Durable-event transport cases | `publish()`, `restart()`, `expire()`, and `handoff()` on `runtime.eventStreams` |
 | Feature logs | `runtime.logs.all()` |
 
 Command and trigger results expose `reply`, `output`, `effects`, `schedules`,
@@ -815,6 +819,89 @@ the command action or mutate state. See the complete
 Operators can expose only selected declarations through scoped, expiring grants;
 the [state-query HTTP guide](state-query-http.md) describes discovery and
 snapshot behavior. A declaration remains private until such a grant exists.
+
+Readable state and durable events answer different questions. Use readable
+state when a client needs the complete value that is true now and may safely
+skip intermediate replacements. Use `eventStreams` when a client must handle
+every command that Elmybot accepts within explicit capacity and retention
+bounds. A stream declaration uses `defineDurableEventStream()` and an event
+action declares only `uses: { services: ["eventStreams"] }`, a group cooldown,
+and a direct command binding. Use `ctx.eventStreams.local(streamId)` for a
+group-local stream or `ctx.eventStreams.current(otherPlatform, streamId)` for
+effective-shareable ownership. The existing top-level `events` collection is
+for authenticated platform events that invoke actions; it is not a consumer
+delivery stream. See the
+[`event-stream` scaffold recipe](feature-quickstart.md#1-create-the-feature) and
+the [durable-event contract](durable-event-contract.md).
+
+Typical readable-state values are counters, configuration, and labels whose
+latest complete value replaces the previous one. Typical durable events are
+alerts, animations, and consumer commands that must each run. Durable events
+are not a background-job runner, permanent audit log, or exactly-once effects
+system: retention and capacity are bounded, and a crash between applying an
+effect and acknowledging it can replay the event. Deduplicate with `eventId`
+when repeating an effect is unsafe.
+
+A feature may deliberately declare both transports, but its responsibilities
+stay explicit. Put state mutation and event publication in separate actions and
+test the snapshot/watch surface independently from the receive/acknowledge
+surface. Registry composition rejects an event-publishing action that also
+requests state, routes, or effects, so one command cannot accidentally
+dual-publish through ambiguous dependencies.
+
+`publish(payload)` returns only after the event is durably appended, or throws a
+bounded safe service error. The backend enforces the declared JSON schema, a
+4-KiB serialized payload limit, per-stream count/byte/rate bounds, a two-hour
+source-retry ledger, and consumer availability. Delivery is at least once, so a
+consumer must deduplicate by the framework-owned event ID when a repeated side
+effect is unsafe. Event grants, scoped catalog discovery, same-origin sessions,
+revocation, and hibernating WebSocket registration are implemented separately
+from feature code. See the
+[durable-event grant, HTTP, and socket guide](durable-event-http.md).
+
+Feature tests normally keep the generated reusable contract:
+
+```js
+await runDurableEventFeatureContract({
+  feature,
+  stream: "fun.alert:updates:v1",
+  group: discordTestGroup(),
+  payload: { data: "show-title", origin: "discord" },
+  alternatePayload: { data: "show-score", origin: "discord" },
+  invalidPayload: { data: "", origin: "discord" },
+  authorizedActor: discordTestModerator(),
+  unauthorizedActor: discordTestActor(),
+  publish: ({ runtime, group, actor }) => runtime.discord.command(
+    "alert",
+    { group, actor, args: { data: "show-title" } }
+  )
+});
+```
+
+That one helper exercises command authorization, declared payload validation,
+stable same-source identity, source conflict, the retained capacity bound,
+restart replay, and envelope leakage. For feature-specific lifecycle behavior,
+connect with `runtime.eventStreams.connect({ group, stream })`, invoke the
+command, await `consumer.receive()`, and acknowledge the returned event. Direct
+`runtime.eventStreams.publish()` bypasses the feature action intentionally and
+is reserved for transport cases. `restart(consumer)` preserves retained work;
+`expire({ group, stream })` applies the fake clock; and `handoff({ sourceGroup,
+targetPlatform, link })` marks the prior physical stream drain-only while later
+publication resolves the replacement owner. These helpers model an authorized
+grant in memory; credential issuance and real WebSockets remain integration
+tests.
+
+For `current(...)`, directional default resolution is repeated for each command
+and the resolved realm plus binding revision are authorized atomically by the
+integration registry. If ownership changes while publication is in flight, the
+framework safely recovers an already accepted receipt or repins the still-pending
+source attempt to the new stream. The old stream keeps its retained backlog but
+accepts no publication through an obsolete binding. The new stream has its own
+sequence space and remains unavailable until its own consumer is attached; no
+event rows are copied across activation, default switching, revocation,
+fallback, or standalone-successor transitions. Even when a rapid A-to-B-to-A
+change returns to the same physical object name, it is a new binding incarnation
+and requires a new consumer attachment.
 
 ## Cookbook 7: conditionally protected command modes
 

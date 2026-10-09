@@ -81,7 +81,7 @@ export async function executeTwitchAction(
     invocation,
     {
       ...context,
-      ...createFeatureServiceRuntime(context.env, invocation),
+      ...createFeatureServiceRuntime(context.env, invocation, featureRegistry),
       routeDefinitions: featureRegistry.routes,
       effectAdapters: featureRegistry.effectAdapters,
       routedMessageEffectKinds: ROUTED_MESSAGE_EFFECT_KINDS,

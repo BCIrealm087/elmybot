@@ -76,7 +76,8 @@ describe("Feature scaffold templates", () => {
       "minimal",
       "shared-command",
       "local-counter",
-      "shareable-counter"
+      "shareable-counter",
+      "event-stream"
     ]);
     expect(featureScaffoldTemplates("fun-hype").template).toBe("minimal");
     expect(() => featureScaffoldTemplates("fun-hype", {
@@ -95,6 +96,9 @@ describe("Feature scaffold templates", () => {
     });
     const shareable = workspaceFeatureScaffoldTemplates("fun-score", {
       template: "shareable-counter"
+    });
+    const eventStream = workspaceFeatureScaffoldTemplates("fun-alert", {
+      template: "event-stream"
     });
 
     expect(shared.featureSource).toContain('supportedOrigins: ["discord", "twitch"]');
@@ -132,6 +136,19 @@ describe("Feature scaffold templates", () => {
       "two origins selecting the same integration"
     );
     expect(shareable.readmeSource).toContain("does not run OAuth");
+    expect(eventStream.featureSource).toContain("defineDurableEventStream");
+    expect(eventStream.featureSource).toContain('services: ["eventStreams"]');
+    expect(eventStream.featureSource).toContain(
+      'scope: { kind: "effective_shareable" }'
+    );
+    expect(eventStream.featureSource).toContain(
+      'cooldown: { scope: "group", seconds: 1 }'
+    );
+    expect(eventStream.testSource).toContain("runDurableEventFeatureContract");
+    expect(eventStream.testSource).toContain('runtime.discord.command(\n        "alert"');
+    expect(eventStream.readmeSource).toContain(
+      "payload, authorization, capacity, replay, and leakage contract"
+    );
   });
 
   it("keeps executable recipe fixtures identical to generated output", () => {

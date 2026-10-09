@@ -7,7 +7,8 @@ export const featureScaffoldRecipes = Object.freeze([
   DEFAULT_RECIPE,
   "shared-command",
   "local-counter",
-  "shareable-counter"
+  "shareable-counter",
+  "event-stream"
 ]);
 
 const RECIPE_TEST_GUIDANCE = Object.freeze({
@@ -26,6 +27,10 @@ const RECIPE_TEST_GUIDANCE = Object.freeze({
   "shareable-counter": Object.freeze([
     "Keep standalone isolation and two origins selecting the same integration.",
     "Keep an allowed update, denial without mutation, and the counter floor."
+  ]),
+  "event-stream": Object.freeze([
+    "Keep the reusable payload, authorization, capacity, replay, and leakage contract.",
+    "Keep both command bindings and the event-only dependency boundary."
   ])
 });
 
@@ -316,6 +321,111 @@ export default feature;
 `;
 }
 
+function eventStreamFeatureTemplate(identity, frameworkSource) {
+  return `${frameworkImport([
+    "access",
+    "defineAction",
+    "defineDurableEventStream",
+    "defineFeature",
+    "discordActionCommand",
+    "discordOption",
+    "discordTextResult",
+    "frameworkApiVersion",
+    "schema",
+    "twitchActionCommand",
+    "twitchRestText",
+    "twitchTextResult"
+  ], frameworkSource)}
+
+export const ${identity.constantName} = "${identity.actionKind}";
+
+function otherPlatform(platform) {
+  return platform === "discord" ? "twitch" : "discord";
+}
+
+export const feature = defineFeature({
+  apiVersion: frameworkApiVersion,
+  id: "${identity.featureId}",
+  description: "Publishes every accepted ${identity.commandName} command.",
+  eventStreams: [
+    defineDurableEventStream({
+      id: "updates",
+      version: 1,
+      label: "${identity.commandName} events",
+      description: "Commands delivered to an authorized consumer.",
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable" },
+      access: { kind: "operator_grant" },
+      payload: {
+        schema: {
+          type: "object",
+          properties: {
+            data: { type: "string", minLength: 1, maxLength: 400 },
+            origin: { type: "string", minLength: 6, maxLength: 7 }
+          },
+          required: ["data", "origin"]
+        }
+      }
+    })
+  ],
+  actions: [
+    defineAction({
+      kind: ${identity.constantName},
+      capability: access.moderators,
+      supportedOrigins: ["discord", "twitch"],
+      input: schema.object({
+        data: schema.string({ minLength: 1, maxLength: 400, trim: true })
+      }),
+      uses: { services: ["eventStreams"] },
+      cooldown: { scope: "group", seconds: 1 },
+      async execute(ctx, { data }) {
+        const stream = await ctx.eventStreams.current(
+          otherPlatform(ctx.origin.group.platform),
+          "updates"
+        );
+        await stream.publish({ data, origin: ctx.origin.group.platform });
+        return { output: { message: "Event queued." }, effects: [] };
+      }
+    })
+  ],
+  commands: {
+    discord: [
+      discordActionCommand({
+        name: "${identity.commandName}",
+        description: "Publish an event.",
+        usage: "/${identity.commandName} data:hello",
+        availability: "guild",
+        actionKind: ${identity.constantName},
+        options: [
+          discordOption({
+            arg: "data",
+            name: "data",
+            description: "Data for the event consumer.",
+            type: "string",
+            required: true,
+            minLength: 1
+          })
+        ],
+        render: discordTextResult
+      })
+    ],
+    twitch: [
+      twitchActionCommand({
+        name: "${identity.commandName}",
+        description: "Publish an event.",
+        usage: "!${identity.commandName} hello",
+        actionKind: ${identity.constantName},
+        parse: twitchRestText({ arg: "data", minLength: 1, maxLength: 400 }),
+        render: twitchTextResult
+      })
+    ]
+  }
+});
+
+export default feature;
+`;
+}
+
 function minimalTestTemplate(identity, testingSource, featureSource) {
   return `import { describe, it } from "vitest";
 import feature from "${featureSource}";
@@ -578,6 +688,48 @@ ${readableCounterTest(identity, { shareable: true })}
 `;
 }
 
+function eventStreamTestTemplate(identity, testingSource, featureSource) {
+  return `import { describe, expect, it } from "vitest";
+import feature from "${featureSource}";
+${frameworkImport([
+    "discordTestActor",
+    "discordTestGroup",
+    "discordTestModerator",
+    "runDurableEventFeatureContract"
+  ], testingSource)}
+
+describe("${identity.featureId}", () => {
+  it("satisfies the durable-event feature contract", async () => {
+    const result = await runDurableEventFeatureContract({
+      feature,
+      stream: "${identity.featureId}:updates:v1",
+      group: discordTestGroup(),
+      payload: { data: "contract-event", origin: "discord" },
+      alternatePayload: { data: "changed-event", origin: "discord" },
+      invalidPayload: { data: "", origin: "discord" },
+      authorizedActor: discordTestModerator(),
+      unauthorizedActor: discordTestActor(),
+      publish: ({ runtime, group, actor }) => runtime.discord.command(
+        "${identity.commandName}",
+        { group, actor, args: { data: "contract-event" } }
+      )
+    });
+
+    expect(result).toMatchObject({ replayed: true, retainedCapacity: 1_000 });
+    expect(feature.eventStreams).toMatchObject([{
+      id: "updates",
+      version: 1,
+      platforms: ["discord", "twitch"],
+      scope: { kind: "effective_shareable" },
+      access: { kind: "operator_grant" }
+    }]);
+    expect(feature.commands.discord).toHaveLength(1);
+    expect(feature.commands.twitch).toHaveLength(1);
+  }, 15_000);
+});
+`;
+}
+
 function templateSources(identity, template, {
   frameworkSource,
   testingSource,
@@ -593,6 +745,12 @@ function templateSources(identity, template, {
     return {
       featureSource: sharedFeatureTemplate(identity, frameworkSource),
       testSource: sharedTestTemplate(identity, testingSource, featureSource)
+    };
+  }
+  if (template === "event-stream") {
+    return {
+      featureSource: eventStreamFeatureTemplate(identity, frameworkSource),
+      testSource: eventStreamTestTemplate(identity, testingSource, featureSource)
     };
   }
   const shareable = template === "shareable-counter";

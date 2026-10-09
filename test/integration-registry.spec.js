@@ -351,12 +351,14 @@ describe("Cross-platform integration linking", () => {
       stateDiscovery: {
         version: 1,
         requiresResolution: false,
-        namespaces: [{
-          featureId: "fun.deaths",
-          namespaceId: "game_deaths",
-          outcome: "both_empty",
-          automaticSelection: "reset"
-        }]
+        namespaces: expect.arrayContaining([
+          expect.objectContaining({
+            featureId: "fun.deaths",
+            namespaceId: "game_deaths",
+            outcome: "both_empty",
+            automaticSelection: "reset"
+          })
+        ])
       }
     });
     const activated = await activatePendingIntegration(integrationEnv, {
@@ -977,11 +979,13 @@ describe("Cross-platform integration linking", () => {
     });
     expect(firstVerification.pendingIntegration.stateDiscovery).toMatchObject({
       requiresResolution: true,
-      namespaces: [{
-        featureId: "fun.deaths",
-        namespaceId: "game_deaths",
-        outcome: "collision"
-      }]
+      namespaces: expect.arrayContaining([
+        expect.objectContaining({
+          featureId: "fun.deaths",
+          namespaceId: "game_deaths",
+          outcome: "collision"
+        })
+      ])
     });
     await resolvePendingIntegrationState(integrationEnv, {
       reservationId: first.reservation.reservationId,
@@ -1029,11 +1033,13 @@ describe("Cross-platform integration linking", () => {
     });
     expect(secondVerification.pendingIntegration.stateDiscovery).toMatchObject({
       requiresResolution: true,
-      namespaces: [{
-        featureId: "fun.deaths",
-        namespaceId: "game_deaths",
-        outcome: "collision"
-      }]
+      namespaces: expect.arrayContaining([
+        expect.objectContaining({
+          featureId: "fun.deaths",
+          namespaceId: "game_deaths",
+          outcome: "collision"
+        })
+      ])
     });
     await resolvePendingIntegrationState(integrationEnv, {
       reservationId: second.reservation.reservationId,

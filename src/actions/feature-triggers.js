@@ -10,7 +10,7 @@ import { createFeatureServiceRuntime } from "../framework/service-runtime.js";
 function routedRuntime(featureRegistry, env, invocation, triggerKind, extra = {}) {
   return {
     ...extra,
-    ...createFeatureServiceRuntime(env, invocation),
+    ...createFeatureServiceRuntime(env, invocation, featureRegistry),
     env,
     triggerKind,
     routeDefinitions: featureRegistry.routes,

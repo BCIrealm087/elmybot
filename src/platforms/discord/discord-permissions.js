@@ -32,6 +32,7 @@ export const CAPABILITIES = Object.freeze({
   INTEGRATION_ANNOUNCEMENT_PUBLISH: "integration.announcement.publish",
   INTEGRATION_MANAGE: "integration.manage",
   STATE_QUERY_MANAGE: "state-query.manage",
+  EVENT_STREAM_MANAGE: "event-stream.manage",
   SCHEDULE_CREATE: "schedule.create",
   SCHEDULE_VIEW: "schedule.view",
   SCHEDULE_CANCEL: "schedule.cancel"
@@ -60,6 +61,10 @@ const CAPABILITY_POLICIES = Object.freeze({
     PERMS.GUILD_MANAGERS
   ]),
   [CAPABILITIES.STATE_QUERY_MANAGE]: Object.freeze([
+    PERMS.OWNER,
+    PERMS.GUILD_MANAGERS
+  ]),
+  [CAPABILITIES.EVENT_STREAM_MANAGE]: Object.freeze([
     PERMS.OWNER,
     PERMS.GUILD_MANAGERS
   ]),

@@ -18,11 +18,12 @@
 		"lint": "eslint . && node scripts/check-feature-api-boundary.js && node scripts/check-workspace-features.js && node scripts/generate-feature-docs.js --check",
 		"start": "wrangler dev",
 		"test": "vitest",
-		"test:browser": "node scripts/smoke-state-query-browser.js"
+		"test:browser": "node scripts/smoke-state-query-browser.js && node scripts/smoke-durable-event-browser.js"
 	},
 	"dependencies": {
 		"@elmybot/feature-alive": "1.0.0",
 		"@elmybot/feature-fun-deaths": "0.1.0",
+		"@elmybot/feature-widget-data": "0.1.0",
 		"@elmybot/framework": "1.0.0"
 	},
 	"devDependencies": {

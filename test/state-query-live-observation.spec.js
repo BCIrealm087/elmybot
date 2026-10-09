@@ -530,6 +530,7 @@ describe("live state-query dependency coordination", () => {
     });
   });
 
+
   it("expires query leases and removes their orphaned source interest", async () => {
     const selectedTarget = target();
     await servicesFor(selectedTarget).state.set("fun.deaths", "last_game", "Hades");

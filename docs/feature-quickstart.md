@@ -26,6 +26,12 @@ already know that you need a common combination, select one explicitly:
 | Shared command | `npm run feature:new -- fun-hype --workspace --template shared-command` | One action bound to Discord and Twitch | The same result through Discord and raw Twitch text; add platform-specific cases only when behavior differs |
 | Local counter | `npm run feature:new -- fun-score --workspace --template local-counter` | Independent per-group scores with public reads and moderator updates | Allowed and denied updates, unchanged state after denial, counter floor, and isolation between two groups |
 | Shareable counter | `npm run feature:new -- fun-score --workspace --template shareable-counter` | Standalone scores that share through selected links, with public reads and moderator updates | Standalone isolation, two origins sharing one selected integration, protected-update safety, and counter floor |
+| Event stream | `npm run feature:new -- fun-alert --workspace --template event-stream` | Discord and Twitch commands with bounded every-trigger delivery | Payload, authorization, identity, capacity, replay, leakage, both command bindings, and the event-only dependency boundary |
+
+The `event-stream` recipe is fully executable without deployment. Its generated
+test invokes the command against an authorized in-memory consumer and inherits
+the framework's reusable payload, identity, authorization, capacity, replay,
+and envelope-leakage contract. Current-state recipes remain fully executable.
 
 Choose `local-counter` when each Discord server or Twitch channel owns its
 score. Choose `shareable-counter` when each group should work before linking
@@ -57,14 +63,32 @@ Recipes are starting points, not runtime modes or restrictions.
 
 If your selected recipe is close to what you want, keep editing it and skip
 this table. If the command needs a combination not covered by a recipe, answer
-these three questions before choosing a pattern:
+these questions before choosing a pattern:
 
-1. **Does each community own its own data?** Use group-local state.
-2. **Should the command work before linking and share one value through the
+1. **Does a consumer need the complete value that is true now?** Declare
+   readable state; intermediate changes may coalesce.
+2. **Must a consumer handle every accepted command?** Declare a durable event
+   stream; delivery is bounded and at least once.
+3. **Does each community own its own data?** Use group-local state.
+4. **Should the command work before linking and share one value through the
    selected integration after linking?** Use resolved shareable state.
-3. **Does the command only need to send something to another group?** Keep its
+5. **Does the command only need to send something to another group?** Keep its
    state local and use a route; cross-platform delivery does not require shared
    storage.
+
+Counters, configuration, and current labels normally use readable state.
+Alerts, animations, and commands that must each run normally use durable
+events. If one feature intentionally needs both, declare each surface and use
+separate actions: one state action and one event-publishing action, with tests
+for both. Registry validation rejects an event action that also mutates state,
+routes a message, or emits another effect, preventing ambiguous dual
+publication.
+
+Durable events are a bounded at-least-once browser delivery mechanism. They are
+not a general background-job runner, a permanent audit log, or an exactly-once
+effects system. A consumer may receive the same event again after applying its
+effect but before acknowledging it; use the framework-owned `eventId` for
+application-specific deduplication when repetition is unsafe.
 
 Then open only the relevant reference:
 
@@ -80,6 +104,7 @@ Then open only the relevant reference:
 | Reading the one selected linked group without sending yet | [Default-link resolver](feature-authoring.md#read-the-selected-linked-group) |
 | Running later or repeatedly | [Scheduled-action cookbook](feature-authoring.md#cookbook-4-scheduled-action) |
 | Reacting to a Twitch or Discord event | [Event-action cookbook](feature-authoring.md#cookbook-5-event-driven-action) |
+| Delivering every accepted command to a browser consumer | [Durable-event authoring and test runtime](feature-authoring.md#the-feature-test-kit) |
 
 Two complete features are useful as nearby examples:
 
@@ -144,6 +169,7 @@ framework suite:
 | Local preferences or state | Isolation between the groups that must remember independently |
 | Shareable state | Standalone isolation and two origins selecting the same integration |
 | Readable state | `runtime.query.snapshot()` or `runtime.query.watch()`, then an ordinary mutation that changes the result |
+| Durable event stream | Keep `runDurableEventFeatureContract()` plus any feature-specific command behavior; use `runtime.eventStreams` for focused lifecycle cases |
 | Custom routes or platform options | The relevant missing-route or platform-specific behavior |
 
 The counter recipes use the test kit's `runCapabilityCases()` to exercise
@@ -184,6 +210,15 @@ not run OAuth, collision resolution, revocation, or migration. A
 resulting effect inspectable; it does not prove platform delivery. If framework
 work introduces a lifecycle fixture, that fixture must exercise the real
 lifecycle operations rather than relabel in-memory state.
+
+For a focused event test, `runtime.eventStreams.connect({ group, stream })`
+creates the already-authorized consumer represented by a production grant.
+Invoke the command, await `consumer.receive()`, and call
+`consumer.acknowledge(event)` only after the asserted effect succeeds. The test
+runtime also provides direct `publish()`, `restart()`, `expire()`, and
+`handoff()` helpers for transport-specific cases. These deterministic helpers
+model the contract; they do not issue credentials, open a real WebSocket, or
+run Cloudflare infrastructure.
 
 Run the fast feature check while iterating:
 
