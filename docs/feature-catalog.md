@@ -14,6 +14,7 @@ Framework API: v1.
 | `core.alive` | `@elmybot/feature-alive` | A shared responsiveness check. | 1 | 0 | 1 | 1 |
 | `fun.deaths` | `@elmybot/feature-fun-deaths` | Tracks per-game deaths locally or across linked Discord and Twitch groups. | 1 | 0 | 1 | 1 |
 | `widget.data` | `@elmybot/feature-widget-data` | Publishes every accepted widget command to a durable event consumer. | 1 | 1 | 1 | 1 |
+| `fun.health` | `@elmybot/feature-fun-health` | Sends damage and healing events to a health-bar widget. | 1 | 1 | 1 | 1 |
 | `fun.counter` | repository-local | A shared, per-platform-group counter demonstrating durable feature state. | 1 | 0 | 1 | 1 |
 | `integrations.announcements` | repository-local | Publishes immediate announcements across linked platforms. | 1 | 0 | 1 | 1 |
 | `discord.role-access` | repository-local | Manages Discord roles trusted by protected bot commands. | 0 | 0 | 1 | 0 |
@@ -42,6 +43,7 @@ Durable streams are bounded at-least-once delivery for alerts, animations, and c
 
 | Feature | Stream | Version | Platforms | Scope | Access eligibility | Payload root | Delivery |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| fun.health | `impacts` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes |
 | widget.data | `updates` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes |
 
 ## Workspace packages
@@ -50,6 +52,7 @@ Durable streams are bounded at-least-once delivery for alerts, animations, and c
 | --- | --- | --- |
 | `@elmybot/feature-alive` | `core.alive` | yes |
 | `@elmybot/feature-fun-deaths` | `fun.deaths` | yes |
+| `@elmybot/feature-fun-health` | `fun.health` | yes |
 | `@elmybot/feature-widget-data` | `widget.data` | yes |
 
 ## Commands
@@ -59,6 +62,7 @@ Durable streams are bounded at-least-once delivery for alerts, animations, and c
 | core.alive | `/alive` | action | public | Replies if alive. | — |
 | fun.deaths | `/deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `/deaths operation:check game:Dark Souls` |
 | widget.data | `/widget_data` | action | framework.moderators | Publish a durable widget event. | `/widget_data data:hello` |
+| fun.health | `/health` | action | framework.moderators | Send damage or healing to the health-bar widget. | `/health operation:damage amount:15` |
 | fun.counter | `/counter` | action | public | Increment this server's feature counter. | — |
 | integrations.announcements | `/integration_announce_twitch` | action | integration.announcement.publish | Publish an announcement to linked Twitch channels. | `/integration_announce_twitch message:Hello everyone!` |
 | discord.role-access | `/config_allow_role` | native | config.manage | Enables a role to use scheduling commands. | `/config_allow_role role:@Moderators` |
@@ -66,6 +70,7 @@ Durable streams are bounded at-least-once delivery for alerts, animations, and c
 | core.alive | `!alive` | action | public | Replies if alive. | — |
 | fun.deaths | `!deaths` | action | public; framework.moderators when `operation` is present and is not `check` | Check or update a game's local or shared death count. | `!deaths check "Dark Souls"` |
 | widget.data | `!widgetdata` | action | framework.moderators | Publish a durable widget event. | `!widgetdata hello` |
+| fun.health | `!health` | action | framework.moderators | Send damage or healing to the health-bar widget. | `!health damage 15` |
 | fun.counter | `!counter` | action | public | Increment this channel's feature counter. | — |
 | integrations.announcements | `!announce` | action | integration.announcement.publish | Publishes an announcement to linked Discord channels. | `!announce Hello everyone!` |
 
@@ -76,6 +81,7 @@ Durable streams are bounded at-least-once delivery for alerts, animations, and c
 | core.alive | `core.health.check.v1` | discord, twitch | public | — | — |
 | fun.deaths | `fun.deaths.manage.v1` | discord, twitch | public; framework.moderators when `operation` is present and is not `check` | authorization, shareableState, state | — |
 | widget.data | `widget.data.emit.v2` | discord, twitch | framework.moderators | eventStreams | group, 1s |
+| fun.health | `fun.health.impact.v1` | discord, twitch | framework.moderators | eventStreams | group, 1s |
 | fun.counter | `fun.counter.increment.v1` | discord, twitch | public | config, state | actor, 5s |
 | integrations.announcements | `integration.announcement.publish.v1` | discord, twitch | integration.announcement.publish | — | — |
 | twitch.stream-online | `twitch.stream-online.publish.v1` | twitch | public | — | — |
