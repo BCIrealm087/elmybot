@@ -1,8 +1,9 @@
 # Atomic state changes with durable events: contract
 
-Status: normative implementation contract. Step 2 implements declaration,
-validation and pure preview support; persistent acceptance/delivery remain
-pending in steps 3–12. This document alone does not implement runtime support.
+Status: normative implementation contract. Steps 2–4 implement declarations,
+preview, private recovery and group-local atomic storage. Production combined
+commands remain blocked; shared acceptance and delivery follow in steps 5–12.
+This document alone does not enable runtime support.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `9c3ebf82aae63f5d0ce27ee63a9a3de1fae9f170`.

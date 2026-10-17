@@ -1,3 +1,6 @@
+import { commitLocalStateEvent } from "./state-events/local-commit.js";
+import { maintainStateEventOutbox, stateEventOutboxExists } from "./state-events/outbox.js";
+import { recoverStorageAlarm } from "./storage-alarm.js";
 import { StateEventRecoveryError } from "./state-events/identity.js";
 import { handleLocalStateEventOwnerRequest } from "./state-events/owner-handler.js";
 import { jsonResponse, logError } from "./common.js";
@@ -210,9 +213,10 @@ export class GroupConfig {
    * Durable Object per group responsible for storing and retrieving group
    * configuration such as role-based command allowlists.
    */
-  constructor(state, env) {
+  constructor(state, env, featureRegistry = null) {
     this.state = state;
     this.env = env;
+    this.featureRegistry = featureRegistry;
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
     initializeStateQueryGrantTables(state);
@@ -221,8 +225,9 @@ export class GroupConfig {
     if (hasNotificationTables) {
       initializeLocalStateNotificationTables(state);
     }
-    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state)) {
+    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state) || stateEventOutboxExists(state)) {
       state.blockConcurrencyWhile(async () => {
+        await recoverStorageAlarm(state);
         await recoverStateQueryGrantInvalidations(state);
         if (hasNotificationTables) {
           await recoverStateQueryNotificationDelivery(state);
@@ -314,7 +319,8 @@ export class GroupConfig {
 
     try {
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
-      const stateEventOwnerResult = await handleLocalStateEventOwnerRequest(this.state, this.env, request, url.pathname);
+      const stateEventOwnerResult = await handleLocalStateEventOwnerRequest(this.state, this.env, request, url.pathname,
+        (input) => commitLocalStateEvent(this.state, this.env, this.featureRegistry, input));
       if (stateEventOwnerResult !== null) return jsonResponse(stateEventOwnerResult);
       const featureStorageResult = await handleFeatureStorageRequest(
         this.state,
@@ -386,6 +392,7 @@ export class GroupConfig {
   }
 
   async alarm() {
+    await maintainStateEventOutbox(this.state);
     await drainStateQueryGrantInvalidations(this.state, this.env);
     if (stateQueryNotificationTablesExist(this.state)) {
       await drainStateQueryNotifications(this.state, this.env);

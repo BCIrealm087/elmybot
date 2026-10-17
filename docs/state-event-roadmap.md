@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–3 are complete; implementation steps 4–12 are pending.
+Status: steps 1–4 are complete; implementation steps 5–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -171,6 +171,15 @@ overwriting their scheduled work. Recover additive schemas idempotently.
 **Completion evidence:** real storage tests for rollback, bounds, concurrency,
 clamping/no-op policy, existing watcher behavior, and restart immediately after
 commit. No state write may survive without its receipt and event intent.
+
+Completed 2026-10-17: the private `GroupConfig` adapter commits supported state
+mutations, readable revisions/notifications, operation watermarks, receipts and
+bounded event intents atomically. An outer storage transaction includes durable
+alarm scheduling; all local notification schedulers share the alarm decision.
+Real storage tests cover rollback (including an alarm failure), bounds, no-ops,
+concurrency, watcher delivery and immediate eviction/recovery. See
+[`state-event-local-storage.md`](state-event-local-storage.md). Production
+combined commands remain blocked; shared acceptance and deferred delivery follow.
 
 ### 5. Extend the commit to shareable state and lifecycle transitions
 

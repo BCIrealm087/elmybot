@@ -567,76 +567,78 @@ function boundedCounterSubjects(state, input) {
 async function boundedCounterState(state, input) {
   const descriptor = requireBoundedCounterInput(input);
   const key = await boundedCounterKey(descriptor.name, descriptor.subject);
-  return state.storage.transactionSync(() => {
-    const existing = valueRow(
-      state.storage.sql,
-      "state",
-      descriptor.featureId,
-      key
-    );
-    const current = existing
-      ? JSON.parse(existing.value_json)
-      : descriptor.initial;
-    if (
-      !Number.isSafeInteger(current) ||
-      current < descriptor.min ||
-      current > descriptor.max
-    ) {
-      throw new FeatureStorageUserFacingError(
-        "The selected state value is not a valid bounded counter.",
-        409
-      );
-    }
-    if (descriptor.operation === "get") return { value: current };
+  return state.storage.transactionSync(() => applyBoundedCounterState(state, descriptor, key));
+}
 
-    let value = descriptor.operation === "set"
-      ? descriptor.value
-      : descriptor.initial;
-    if (!["reset", "set"].includes(descriptor.operation)) {
-      const direction = descriptor.operation === "increment" ? 1n : -1n;
-      const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
-      value = Number(
-        candidate < BigInt(descriptor.min)
-          ? BigInt(descriptor.min)
-          : candidate > BigInt(descriptor.max)
-            ? BigInt(descriptor.max)
-            : candidate
-      );
-    }
-    if (!existing && value === descriptor.initial) return { value };
-    const valueJson = JSON.stringify(value);
-    if (existing?.value_json === valueJson) {
-      if (recordCounterSubject(state.storage.sql, descriptor, key)) {
-        touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
-      }
-      return { value };
-    }
-    if (!existing && namespaceAtCapacity(
-      state.storage.sql,
-      "state",
-      descriptor.featureId
-    )) {
-      throw new FeatureStorageUserFacingError(
-        `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} state values.`,
-        409
-      );
-    }
-    state.storage.sql.exec(
-      `INSERT INTO framework_feature_values
-        (value_kind, feature_id, value_key, value_json, updated_at_ms)
-       VALUES ('state', ?, ?, ?, ?)
-       ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
-         value_json = excluded.value_json,
-         updated_at_ms = excluded.updated_at_ms`,
-      descriptor.featureId,
-      key,
-      valueJson,
-      Date.now()
+function applyBoundedCounterState(state, descriptor, key) {
+  const existing = valueRow(
+    state.storage.sql,
+    "state",
+    descriptor.featureId,
+    key
+  );
+  const current = existing
+    ? JSON.parse(existing.value_json)
+    : descriptor.initial;
+  if (
+    !Number.isSafeInteger(current) ||
+    current < descriptor.min ||
+    current > descriptor.max
+  ) {
+    throw new FeatureStorageUserFacingError(
+      "The selected state value is not a valid bounded counter.",
+      409
     );
-    recordCounterSubject(state.storage.sql, descriptor, key);
-    touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+  }
+  if (descriptor.operation === "get") return { value: current };
+
+  let value = descriptor.operation === "set"
+    ? descriptor.value
+    : descriptor.initial;
+  if (!["reset", "set"].includes(descriptor.operation)) {
+    const direction = descriptor.operation === "increment" ? 1n : -1n;
+    const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
+    value = Number(
+      candidate < BigInt(descriptor.min)
+        ? BigInt(descriptor.min)
+        : candidate > BigInt(descriptor.max)
+          ? BigInt(descriptor.max)
+          : candidate
+    );
+  }
+  if (!existing && value === descriptor.initial) return { value };
+  const valueJson = JSON.stringify(value);
+  if (existing?.value_json === valueJson) {
+    if (recordCounterSubject(state.storage.sql, descriptor, key)) {
+      touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+    }
     return { value };
-  });
+  }
+  if (!existing && namespaceAtCapacity(
+    state.storage.sql,
+    "state",
+    descriptor.featureId
+  )) {
+    throw new FeatureStorageUserFacingError(
+      `A feature may store at most ${MAX_VALUES_PER_NAMESPACE} state values.`,
+      409
+    );
+  }
+  state.storage.sql.exec(
+    `INSERT INTO framework_feature_values
+      (value_kind, feature_id, value_key, value_json, updated_at_ms)
+     VALUES ('state', ?, ?, ?, ?)
+     ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET
+       value_json = excluded.value_json,
+       updated_at_ms = excluded.updated_at_ms`,
+    descriptor.featureId,
+    key,
+    valueJson,
+    Date.now()
+  );
+  recordCounterSubject(state.storage.sql, descriptor, key);
+  touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+  return { value };
 }
 
 function pruneExpiredCooldowns(sql, nowMs) {
@@ -763,3 +765,39 @@ export const FEATURE_STORAGE_LIMITS = Object.freeze({
   maxValuesPerNamespace: MAX_VALUES_PER_NAMESPACE,
   maxIncrementAmount: MAX_INCREMENT_AMOUNT
 });
+
+// Internal combined-operation adapter. Hashing is preparation; all reads/writes
+// below run within the owner's receipt/outbox transaction.
+export async function prepareLocalStateEventMutation(featureId, mutation) {
+  requireFeatureId(featureId);
+  if (mutation.kind === "bounded_counter") {
+    const descriptor = requireBoundedCounterInput({ ...mutation, featureId });
+    return { descriptor: { ...descriptor, kind: "bounded_counter" }, key: await boundedCounterKey(descriptor.name, descriptor.subject) };
+  }
+  return { descriptor: { ...mutation, featureId }, key: requireKey(mutation.key) };
+}
+export function readLocalStateEventMutation(state, plan) {
+  const { descriptor, key } = plan;
+  if (descriptor.kind === "bounded_counter") counterSubjectMetadata(state.storage.sql, descriptor, key);
+  const row = valueRow(state.storage.sql, "state", descriptor.featureId, key);
+  return row ? JSON.parse(row.value_json) : undefined;
+}
+export function applyLocalStateEventMutation(state, plan) {
+  const { descriptor, key } = plan;
+  const prior = featureStateRevision(state.storage.sql, descriptor).mutationVersion;
+  if (!Number.isSafeInteger(prior) || prior >= Number.MAX_SAFE_INTEGER) {
+    throw new FeatureStorageUserFacingError("The state revision is exhausted.", 409);
+  }
+  switch (descriptor.kind) {
+    case "set": setValue(state, "state", descriptor); break;
+    case "delete": deleteValue(state, "state", descriptor); break;
+    case "increment": incrementState(state, descriptor); break;
+    case "bounded_counter": applyBoundedCounterState(state, descriptor, key); break;
+    default: throw new FeatureStorageUserFacingError("Unsupported combined mutation.");
+  }
+  // A combined no-op still changes the observable operation watermark.
+  if (featureStateRevision(state.storage.sql, descriptor).mutationVersion === prior) {
+    touchFeatureStateRevision(state.storage.sql, descriptor.featureId);
+  }
+  return featureStateRevision(state.storage.sql, descriptor).mutationVersion;
+}

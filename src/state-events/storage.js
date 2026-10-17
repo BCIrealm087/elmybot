@@ -167,7 +167,8 @@ export async function commitStateEventAtOwner(state, { attempt, request, physica
     if (!/^dev1\.[\w-]{43}$/.test(applied?.eventId ?? "")) throw recoveryError("invalid_result", 422);
     canonicalJson(applied.result, LIMITS.maxResultBytes);
     const receipt = { operationId: attempt.identity.operationId, eventId: applied.eventId,
-      committedAtMs: nowMs, result: applied.result };
+      committedAtMs: applied.committedAtMs ?? nowMs, result: applied.result,
+      ...(applied.stateEvent ? { stateEvent: applied.stateEvent, expiresAtMs: applied.expiresAtMs } : {}) };
     write(state, ownerKey(attempt), { identity: attempt.identity, preparedFingerprint: attempt.preparedFingerprint,
       fencedThrough: 0, receipt, pendingDelivery: true, originConfirmed: false }, null);
     return { state: "committed", receipt };

@@ -244,6 +244,10 @@ export function prepareStateEventOperation(definition, input, config = {}) {
 // sequence, atomicity or successful production acceptance is simulated here.
 export function previewStateEventOperation(definition, stream, input, { before, config = {} } = {}) {
   const request = prepareStateEventOperation(definition, input, config);
+  return json({ preview: true, accepted: false, ...calculatePreparedStateEvent(request, stream, before) }, "operation preview");
+}
+
+export function calculatePreparedStateEvent(request, stream, before) {
   const m = request.mutation;
   const present = before !== undefined;
   const previous = present ? sized(before, "previous value") : null;
@@ -271,5 +275,27 @@ export function previewStateEventOperation(definition, stream, input, { before, 
     key, Object.hasOwn(selector, "result") ? result[selector.result] : selector.literal
   ]));
   const payload = JSON.parse(serializeDurableEventPayload(projected, stream.payload.schema).serialized);
-  return json({ preview: true, accepted: false, request, result, payload }, "operation preview");
+  return json({ request, result, payload }, "operation calculation");
+}
+
+// Revalidate a saved request against the installed declaration without consulting
+// live configuration. Repeated selectors of one config key must agree.
+export function validatePreparedStateEventOperation(definition, request) {
+  const saved = sized(request, "prepared state event request");
+  const config = Object.create(null);
+  for (const [entries, values, projected] of [
+    [definition.mutation, saved.mutation, false], [definition.event, saved.event, true]
+  ]) {
+    for (const [key, selector] of Object.entries(entries)) {
+      if (!selector || typeof selector !== "object" || !Object.hasOwn(selector, "config")) continue;
+      const value = projected ? values?.[key]?.literal : values?.[key];
+      if (Object.hasOwn(config, selector.config) && JSON.stringify(config[selector.config]) !== JSON.stringify(value)) {
+        fail("prepared configuration", "contains inconsistent selected values.");
+      }
+      config[selector.config] = value;
+    }
+  }
+  const expected = prepareStateEventOperation(definition, saved.input, config);
+  if (JSON.stringify(sized(expected, "request")) !== JSON.stringify(saved)) fail("prepared request", "does not match its declaration.");
+  return expected;
 }

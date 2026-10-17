@@ -1,3 +1,4 @@
+import { recoverStorageAlarm } from "../storage-alarm.js";
 import { logError } from "../common.js";
 import { stateQueryErrorForLog } from "./operations.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
@@ -336,44 +337,7 @@ function sourceRevision(sql, source) {
 
 async function scheduleNextAlarm(state, { immediate = false, nowMs = Date.now() } = {}) {
   pruneExpired(state.storage.sql, nowMs);
-  let nextAlarm = immediate ? nowMs + RETRY_BASE_MS : null;
-  if (!immediate) {
-    let due = state.storage.sql.exec(
-      `SELECT MIN(next_at) AS next_at FROM (
-         SELECT MIN(next_attempt_at_ms) AS next_at
-         FROM state_query_notification_outbox
-         UNION ALL
-         SELECT MIN(lease_expires_at_ms) AS next_at
-         FROM state_query_source_watchers
-       ) WHERE next_at IS NOT NULL`
-    ).toArray()[0]?.next_at;
-    const grantOutboxExists = Boolean(state.storage.sql.exec(
-      `SELECT 1 AS found FROM sqlite_master
-       WHERE type = 'table' AND name = 'state_query_grant_invalidation_outbox'`
-    ).toArray()[0]);
-    if (grantOutboxExists) {
-      const grantDue = state.storage.sql.exec(
-        `SELECT MIN(next_attempt_at_ms) AS next_at
-         FROM state_query_grant_invalidation_outbox`
-      ).toArray()[0]?.next_at;
-      if (grantDue !== null && grantDue !== undefined) {
-        due = due === null || due === undefined
-          ? grantDue
-          : Math.min(Number(due), Number(grantDue));
-      }
-    }
-    nextAlarm = due === null || due === undefined
-      ? null
-      : Math.max(nowMs, Number(due));
-  }
-  const current = await state.storage.getAlarm();
-  if (nextAlarm === null) {
-    if (current !== null) await state.storage.deleteAlarm();
-    return;
-  }
-  if (current === null || current > nextAlarm) {
-    await state.storage.setAlarm(nextAlarm);
-  }
+  await recoverStorageAlarm(state, { candidate: immediate ? nowMs + RETRY_BASE_MS : null, nowMs });
 }
 
 export async function recoverStateQueryNotificationDelivery(state) {

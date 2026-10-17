@@ -2,7 +2,8 @@
 
 Status: declaration, validation and pure preview support implemented in roadmap
 step 2. Step 3 adds the private [identity/recovery protocol](state-event-recovery.md).
-Persistent command acceptance and delivery are not implemented yet.
+Step 4 adds [private local atomic storage](state-event-local-storage.md).
+Production command acceptance and delivery remain blocked.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework
