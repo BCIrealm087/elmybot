@@ -1,3 +1,7 @@
+import { commitShareableStateEvent, STATE_EVENT_AUTHORITY_HEADER, STATE_EVENT_AUTHORITY_VALUE } from "../state-events/shareable-commit.js";
+import { maintainStateEventOutbox, stateEventOutboxExists } from "../state-events/outbox.js";
+import { recoverStorageAlarm } from "../storage-alarm.js";
+import { DurableEventError } from "../durable-events/contract.js";
 import { recoveryError, StateEventRecoveryError } from "../state-events/identity.js";
 import { confirmStateEventOwner, fenceStateEventOwner, lookupStateEventOwner } from "../state-events/storage.js";
 import { jsonResponse, logError } from "../common.js";
@@ -31,6 +35,7 @@ const SNAPSHOT_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const TRANSITION_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,300}$/;
 const MAX_TRANSITION_SEAL_LEASE_MS = 2 * 60 * 1000;
 const REALM_OPERATIONS = new Set([
+  "state-event-commit",
   "state-event-confirm",
   "state-event-lookup",
   "state-event-fence",
@@ -1543,87 +1548,88 @@ function boundedCounterSubjects(state, namespace, input) {
 async function boundedCounterValue(state, namespace, input) {
   const descriptor = requireCounterInput(input);
   const key = await boundedCounterKey(descriptor.name, descriptor.subject);
-  return state.storage.transactionSync(() => {
-    if (descriptor.operation !== "get") {
-      requireNamespaceWritable(state.storage.sql, namespace);
+  return state.storage.transactionSync(() => applyBoundedCounterValue(state, namespace, descriptor, key));
+}
+function applyBoundedCounterValue(state, namespace, descriptor, key) {
+  if (descriptor.operation !== "get") {
+    requireNamespaceWritable(state.storage.sql, namespace);
+  }
+  const existing = valueRow(state.storage.sql, namespace, key);
+  const current = existing ? JSON.parse(existing.value_json) : descriptor.initial;
+  if (
+    !Number.isSafeInteger(current) ||
+    current < descriptor.min ||
+    current > descriptor.max
+  ) {
+    fail("The selected shareable-state value is not a valid bounded counter.", {
+      status: 409,
+      code: "shareable_state_counter_invalid"
+    });
+  }
+  if (descriptor.operation === "get") return { value: current };
+  if (descriptor.operation === "reset") {
+    if (existing) {
+      const nowMs = Date.now();
+      state.storage.sql.exec(
+        `DELETE FROM shareable_state_realm_values
+         WHERE feature_id = ? AND namespace_id = ? AND value_key = ?`,
+        namespace.featureId,
+        namespace.namespaceId,
+        key
+      );
+      deleteCounterSubject(state.storage.sql, namespace, descriptor, key);
+      touchNamespace(state.storage.sql, namespace, nowMs);
     }
-    const existing = valueRow(state.storage.sql, namespace, key);
-    const current = existing ? JSON.parse(existing.value_json) : descriptor.initial;
-    if (
-      !Number.isSafeInteger(current) ||
-      current < descriptor.min ||
-      current > descriptor.max
-    ) {
-      fail("The selected shareable-state value is not a valid bounded counter.", {
-        status: 409,
-        code: "shareable_state_counter_invalid"
-      });
-    }
-    if (descriptor.operation === "get") return { value: current };
-    if (descriptor.operation === "reset") {
-      if (existing) {
-        const nowMs = Date.now();
-        state.storage.sql.exec(
-          `DELETE FROM shareable_state_realm_values
-           WHERE feature_id = ? AND namespace_id = ? AND value_key = ?`,
-          namespace.featureId,
-          namespace.namespaceId,
-          key
-        );
-        deleteCounterSubject(state.storage.sql, namespace, descriptor, key);
-        touchNamespace(state.storage.sql, namespace, nowMs);
-      }
-      return { value: descriptor.initial };
-    }
+    return { value: descriptor.initial };
+  }
 
-    let value = descriptor.operation === "set" ? descriptor.value : current;
-    if (new Set(["increment", "decrement"]).has(descriptor.operation)) {
-      const direction = descriptor.operation === "increment" ? 1n : -1n;
-      const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
-      value = Number(
-        candidate < BigInt(descriptor.min)
-          ? BigInt(descriptor.min)
-          : candidate > BigInt(descriptor.max)
-            ? BigInt(descriptor.max)
-            : candidate
-      );
-    }
-    if (!existing && value === descriptor.initial) return { value };
-    const valueJson = serializeValue(
-      value,
-      namespace.declaration.limits.maxValueBytes
+  let value = descriptor.operation === "set" ? descriptor.value : current;
+  if (new Set(["increment", "decrement"]).has(descriptor.operation)) {
+    const direction = descriptor.operation === "increment" ? 1n : -1n;
+    const candidate = BigInt(current) + direction * BigInt(descriptor.amount);
+    value = Number(
+      candidate < BigInt(descriptor.min)
+        ? BigInt(descriptor.min)
+        : candidate > BigInt(descriptor.max)
+          ? BigInt(descriptor.max)
+          : candidate
     );
-    if (existing?.value_json === valueJson) {
-      if (recordCounterSubject(state.storage.sql, namespace, descriptor, key)) {
-        touchNamespace(state.storage.sql, namespace, Date.now());
-      }
-      return { value };
+  }
+  if (!existing && value === descriptor.initial) return { value };
+  const valueJson = serializeValue(
+    value,
+    namespace.declaration.limits.maxValueBytes
+  );
+  if (existing?.value_json === valueJson) {
+    if (recordCounterSubject(state.storage.sql, namespace, descriptor, key)) {
+      touchNamespace(state.storage.sql, namespace, Date.now());
     }
-    if (!existing && namespaceAtCapacity(state.storage.sql, namespace)) {
-      fail(
-        `This shareable namespace may store at most ` +
-        `${namespace.declaration.limits.maxEntries} values.`,
-        { status: 409, code: "shareable_state_namespace_full" }
-      );
-    }
-    const nowMs = Date.now();
-    state.storage.sql.exec(
-      `INSERT INTO shareable_state_realm_values
-        (feature_id, namespace_id, value_key, value_json, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(feature_id, namespace_id, value_key) DO UPDATE SET
-         value_json = excluded.value_json,
-         updated_at_ms = excluded.updated_at_ms`,
-      namespace.featureId,
-      namespace.namespaceId,
-      key,
-      valueJson,
-      nowMs
-    );
-    recordCounterSubject(state.storage.sql, namespace, descriptor, key);
-    touchNamespace(state.storage.sql, namespace, nowMs);
     return { value };
-  });
+  }
+  if (!existing && namespaceAtCapacity(state.storage.sql, namespace)) {
+    fail(
+      `This shareable namespace may store at most ` +
+      `${namespace.declaration.limits.maxEntries} values.`,
+      { status: 409, code: "shareable_state_namespace_full" }
+    );
+  }
+  const nowMs = Date.now();
+  state.storage.sql.exec(
+    `INSERT INTO shareable_state_realm_values
+      (feature_id, namespace_id, value_key, value_json, updated_at_ms)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(feature_id, namespace_id, value_key) DO UPDATE SET
+       value_json = excluded.value_json,
+       updated_at_ms = excluded.updated_at_ms`,
+    namespace.featureId,
+    namespace.namespaceId,
+    key,
+    valueJson,
+    nowMs
+  );
+  recordCounterSubject(state.storage.sql, namespace, descriptor, key);
+  touchNamespace(state.storage.sql, namespace, nowMs);
+  return { value };
 }
 
 async function runOperation(state, namespace, operation, input) {
@@ -1682,6 +1688,7 @@ export class ShareableStateRealmBackend {
     this.featureRegistry = featureRegistry;
     this.legacyAdoptions = new Map();
     initializeShareableStateRealmTables(state);
+    if (stateEventOutboxExists(state)) state.blockConcurrencyWhile(() => recoverStorageAlarm(state));
     if (stateQueryNotificationTablesExist(state)) {
       initializeShareableStateNotificationTables(state);
       state.blockConcurrencyWhile(async () => {
@@ -1733,6 +1740,7 @@ export class ShareableStateRealmBackend {
         fail("Request body must be valid JSON.", { cause });
       }
       const identity = normalizeRealmIdentity(input?.realm);
+      if (operation.startsWith("state-event-") && this.env.SHAREABLE_STATE_REALM.idFromName(realmSourceKey(identity)).toString() !== this.state.id.toString()) throw recoveryError("wrong_owner", 422);
       bindRealmIdentity(this.state, identity);
       if (operation === "inventory") {
         return noStoreJson(await namespaceInventory(
@@ -1751,19 +1759,62 @@ export class ShareableStateRealmBackend {
           })
         ));
       }
-      const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
       if (["state-event-lookup", "state-event-fence", "state-event-confirm"].includes(operation)) {
+        const recoveryNamespace = { featureId: requireFeatureId(input?.namespace?.featureId), namespaceId: requireNamespaceId(input?.namespace?.namespaceId) };
         const attempt = input?.storage?.attempt;
         if (attempt?.route?.kind !== "effective_shareable" ||
-            attempt?.identity?.featureId !== namespace.featureId ||
-            attempt?.route?.namespace?.featureId !== namespace.featureId ||
-            attempt?.route?.namespace?.namespaceId !== namespace.namespaceId) throw recoveryError("wrong_owner", 422);
+            attempt?.identity?.featureId !== recoveryNamespace.featureId ||
+            attempt?.route?.namespace?.featureId !== recoveryNamespace.featureId ||
+            attempt?.route?.namespace?.namespaceId !== recoveryNamespace.namespaceId) throw recoveryError("wrong_owner", 422);
         // Receipt/fence bookkeeping is legal on frozen/sealed namespaces. It
         // must not initialize, migrate, clone or mutate feature state.
         if (operation === "state-event-confirm") return noStoreJson(confirmStateEventOwner(this.state, attempt, realmSourceKey(identity)));
         return noStoreJson(operation === "state-event-lookup"
           ? lookupStateEventOwner(this.state, attempt, realmSourceKey(identity))
           : fenceStateEventOwner(this.state, attempt, realmSourceKey(identity)));
+      }
+      const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
+      if (operation === "state-event-commit") {
+        if (request.headers.get(STATE_EVENT_AUTHORITY_HEADER) !== STATE_EVENT_AUTHORITY_VALUE) throw recoveryError("authority_required", 403);
+        const attempt = input?.storage?.attempt;
+        if (attempt?.identity?.featureId !== namespace.featureId ||
+            attempt?.route?.namespace?.featureId !== namespace.featureId ||
+            attempt?.route?.namespace?.namespaceId !== namespace.namespaceId) throw recoveryError("wrong_owner", 422);
+        return noStoreJson(await commitShareableStateEvent(this.state, this.env, this.featureRegistry, input.storage, {
+          ownerKey: realmSourceKey(identity), namespace,
+          prepare: async (mutation) => {
+            if (mutation.kind === "bounded_counter") {
+              const descriptor = requireCounterInput(mutation);
+              return { mutation, descriptor, key: await boundedCounterKey(descriptor.name, descriptor.subject) };
+            }
+            return { mutation, key: requireKey(mutation.key) };
+          },
+          ensureWritable: () => {
+            requireNamespaceWritable(this.state.storage.sql, namespace);
+            if (identity.kind === "integration" && namespace.declaration.adoptLegacyIntegrationState === true &&
+                !legacyAdoptionCompleted(this.state.storage.sql, namespace)) throw recoveryError("legacy_adoption_required", 409);
+            const row = this.state.storage.sql.exec("SELECT mutation_version, schema_version FROM shareable_state_realm_namespaces WHERE feature_id = ? AND namespace_id = ?",
+              namespace.featureId, namespace.namespaceId).toArray()[0];
+            const needed = row && row.schema_version !== namespace.declaration.schemaVersion ? 2 : 1;
+            if (!Number.isSafeInteger(Number(row?.mutation_version ?? 0)) || Number(row?.mutation_version ?? 0) > Number.MAX_SAFE_INTEGER - needed) throw recoveryError("revision_exhausted", 409);
+            ensureNamespace(this.state, namespace);
+          },
+          read: (plan) => {
+            if (plan.descriptor) counterSubjectMetadata(this.state.storage.sql, namespace, plan.descriptor, plan.key);
+            const row = valueRow(this.state.storage.sql, namespace, plan.key);
+            return row ? JSON.parse(row.value_json) : undefined;
+          },
+          apply: (plan) => {
+            const before = namespaceRevision(this.state, namespace).mutationVersion;
+            if (plan.descriptor) applyBoundedCounterValue(this.state, namespace, plan.descriptor, plan.key);
+            else if (plan.mutation.kind === "set") setValue(this.state, namespace, plan.mutation);
+            else if (plan.mutation.kind === "delete") removeValue(this.state, namespace, plan.mutation);
+            else if (plan.mutation.kind === "increment") incrementValue(this.state, namespace, plan.mutation);
+            else throw recoveryError("invalid_request", 422);
+            if (namespaceRevision(this.state, namespace).mutationVersion === before) touchNamespace(this.state.storage.sql, namespace, Date.now());
+            return namespaceRevision(this.state, namespace).mutationVersion;
+          }
+        }));
       }
       const expectedSource = { kind: "shareable", key: realmSourceKey(identity) };
       const prepareNotification = async () => await prepareStateQueryMutation(
@@ -1830,6 +1881,7 @@ export class ShareableStateRealmBackend {
       return noStoreJson(result);
     } catch (error) {
       if (
+        error instanceof DurableEventError ||
         error instanceof StateEventRecoveryError ||
         error instanceof ShareableStateRealmError ||
         error instanceof StateQueryNotificationError
@@ -1846,6 +1898,7 @@ export class ShareableStateRealmBackend {
   }
 
   async alarm() {
-    await drainStateQueryNotifications(this.state, this.env);
+    await maintainStateEventOutbox(this.state);
+    if (stateQueryNotificationTablesExist(this.state)) await drainStateQueryNotifications(this.state, this.env);
   }
 }

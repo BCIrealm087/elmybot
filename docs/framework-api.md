@@ -13,8 +13,8 @@ with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
 
 The [state-and-event contract](state-event-contract.md) now has additive
-declaration and pure preview support, plus private recovery and group-local atomic
-storage.
+declaration and pure preview support, plus private recovery and local/shareable
+atomic storage with lifecycle authority.
 Persistent combined command execution is
 still blocked with `state_event_not_implemented`; existing independent state/event
 service guards remain in force. See [state/event authoring](state-event-authoring.md)

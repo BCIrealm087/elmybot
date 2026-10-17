@@ -194,6 +194,10 @@ export function repinStateEventOrigin(state, attempt, route, nowMs = Date.now())
     const current = lookupStateEventOrigin(state, attempt.identity);
     if (!current || current.state === "committed" || !sameAttempt(current.attempt, attempt)) return current;
     assertFresh(attempt.identity, nowMs);
+    if (route.kind !== attempt.route.kind || route.targetPlatform !== attempt.route.targetPlatform ||
+        (route.kind === "effective_shareable" && canonicalJson(route.namespace) !== canonicalJson(attempt.route.namespace))) {
+      throw recoveryError("route_conflict");
+    }
     if (attempt.epoch >= LIMITS.maxAttempts) throw recoveryError("attempt_limit", 503);
     const { request, ...metadata } = current;
     write(state, originKey(attempt.identity), { ...metadata,

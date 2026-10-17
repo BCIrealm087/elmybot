@@ -2,7 +2,8 @@
 
 Roadmap step 4 implements the private `GroupConfig` storage adapter. Combined
 command execution remains blocked with `state_event_not_implemented`; no feature
-or existing stream is migrated. Shareable acceptance is step 5, deferred append
+or existing stream is migrated. [Shareable acceptance](state-event-shareable-storage.md)
+is implemented in step 5; deferred append
 and gap transport are step 6, relay is step 7, and operational enablement follows
 later. These internals are not stable feature API exports.
 

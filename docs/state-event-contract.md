@@ -1,8 +1,9 @@
 # Atomic state changes with durable events: contract
 
-Status: normative implementation contract. Steps 2–4 implement declarations,
-preview, private recovery and group-local atomic storage. Production combined
-commands remain blocked; shared acceptance and delivery follow in steps 5–12.
+Status: normative implementation contract. Steps 2–5 implement declarations,
+preview, private recovery and local/shareable atomic storage with lifecycle
+authority. Production combined commands remain blocked; delivery and integration
+follow in steps 6–12.
 This document alone does not enable runtime support.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
@@ -351,6 +352,8 @@ limits. Raising them or changing retention requires an explicit contract update.
 | Serialized event payload | 4 KiB. |
 | Saved result summary | 4 KiB; do not implicitly copy an entire state namespace. |
 | Origin pending preparations | 100 rows and 512 KiB per origin group. |
+| Registry uncertain owner calls | 100 rows and 512 KiB per registry; at most 8 KiB per locator, no event payload. |
+| Registry recovery work | At most 20 affected records and a 5-second deadline per handler; unresolved authority blocks the affected lifecycle mutation. |
 | Source pending events | 100 rows and 512 KiB per state owner. |
 | Receipt/route records | 100,000 rows and 16 MiB serialized application data per owning object; local origin/source records share the cap. |
 | Single serialized receipt/route record | 8 KiB; payload/request buffers are counted separately. |

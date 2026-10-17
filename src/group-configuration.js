@@ -1,3 +1,4 @@
+import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
 import { commitLocalStateEvent } from "./state-events/local-commit.js";
 import { maintainStateEventOutbox, stateEventOutboxExists } from "./state-events/outbox.js";
 import { recoverStorageAlarm } from "./storage-alarm.js";
@@ -319,6 +320,9 @@ export class GroupConfig {
 
     try {
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
+      if (request.method === "POST" && url.pathname === "/internal/state-events/origin/commit-shared") {
+        return jsonResponse(await commitPreparedSharedStateEvent(this.state, this.env, await request.json()));
+      }
       const stateEventOwnerResult = await handleLocalStateEventOwnerRequest(this.state, this.env, request, url.pathname,
         (input) => commitLocalStateEvent(this.state, this.env, this.featureRegistry, input));
       if (stateEventOwnerResult !== null) return jsonResponse(stateEventOwnerResult);

@@ -2,8 +2,9 @@
 
 Roadmap step 3 implements an internal persistence protocol. Production combined
 commands still return `state_event_not_implemented`. The group-local
-state/revision/outbox adapter and scheduling are now implemented in step 4; shared
-acceptance and lifecycle checks belong to step 5; relay and destination admission come later.
+state/revision/outbox adapter and scheduling are implemented in step 4;
+[shared acceptance and lifecycle checks](state-event-shareable-storage.md) are
+implemented in step 5. Relay and destination admission come later.
 None of the modules under `src/state-events/` are feature API exports.
 
 ## Identity and immutable input
@@ -57,13 +58,13 @@ the original attempt before changing the origin. There are at most eight pinned
 attempts per logical operation, including the initial attempt; reaching that
 limit does not fence the last still-valid attempt.
 
-`commitStateEventAtOwner` is a private transaction primitive for the forthcoming
-storage adapters. Its callback is trusted framework code using the same local
+`commitStateEventAtOwner` is a private transaction primitive for the local and
+shareable storage adapters. Its callback is trusted framework code using the same local
 SQLite transaction, never a contributor callback. Protocol tests use a SQL
 mutation witness; this does **not** implement the production state/outbox adapter
 or claim an event has been queued. Step 4 puts local mutation,
-revision, notification and outbox writes inside it; step 5 must do the same for
-shareable owners and revalidate lifecycle authority at acceptance. Invalid results, request conflicts and receipt capacity
+revision, notification and outbox writes inside it; step 5 does the same for
+shareable owners and revalidates lifecycle authority at acceptance. Invalid results, request conflicts and receipt capacity
 failures roll back the witness writes in the tests.
 
 The binding-only local owner endpoints expose `lookup`, `fence` and an origin
@@ -95,7 +96,8 @@ its bounded pruning are reused.
   an old source because the mutation deadline is checked independently.
 
 Step 3 introduces no alarms, polling or background requests; step 4 adds durable
-local outbox wakeups. Fresh preparation
+local and shared outbox wakeups. Step 5 adds bounded registry authority records
+without background polling; see the shared-storage reference. Fresh preparation
 uses an origin transaction; recovery contacts only the pinned owner. Successful
 origin caching sends one owner acknowledgement before its cached-confirmation
 flag is set; a lost acknowledgement is retried without another mutation. Repinning

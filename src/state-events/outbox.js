@@ -43,7 +43,7 @@ export function enqueueStateEventIntent(state, intent) {
     throw recoveryError("outbox_capacity", 503);
   }
   state.storage.sql.exec("INSERT INTO state_event_outbox VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)",
-    intent.operationId, intent.featureId, intent.stateEvent.operationSequence, intent.expiresAtMs,
+    intent.operationId, intent.partitionKey ?? intent.featureId, intent.stateEvent.operationSequence, intent.expiresAtMs,
     intent.committedAtMs + 1000, json, bytes);
   state.storage.sql.exec("UPDATE state_event_outbox_budget SET rows = rows + 1, bytes = bytes + ?", bytes);
 }

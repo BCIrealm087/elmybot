@@ -2,7 +2,8 @@
 
 Status: declaration, validation and pure preview support implemented in roadmap
 step 2. Step 3 adds the private [identity/recovery protocol](state-event-recovery.md).
-Step 4 adds [private local atomic storage](state-event-local-storage.md).
+Steps 4–5 add [private local atomic storage](state-event-local-storage.md) and
+[shared storage with lifecycle authority](state-event-shareable-storage.md).
 Production command acceptance and delivery remain blocked.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from

@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–4 are complete; implementation steps 5–12 are pending.
+Status: steps 1–5 are complete; implementation steps 6–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -197,6 +197,17 @@ a way that replays old operations or sends old events to a new audience.
 **Completion evidence:** standalone isolation, symmetric/asymmetric defaults,
 concurrent Discord/Twitch writes to one realm, link collision handling, sealing,
 revocation, fallback and relinking tests, including uncertain-commit recovery.
+
+Completed 2026-10-17: the private shared adapter atomically commits one namespace,
+its revision/notifications, original receipt and bounded event intent. Registry
+serialization and durable uncertain-call barriers protect binding authority;
+owner-local checks enforce seals/freezes inside the mutation transaction.
+Successor cloning excludes receipts, event payloads and operation watermarks.
+Real storage tests cover standalone/shared and directional defaults, concurrent
+platform calls, collisions, revocation/fallback/relinking, delayed RPCs, restart
+recovery and bounded rejection. See
+[`state-event-shareable-storage.md`](state-event-shareable-storage.md).
+Production combined commands remain blocked pending delivery and integration.
 
 ### 6. Add deferred event admission and explicit gap handling
 
