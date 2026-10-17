@@ -1,7 +1,8 @@
 # Atomic state changes with durable events: contract
 
-Status: step-1 design contract; normative implementation target for roadmap
-steps 2–12. Runtime support is not implemented by this document.
+Status: normative implementation contract. Step 2 implements declaration,
+validation and pure preview support; persistent acceptance/delivery remain
+pending in steps 3–12. This document alone does not implement runtime support.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `9c3ebf82aae63f5d0ce27ee63a9a3de1fae9f170`.
@@ -9,8 +10,10 @@ Baseline reviewed: `9c3ebf82aae63f5d0ce27ee63a9a3de1fae9f170`.
 This contract adds an explicit command operation that atomically commits
 authoritative feature state and its corresponding durable event intent. It
 does not relax the existing prohibition on independent state writes followed
-by `stream.publish()`. Public JavaScript helper names and declaration spellings
-are the work of step 2; the semantics and limits below constrain that API.
+by `stream.publish()`. Public helper names, declaration spellings, the finite
+projection vocabulary and reserved identity formats are specified in
+[the step-2 authoring reference](state-event-authoring.md); the semantics and
+limits below constrain that API. Production combined execution is still blocked.
 
 ## 1. Product guarantee and compatibility
 
@@ -76,7 +79,8 @@ frozen read-only configuration and the mutation's before/after/changed result.
 It cannot execute feature callbacks, perform I/O, read another state owner, or
 consult a fresh clock/random source inside the transaction. Dynamic computation
 that is not expressible by the reviewed projection/mutation forms is deferred.
-Step 2 must define a finite projection vocabulary and reject arbitrary code.
+The [step-2 authoring reference](state-event-authoring.md) defines the finite
+projection vocabulary; arbitrary code is rejected.
 
 The payload is constructed and schema-validated against the actual mutation
 result inside the commit boundary. An invalid or oversized resulting payload
@@ -134,7 +138,8 @@ Use the authenticated platform source identity already supplied by the adapters
 origin group, deployment environment, feature, action kind and operation format
 version. The logical operation identity excludes physical owner/generation and
 binding revision. Use a collision-resistant opaque digest, not a user-provided
-idempotency key. Step 2 fixes its versioned serialization and public prefix.
+idempotency key. Its versioned tuple and prefix are reserved in the
+[authoring reference](state-event-authoring.md); step 3 implements their use.
 
 Continue deriving the associated event's `dev1` identity through the existing
 feature/stream/version/origin/source algorithm. The dedicated combined stream
@@ -193,9 +198,10 @@ exhaustion rejects before mutation instead of wrapping.
 
 The readable snapshot and associated event expose compatible, versioned
 correlation metadata: scope token, committed operation sequence and state-query
-revision/watermark as needed for snapshot/watch consistency. Envelope field
-spellings are finalized in step 2; their meaning cannot depend on browser clock
-ordering. Ordinary event-stream sequence/cursor values remain separate.
+revision/watermark as needed for snapshot/watch consistency. Correlation field
+names are reserved in the authoring reference, with wire integration in step 8;
+their meaning cannot depend on browser clock ordering. Ordinary event-stream
+sequence/cursor values remain separate.
 
 A valid combined invocation at a counter floor/ceiling is accepted. It creates
 one receipt, watermark and event even when the requested change applies zero.
@@ -460,8 +466,9 @@ semantic versions. Existing migration tags remain append-only.
 
 Use stable, safe outcome categories for unavailable/disabled, input invalid,
 source conflict/expired, cooldown, source capacity, transition, outcome unknown,
-pending, delivered/acknowledged, retention gap and lifecycle gap. Step 2 chooses
-their concrete API/error identifiers. A transport timeout after mutation can
+pending, delivered/acknowledged, retention gap and lifecycle gap. The authoring
+reference lists the existing identifiers; later persistent handlers must map
+their remaining outcomes explicitly. A transport timeout after mutation can
 be ambiguous; never tell the user that state was unchanged without proof.
 
 Aggregate counters may include accepted/duplicate/rejected operations, pending

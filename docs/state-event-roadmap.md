@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: step 1 is complete; implementation steps 2–12 are pending.
+Status: steps 1–2 are complete; implementation steps 3–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -120,6 +120,14 @@ and delivery are ready, fail closed rather than simulate production support.
 
 **Completion evidence:** declaration, compatibility and misuse tests, plus a
 feature-level API example without exposing SQL or Durable Object bindings.
+
+Completed 2026-10-17: `defineStateEventOperation`, explicit stream publication
+source/mode, action allowlists, scoped context handles, registry/dependency
+validation and pure `stateEvents.preview()` contributor support are implemented.
+See [`state-event-authoring.md`](state-event-authoring.md) for the tested API,
+projection vocabulary and reserved identity/correlation formats. Persistent
+command execution, ordinary publication/append bypasses and consumer simulation
+for combined streams remain blocked; no installed feature was migrated.
 
 ### 3. Establish operation identity and pinned-owner recovery
 
@@ -353,6 +361,7 @@ measurements must demonstrate bounded cost without polling idle consumers.
 - [Shareable state lifecycle](shareable-state-lifecycle.md)
 - [Shareable state realms](shareable-state-realms.md)
 - [Framework API v1](framework-api.md)
+- [State/event authoring API and preview example](state-event-authoring.md)
 
 ## Progress
 
@@ -362,3 +371,6 @@ measurements must demonstrate bounded cost without polling idle consumers.
 - 2026-10-17: Step 1 completed in `state-event-contract.md`. The design contract
   fixes behavior and resource ceilings; no runtime API, stream migration or
   deployment was performed. Steps 2–12 remain pending.
+- 2026-10-17: Step 2 completed: additive authoring/validation and pure previews,
+  with fail-closed production execution and compatibility/misuse coverage.
+  Persistent operation identity and pinned-owner recovery are next in step 3.

@@ -5,6 +5,7 @@ import {
 } from "./api-version.js";
 import { isReadableStateExport } from "./readable-state.js";
 import { isDurableEventStream } from "./durable-event-stream.js";
+import { isStateEventOperation } from "./state-event-operation.js";
 
 const FEATURE_ID_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
@@ -30,6 +31,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "shareableState",
   "readableState",
   "eventStreams",
+  "stateEvents",
   "effectAdapters"
 ]);
 const SUPPORTED_PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -302,6 +304,19 @@ function eventStreams(value) {
   }));
 }
 
+function stateEvents(value) {
+  const path = "Feature definition.stateEvents";
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 20) fail(path, "must be an array of at most 20 operations.");
+  const ids = new Set();
+  return Object.freeze(value.map((entry, index) => {
+    if (!isStateEventOperation(entry)) fail(`${path}[${index}]`, "must use defineStateEventOperation().");
+    if (ids.has(entry.id)) fail(`${path}[${index}]`, "duplicates an operation ID.");
+    ids.add(entry.id);
+    return entry;
+  }));
+}
+
 export function defineFeature(input) {
   requirePlainObject(input, "Feature definition");
   for (const field of Object.keys(input)) {
@@ -349,6 +364,7 @@ export function defineFeature(input) {
     shareableState: shareableState(input.shareableState),
     readableState: readableState(input.readableState),
     eventStreams: eventStreams(input.eventStreams),
+    stateEvents: stateEvents(input.stateEvents),
     effectAdapters: platformCollections(
       input.effectAdapters,
       "Feature definition.effectAdapters"

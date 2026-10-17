@@ -23,6 +23,8 @@ import {
 } from "./trigger-definitions.js";
 import { publicReadableStateExport } from "./readable-state.js";
 import { publicDurableEventStream } from "./durable-event-stream.js";
+import { stateEventConfigKeys } from "./state-event-operation.js";
+import { serializeDurableEventPayload } from "../durable-events/contract.js";
 
 const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const PLATFORMS = Object.freeze(["discord", "twitch"]);
@@ -197,6 +199,7 @@ export function createFeatureRegistry(features, {
   const schedules = Object.create(null);
   const readableState = Object.create(null);
   const eventStreams = Object.create(null);
+  const stateEvents = Object.create(null);
   const adapters = collectEffectAdapters(effectAdapters);
   const services = collectAvailableServices(availableServices);
   const commands = Object.fromEntries(PLATFORMS.map((platform) => [
@@ -273,6 +276,17 @@ export function createFeatureRegistry(features, {
       );
     });
     feature.eventStreams.forEach((definition) => {
+      if (definition.publication?.source.kind === "effective_shareable" &&
+          !feature.shareableState.some(({ id }) => id === definition.publication.source.namespace)) {
+        throw new FeatureRegistryError("A combined stream must name a declared shareable namespace.", {
+          code: "feature_state_event_namespace_undeclared"
+        });
+      }
+      if (definition.publication && definition.payload.schema.type !== "object") {
+        throw new FeatureRegistryError("A combined stream requires an object payload schema.", {
+          code: "feature_state_event_payload_invalid"
+        });
+      }
       const identity = `${feature.id}:${definition.id}:v${definition.version}`;
       addUnique(
         eventStreams,
@@ -281,6 +295,37 @@ export function createFeatureRegistry(features, {
         "durable event stream",
         "duplicate_durable_event_stream"
       );
+    });
+    feature.stateEvents.forEach((definition) => {
+      const identity = `${feature.id}:${definition.stream.id}:v${definition.stream.version}`;
+      const streamDefinition = eventStreams[identity]?.definition;
+      if (!streamDefinition?.publication ||
+          JSON.stringify(streamDefinition.publication.source) !== JSON.stringify(definition.scope)) {
+        throw new FeatureRegistryError("A state/event operation must target a combined stream with the same owner scope.", {
+          code: "feature_state_event_stream_incompatible"
+        });
+      }
+      const projected = Object.keys(definition.event);
+      const payload = streamDefinition.payload.schema;
+      if (projected.some((name) => !Object.hasOwn(payload.properties, name)) ||
+          payload.required.some((name) => !Object.hasOwn(definition.event, name))) {
+        throw new FeatureRegistryError("A state/event projection must match its stream's declared payload fields.", {
+          code: "feature_state_event_projection_invalid"
+        });
+      }
+      for (const [name, selector] of Object.entries(definition.event)) {
+        if (!Object.hasOwn(selector, "literal")) continue;
+        try {
+          serializeDurableEventPayload(selector.literal, payload.properties[name]);
+        } catch {
+          throw new FeatureRegistryError("A literal event projection violates its payload schema.", {
+            code: "feature_state_event_projection_invalid"
+          });
+        }
+      }
+      addUnique(stateEvents, `${feature.id}:${definition.id}`, Object.freeze({
+        featureId: feature.id, definition, streamDefinition
+      }), "state/event operation", "duplicate_state_event_operation");
     });
     if (PLATFORMS.some((platform) => feature.effectAdapters[platform].length > 0)) {
       throw new FeatureRegistryError(
@@ -322,7 +367,12 @@ export function createFeatureRegistry(features, {
       );
     }
     if (action.uses.services.includes("eventStreams")) {
-      const declarations = featuresById[featureId].eventStreams;
+      const declarations = featuresById[featureId].eventStreams.filter((entry) => !entry.publication);
+      if (!declarations.length && featuresById[featureId].eventStreams.length) {
+        throw new FeatureRegistryError("Combined streams cannot use the independent eventStreams service.", {
+          code: "feature_action_event_stream_mode_invalid"
+        });
+      }
       if (declarations.length === 0) {
         throw new FeatureRegistryError(
           `Feature action \`${kind}\` requests durable event streams but feature ` +
@@ -362,6 +412,37 @@ export function createFeatureRegistry(features, {
         );
       }
     }
+    let stateEventOperations = null;
+    if (action.uses.services.includes("stateEvents")) {
+      if (action.uses.services.some((name) => !["stateEvents", "config", "authorization"].includes(name)) ||
+          action.uses.routes.length || action.uses.effects.length) {
+        throw new FeatureRegistryError("Combined actions permit only stateEvents and read-only config/authorization dependencies.", {
+          code: "feature_state_event_mixed_dependencies"
+        });
+      }
+      if (action.cooldown?.scope !== "group" || action.cooldown.seconds < 1) {
+        throw new FeatureRegistryError("Combined actions require a group cooldown of at least one second.", {
+          code: "feature_state_event_cooldown_required"
+        });
+      }
+      stateEventOperations = Object.freeze(Object.fromEntries(action.uses.stateEvents.map((id) => {
+        const entry = stateEvents[`${featureId}:${id}`];
+        if (!entry) throw new FeatureRegistryError("Combined actions must name operations declared by their own feature.", {
+          code: "feature_state_event_operation_undeclared"
+        });
+        if (action.supportedOrigins.some((platform) => !entry.streamDefinition.platforms.includes(platform))) {
+          throw new FeatureRegistryError("A combined operation's stream must support every action origin.", {
+            code: "feature_state_event_origin_unsupported"
+          });
+        }
+        if (stateEventConfigKeys(entry.definition).length && !action.uses.services.includes("config")) {
+          throw new FeatureRegistryError("Configuration projections require the config service declaration.", {
+            code: "feature_state_event_config_undeclared"
+          });
+        }
+        return [id, entry];
+      })));
+    }
     const routeTargetPlatforms = new Set();
     for (const usedRouteKind of action.uses.routes) {
       const route = routes[usedRouteKind];
@@ -398,7 +479,7 @@ export function createFeatureRegistry(features, {
         );
       }
     }
-    actions[kind] = bindFeatureActionDefinition(action, featureId);
+    actions[kind] = bindFeatureActionDefinition(action, featureId, stateEventOperations);
   }
 
   for (const event of Object.values(events)) {
@@ -409,6 +490,11 @@ export function createFeatureRegistry(features, {
         `\`${event.actionKind}\`.`,
         { code: "feature_event_action_unknown" }
       );
+    }
+    if (action.uses.services.includes("stateEvents")) {
+      throw new FeatureRegistryError("Combined state/event actions support commands only.", {
+        code: "feature_event_state_event_action_unsupported"
+      });
     }
     if (action.uses.services.includes("eventStreams")) {
       throw new FeatureRegistryError(
@@ -448,6 +534,11 @@ export function createFeatureRegistry(features, {
         `\`${schedule.actionKind}\`.`,
         { code: "feature_schedule_action_unknown" }
       );
+    }
+    if (action.uses.services.includes("stateEvents")) {
+      throw new FeatureRegistryError("Combined state/event actions cannot be scheduled.", {
+        code: "feature_schedule_state_event_action_unsupported"
+      });
     }
     if (action.uses.services.includes("eventStreams")) {
       throw new FeatureRegistryError(
@@ -551,6 +642,11 @@ export function createFeatureRegistry(features, {
     )
   );
   for (const action of Object.values(actions)) {
+    if (action.uses.services.includes("stateEvents") && !commandActionKinds.has(action.kind)) {
+      throw new FeatureRegistryError("Combined state/event actions must be invoked by a command.", {
+        code: "feature_state_event_command_required"
+      });
+    }
     if (
       action.uses.services.includes("eventStreams") &&
       !commandActionKinds.has(action.kind)
@@ -582,6 +678,7 @@ export function createFeatureRegistry(features, {
         left.version - right.version
       )),
     eventStreams: Object.freeze(eventStreams),
+    stateEvents: Object.freeze(stateEvents),
     eventCatalog: Object.freeze(Object.values(eventStreams)
       .map(({ featureId, definition }) =>
         publicDurableEventStream(definition, featureId)

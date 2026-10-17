@@ -252,6 +252,14 @@ export async function executeAction(registry, input, context = {}) {
   if (featureAction) {
     const denial = await enforceModePolicy(action, invocation, context, triggerKind);
     if (denial !== null) return denial;
+    // Authoring declarations and pure contributor previews precede persistent
+    // acceptance. Neither flags nor injected services may turn this into a
+    // successful production command before owner/outbox recovery is implemented.
+    if (action.uses.services.includes("stateEvents")) {
+      throw new ActionRegistryError("Combined state/event execution is not implemented yet.", {
+        status: 503, code: "state_event_not_implemented"
+      });
+    }
     await enforceFeatureCooldown(action, invocation, context);
   }
   const value = featureAction

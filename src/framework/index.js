@@ -12,6 +12,10 @@ export {
   DurableEventStreamDefinitionError
 } from "./durable-event-stream.js";
 export {
+  defineStateEventOperation,
+  StateEventOperationDefinitionError
+} from "./state-event-operation.js";
+export {
   FEATURE_FRAMEWORK_API_VERSION,
   frameworkApiVersion,
   supportedFrameworkApiVersions

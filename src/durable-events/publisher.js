@@ -43,11 +43,14 @@ function deploymentEnvironment(env) {
 }
 
 function declaration(registry, featureId, streamId) {
-  const matches = Object.values(registry?.eventStreams ?? {}).filter((entry) =>
+  const candidates = Object.values(registry?.eventStreams ?? {}).filter((entry) =>
     entry.featureId === featureId && entry.definition.id === streamId
   );
+  const matches = candidates.filter((entry) => !entry.definition.publication);
   if (matches.length !== 1) {
-    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 500 });
+    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, {
+      status: !matches.length && candidates.some((entry) => entry.definition.publication) ? 503 : 500
+    });
   }
   return matches[0].definition;
 }

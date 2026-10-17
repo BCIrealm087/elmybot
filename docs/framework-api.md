@@ -12,10 +12,11 @@ This policy covers the JavaScript API used by reviewed feature modules bundled
 with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
 
-The [state-and-event contract](state-event-contract.md) is a design target for
-an additive combined operation. Its helpers and declarations are not supported
-exports yet; existing state/event service guards and behavior remain in force.
-Implementation follows [the state-and-event roadmap](state-event-roadmap.md).
+The [state-and-event contract](state-event-contract.md) now has additive
+declaration and pure preview support. Persistent combined command execution is
+still blocked with `state_event_not_implemented`; existing independent state/event
+service guards remain in force. See [state/event authoring](state-event-authoring.md)
+and [the implementation roadmap](state-event-roadmap.md).
 
 ## Supported entry points
 
@@ -52,6 +53,8 @@ surface consists of:
   `ReadableStateDefinitionError`;
 - durable-event helpers: `defineDurableEventStream` and
   `DurableEventStreamDefinitionError`;
+- combined-operation declarations: `defineStateEventOperation` and
+  `StateEventOperationDefinitionError` (persistent execution pending);
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -110,7 +113,7 @@ consumer state. See the normative
 [`durable-event-contract.md`](durable-event-contract.md).
 
 Actions may explicitly request the controlled `authorization`, `config`,
-`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, and
+`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, `stateEvents`, and
 `random` context services.
 `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it

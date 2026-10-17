@@ -131,7 +131,13 @@ function requireInternal(request) {
 }
 
 function declaration(registry, featureId, streamId, version) {
-  return registry?.eventStreams?.[`${featureId}:${streamId}:v${version}`]?.definition ?? null;
+  const definition = registry?.eventStreams?.[`${featureId}:${streamId}:v${version}`]?.definition ?? null;
+  // Combined append, grants and socket admission require the later storage and
+  // delivery steps; the existing event-only paths must never accept this mode.
+  if (definition?.publication) {
+    throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 503 });
+  }
+  return definition;
 }
 
 async function validateAppendInput(input, registry) {

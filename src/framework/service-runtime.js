@@ -29,6 +29,7 @@ export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "shareableState",
   "state",
   "eventStreams",
+  "stateEvents",
   "random"
 ]);
 
@@ -472,6 +473,18 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
         }
       }),
       eventStreams: createDurableEventStreamRuntime(env, invocation, registry),
+      stateEvents: Object.freeze({
+        async local() {
+          throw new FeatureServiceRuntimeError("Combined state/event execution is not implemented yet.", {
+            code: "state_event_not_implemented", status: 503
+          });
+        },
+        async current() {
+          throw new FeatureServiceRuntimeError("Combined state/event execution is not implemented yet.", {
+            code: "state_event_not_implemented", status: 503
+          });
+        }
+      }),
       state: Object.freeze({
         async get(featureId, key) {
           const result = await storageRequest(

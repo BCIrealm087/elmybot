@@ -11,6 +11,11 @@ The normative API shapes remain in
 The supported entry point, compatibility rules, and deprecation lifecycle are
 defined in [`framework-api.md`](framework-api.md).
 
+For explicit state-plus-event declarations, see
+[`state-event-authoring.md`](state-event-authoring.md). Declaration validation
+and pure contributor previews are available; production combined commands remain
+blocked until persistent acceptance and recovery are implemented.
+
 The contributor framework is intentionally a build-time JavaScript API.
 Features are reviewed, tested, explicitly installed, and bundled with the
 Worker. They may live directly under `src/features/` or in a private npm

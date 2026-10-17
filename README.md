@@ -519,6 +519,7 @@ explicit catalog-regeneration action.
 - [Durable-event transport implementation roadmap](docs/durable-event-transport-roadmap.md)
 - [Atomic state changes with durable events roadmap](docs/state-event-roadmap.md)
 - [Atomic state changes with durable events contract (planned implementation)](docs/state-event-contract.md)
+- [State/event authoring declarations and previews (persistent execution pending)](docs/state-event-authoring.md)
 - [Widget-data consumer and contributor guide](docs/widget-data.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)

@@ -16,6 +16,7 @@ import { formatCommandInputError } from "./command-input-error.js";
 import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
+import { previewStateEventOperation } from "./state-event-operation.js";
 import { evaluateStateQuery } from "../state-querying/evaluator.js";
 import {
   DURABLE_EVENT_CODES,
@@ -828,12 +829,18 @@ function createMemoryEventStreams({
         { code: "feature_test_event_stream_not_found" }
       );
     }
+    if (stream.definition.publication) {
+      throw new FeatureTestRuntimeError("Combined delivery is not implemented; use stateEvents.preview for pure calculations.", {
+        code: "state_event_not_implemented"
+      });
+    }
     return stream;
   }
 
   function declarationFor(featureId, streamId) {
     const matches = Object.values(registry.eventStreams).filter((entry) =>
-      entry.featureId === featureId && entry.definition.id === streamId
+      entry.featureId === featureId && entry.definition.id === streamId &&
+      !entry.definition.publication
     );
     if (matches.length !== 1) {
       throw new FeatureTestRuntimeError(
@@ -1802,6 +1809,16 @@ export function createFeatureTestRuntime(featureOrFeatures, {
       restart: eventStreams.restart,
       expire: eventStreams.expire,
       handoff: eventStreams.handoff
+    }),
+    stateEvents: Object.freeze({
+      preview({ feature: featureId, operation, input, before, config } = {}) {
+        const selectedFeature = featureId ?? (features.length === 1 ? features[0].id : null);
+        const entry = registry.stateEvents[`${selectedFeature}:${operation}`];
+        if (!entry) throw new FeatureTestRuntimeError("Select a declared feature and state/event operation.", {
+          code: "feature_state_event_operation_undeclared"
+        });
+        return previewStateEventOperation(entry.definition, entry.streamDefinition, input, { before, config });
+      }
     }),
     query: Object.freeze({
       snapshot: querySnapshot,
