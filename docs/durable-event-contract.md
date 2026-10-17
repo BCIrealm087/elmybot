@@ -35,6 +35,12 @@ product surfaces. In version 1, one action must not combine `eventStreams` with
 must return no routed effects. The framework cannot atomically commit unrelated
 state, event, and effect owners, so implicit dual publication is rejected.
 
+The separately planned [state-and-event contract](state-event-contract.md)
+defines a future explicit combined mode with a transaction at the state owner.
+It is not implemented by that document and does not relax the current guards,
+change existing event-only admission, or reinterpret installed stream versions.
+See its [implementation roadmap](state-event-roadmap.md) for progress.
+
 ## Stable version-1 identities
 
 These identities are fixed:

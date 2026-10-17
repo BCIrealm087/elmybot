@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: planned; implementation steps 1–12 are pending.
+Status: step 1 is complete; implementation steps 2–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -93,6 +93,12 @@ for the entire supported platform retry and outbox-recovery window.
 **Completion evidence:** a complete behavior/outcome table, worked health
 examples, and documented lifecycle and resource bounds. This step is contract
 work, not a claim that implementation is complete.
+
+Completed 2026-10-17: [`state-event-contract.md`](state-event-contract.md)
+defines the atomic boundary, explicit combined mode, pinned retry recovery,
+30-minute end-to-end retention, finite owner budgets, lifecycle gaps, reset,
+correlation, and drain controls. Public API spellings and runtime work remain
+in steps 2–12.
 
 ### 2. Add the explicit authoring surface and validation
 
@@ -352,4 +358,7 @@ measurements must demonstrate bounded cost without polling idle consumers.
 
 - 2026-10-17: Roadmap created from the agreed transactional-outbox direction,
   bounded offline acceptance and hibernation/cost requirements. No implementation
-  step has started.
+  step had started at roadmap creation.
+- 2026-10-17: Step 1 completed in `state-event-contract.md`. The design contract
+  fixes behavior and resource ceilings; no runtime API, stream migration or
+  deployment was performed. Steps 2–12 remain pending.

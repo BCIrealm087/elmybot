@@ -12,6 +12,11 @@ This policy covers the JavaScript API used by reviewed feature modules bundled
 with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
 
+The [state-and-event contract](state-event-contract.md) is a design target for
+an additive combined operation. Its helpers and declarations are not supported
+exports yet; existing state/event service guards and behavior remain in force.
+Implementation follows [the state-and-event roadmap](state-event-roadmap.md).
+
 ## Supported entry points
 
 Production feature modules import only from:
