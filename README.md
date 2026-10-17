@@ -452,7 +452,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 ## Testing and CI
 
 GitHub Actions runs the complete suite for pushes to `master` and
-`codex-querying-experiment`, pull requests, and manual dispatches. CI:
+`codex-state-ironing`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
