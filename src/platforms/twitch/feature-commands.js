@@ -57,7 +57,7 @@ export function compileTwitchFeatureCommands(definitions, actions = {}) {
     compiled[definition.name] = Object.freeze({
       description: definition.description,
       actionKind: definition.actionKind,
-      exec: async (event, env, { messageId, argsText }) => {
+      exec: async (event, env, { messageId, argsText, messageTimestamp }) => {
         const capability = definition.mode === "action-command"
           ? actions[definition.actionKind]?.capability ?? null
           : definition.capability;
@@ -71,6 +71,7 @@ export function compileTwitchFeatureCommands(definitions, actions = {}) {
               parsed,
               {
                 env,
+                messageTimestamp,
                 authorize: ({ capability, invocation }) =>
                   twitchCapabilityAllowed(capability, invocation.origin.actor.claims)
               }

@@ -1,7 +1,8 @@
 # Authoring combined state and event operations
 
 Status: declaration, validation and pure preview support implemented in roadmap
-step 2. Persistent command acceptance and delivery are not implemented yet.
+step 2. Step 3 adds the private [identity/recovery protocol](state-event-recovery.md).
+Persistent command acceptance and delivery are not implemented yet.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework
@@ -201,8 +202,8 @@ will still allocate its operation watermark and event.
 
 ## Reserved persistence and correlation identities
 
-These wire/persistence identities are reserved here for later implementation;
-step 2 previews do not generate them:
+The operation identity is implemented privately in step 3. Scope tokens and wire
+correlation remain reserved for later implementation; previews generate neither:
 
 - Operation format version 1 uses the exact compact JSON tuple
   `["elmybot.state-event-operation.v1", environment, featureId, actionKind,
@@ -217,7 +218,8 @@ step 2 previews do not generate them:
   record with the snapshot/event wire surfaces and their compatibility checks;
   it is not emitted on existing event frames in step 2.
 - Event IDs keep the existing `dev1` tuple and algorithm. No raw origin/source
-  IDs are exposed through public correlation. Receipt/route recovery is step 3.
+  IDs are exposed through public correlation. Private receipt/route recovery is
+  implemented in step 3; production command acceptance is still blocked.
 
 The concrete currently implemented errors are
 `invalid_state_event_operation` for declaration/data problems,

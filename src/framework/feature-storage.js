@@ -653,7 +653,7 @@ function pruneExpiredCooldowns(sql, nowMs) {
   );
 }
 
-function claimCooldown(state, input) {
+export function claimFeatureCooldownInTransaction(state, input, nowMs = Date.now()) {
   const featureId = requireFeatureId(input?.featureId);
   const actionKind = requireActionKind(input?.actionKind);
   const scopeKey = requireScopeKey(input?.scopeKey);
@@ -663,47 +663,48 @@ function claimCooldown(state, input) {
       "Cooldown seconds must be an integer between 1 and 86400."
     );
   }
-  const nowMs = Date.now();
-  return state.storage.transactionSync(() => {
-    pruneExpiredCooldowns(state.storage.sql, nowMs);
-    const existing = state.storage.sql.exec(
-      `SELECT expires_at_ms FROM framework_feature_cooldowns
-       WHERE feature_id = ? AND action_kind = ? AND scope_key = ?`,
-      featureId,
-      actionKind,
-      scopeKey
+  pruneExpiredCooldowns(state.storage.sql, nowMs);
+  const existing = state.storage.sql.exec(
+    `SELECT expires_at_ms FROM framework_feature_cooldowns
+     WHERE feature_id = ? AND action_kind = ? AND scope_key = ?`,
+    featureId,
+    actionKind,
+    scopeKey
+  ).toArray()[0];
+  if (existing?.expires_at_ms > nowMs) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.max(1, Math.ceil((existing.expires_at_ms - nowMs) / 1000))
+    };
+  }
+  if (!existing) {
+    const total = state.storage.sql.exec(
+      "SELECT COUNT(*) AS total FROM framework_feature_cooldowns"
     ).toArray()[0];
-    if (existing?.expires_at_ms > nowMs) {
-      return {
-        allowed: false,
-        retryAfterSeconds: Math.max(1, Math.ceil((existing.expires_at_ms - nowMs) / 1000))
-      };
+    if (Number(total?.total ?? 0) >= MAX_COOLDOWN_ROWS) {
+      throw new FeatureStorageUserFacingError(
+        "This group's feature cooldown ledger is temporarily full.",
+        503
+      );
     }
-    if (!existing) {
-      const total = state.storage.sql.exec(
-        "SELECT COUNT(*) AS total FROM framework_feature_cooldowns"
-      ).toArray()[0];
-      if (Number(total?.total ?? 0) >= MAX_COOLDOWN_ROWS) {
-        throw new FeatureStorageUserFacingError(
-          "This group's feature cooldown ledger is temporarily full.",
-          503
-        );
-      }
-    }
-    const expiresAtMs = nowMs + seconds * 1000;
-    state.storage.sql.exec(
-      `INSERT INTO framework_feature_cooldowns
-        (feature_id, action_kind, scope_key, expires_at_ms)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(feature_id, action_kind, scope_key) DO UPDATE SET
-         expires_at_ms = excluded.expires_at_ms`,
-      featureId,
-      actionKind,
-      scopeKey,
-      expiresAtMs
-    );
-    return { allowed: true, retryAfterSeconds: 0 };
-  });
+  }
+  const expiresAtMs = nowMs + seconds * 1000;
+  state.storage.sql.exec(
+    `INSERT INTO framework_feature_cooldowns
+      (feature_id, action_kind, scope_key, expires_at_ms)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(feature_id, action_kind, scope_key) DO UPDATE SET
+       expires_at_ms = excluded.expires_at_ms`,
+    featureId,
+    actionKind,
+    scopeKey,
+    expiresAtMs
+  );
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function claimCooldown(state, input) {
+  return state.storage.transactionSync(() => claimFeatureCooldownInTransaction(state, input));
 }
 
 export async function handleFeatureStateStorageOperation(state, operation, input) {

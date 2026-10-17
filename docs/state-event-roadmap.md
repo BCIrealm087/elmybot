@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–2 are complete; implementation steps 3–12 are pending.
+Status: steps 1–3 are complete; implementation steps 4–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -147,6 +147,14 @@ uncommitted rejection may follow the contract's bounded re-resolution rules.
 
 **Completion evidence:** protocol tests covering duplicate input, changed input,
 response loss and default movement, with exactly one authoritative mutation.
+
+Completed 2026-10-17: deterministic operation/source identity, immutable platform
+source timing, lazy bounded origin/owner records, transactional cooldown
+preparation, original receipt recovery and durable fencing/CAS repinning are
+implemented. Real SQLite protocol tests cover concurrent duplicates, changed
+input, lost responses, movement, expiry and resource rejection. See
+[`state-event-recovery.md`](state-event-recovery.md). Combined production commands
+remain blocked; the real state/revision/outbox adapters are steps 4–5.
 
 ### 4. Implement the atomic commit for group-local state
 

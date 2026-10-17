@@ -173,8 +173,8 @@ export const twitchEventSubDefinitions = Object.freeze({
 		shouldEnqueueNotification({ payload }) {
 			return isRecognizedTwitchCommandNotification(payload);
 		},
-		handleNotification({ payload, env, messageId }) {
-			return processTwitchChatNotification(payload, env, messageId);
+		handleNotification({ payload, env, messageId, messageTimestamp }) {
+			return processTwitchChatNotification(payload, env, messageId, messageTimestamp);
 		},
 		handleRevocation: handleChatRevocation
 	}),

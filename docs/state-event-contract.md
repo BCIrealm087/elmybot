@@ -162,7 +162,10 @@ Repinning is allowed only after the previous owner proves that the request did
 not commit and fences the old attempt against later execution. Never infer
 non-commit from a timeout, missing response, or a route that is no longer
 current. If proof is unavailable, fail retryably until the acceptance deadline;
-do not mutate a second owner.
+do not mutate a second owner. A logical operation has at most eight pinned
+attempts, including its initial owner. Reaching this limit rejects further
+repinning without fencing its last still-valid attempt; receipt recovery remains
+available.
 
 The admission deadline is two hours after the authenticated source creation
 time. That time must come from verified platform data or a durable ingress
@@ -174,7 +177,10 @@ at commit, so delayed old requests cannot execute after expiry.
 Origin route/conflict records and state-owner receipts live until at least two
 hours after first preparation or commit, respectively. They cannot be pruned
 while pending delivery, an uncertain result, or a recovery lease still needs
-them. Payloads expire at their shorter event deadline. Minimal records that
+them. An owner receipt is not eligible for pruning until delivery is terminal
+and the origin has acknowledged a durable cache of the committed receipt. A lost
+acknowledgement preserves the receipt and can be retried independently of mutation.
+Payloads expire at their shorter event deadline. Minimal records that
 remain uncertain stay charged against bounded receipt capacity and block new
 admission if needed; they are not evicted to make a retry ambiguous. A deadline
 check plus an authoritative receipt read can prove a late attempt can no longer

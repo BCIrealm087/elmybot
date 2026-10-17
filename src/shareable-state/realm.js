@@ -1,3 +1,5 @@
+import { recoveryError, StateEventRecoveryError } from "../state-events/identity.js";
+import { confirmStateEventOwner, fenceStateEventOwner, lookupStateEventOwner } from "../state-events/storage.js";
 import { jsonResponse, logError } from "../common.js";
 import {
   createIntegrationRef,
@@ -29,6 +31,9 @@ const SNAPSHOT_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/;
 const TRANSITION_TOKEN_PATTERN = /^[A-Za-z0-9._:-]{1,300}$/;
 const MAX_TRANSITION_SEAL_LEASE_MS = 2 * 60 * 1000;
 const REALM_OPERATIONS = new Set([
+  "state-event-confirm",
+  "state-event-lookup",
+  "state-event-fence",
   "get",
   "query-read",
   "revision",
@@ -1747,6 +1752,19 @@ export class ShareableStateRealmBackend {
         ));
       }
       const namespace = namespaceDeclaration(this.featureRegistry, input?.namespace);
+      if (["state-event-lookup", "state-event-fence", "state-event-confirm"].includes(operation)) {
+        const attempt = input?.storage?.attempt;
+        if (attempt?.route?.kind !== "effective_shareable" ||
+            attempt?.identity?.featureId !== namespace.featureId ||
+            attempt?.route?.namespace?.featureId !== namespace.featureId ||
+            attempt?.route?.namespace?.namespaceId !== namespace.namespaceId) throw recoveryError("wrong_owner", 422);
+        // Receipt/fence bookkeeping is legal on frozen/sealed namespaces. It
+        // must not initialize, migrate, clone or mutate feature state.
+        if (operation === "state-event-confirm") return noStoreJson(confirmStateEventOwner(this.state, attempt, realmSourceKey(identity)));
+        return noStoreJson(operation === "state-event-lookup"
+          ? lookupStateEventOwner(this.state, attempt, realmSourceKey(identity))
+          : fenceStateEventOwner(this.state, attempt, realmSourceKey(identity)));
+      }
       const expectedSource = { kind: "shareable", key: realmSourceKey(identity) };
       const prepareNotification = async () => await prepareStateQueryMutation(
         this.state,
@@ -1812,6 +1830,7 @@ export class ShareableStateRealmBackend {
       return noStoreJson(result);
     } catch (error) {
       if (
+        error instanceof StateEventRecoveryError ||
         error instanceof ShareableStateRealmError ||
         error instanceof StateQueryNotificationError
       ) {

@@ -25,6 +25,12 @@ function discordOriginActor(interaction) {
 
 export function createDiscordActionInvocation(interaction, kind, args = {}) {
   const sourceEventId = `discord:interaction:${interaction.id}`;
+  // Discord snowflakes contain the signed interaction's immutable creation
+  // time. An HTTP retry/signature timestamp must not extend source admission.
+  const id = interaction.id;
+  const sourceCreatedAtMs = typeof id === "string" && /^[1-9]\d{0,19}$/.test(id) && BigInt(id) < (1n << 64n)
+    ? Number((BigInt(id) >> 22n) + 1420070400000n)
+    : undefined;
   return createCommandInvocation({
     kind,
     origin: {
@@ -33,6 +39,7 @@ export function createDiscordActionInvocation(interaction, kind, args = {}) {
     },
     args,
     sourceEventId,
+    sourceCreatedAtMs,
     correlationId: sourceEventId
   });
 }

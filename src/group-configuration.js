@@ -1,3 +1,5 @@
+import { StateEventRecoveryError } from "./state-events/identity.js";
+import { handleLocalStateEventOwnerRequest } from "./state-events/owner-handler.js";
 import { jsonResponse, logError } from "./common.js";
 import {
   FeatureStorageUserFacingError,
@@ -312,6 +314,8 @@ export class GroupConfig {
 
     try {
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
+      const stateEventOwnerResult = await handleLocalStateEventOwnerRequest(this.state, this.env, request, url.pathname);
+      if (stateEventOwnerResult !== null) return jsonResponse(stateEventOwnerResult);
       const featureStorageResult = await handleFeatureStorageRequest(
         this.state,
         request,
@@ -360,6 +364,7 @@ export class GroupConfig {
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
       if (
+        e instanceof StateEventRecoveryError ||
         e instanceof GroupConfigUserFacingError ||
         e instanceof FeatureStorageUserFacingError ||
         e instanceof StateQueryGrantStorageError ||
