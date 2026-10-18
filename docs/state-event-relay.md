@@ -1,7 +1,8 @@
 # Bounded state/event relay and producer wakeups
 
 Roadmap step 7 automatically reconciles accepted private local/shared intents.
-Production combined commands still fail with `state_event_not_implemented`.
+[Step 9](health-state-event-migration.md) adds command execution behind explicit
+new-acceptance switches, disabled in checked-in Wrangler environments.
 No feature, stream version or credential is migrated. [Browser correlation](state-event-browser.md)
 is implemented in step 8; measured cost/load evidence is step 11.
 

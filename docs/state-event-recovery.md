@@ -1,7 +1,7 @@
 # State/event operation recovery
 
 Roadmap step 3 implements an internal persistence protocol. Production combined
-commands still return `state_event_not_implemented`. The group-local
+commands are connected behind the [step-9 opt-in switches](health-state-event-migration.md). The group-local
 state/revision/outbox adapter and scheduling are implemented in step 4;
 [shared acceptance and lifecycle checks](state-event-shareable-storage.md) are
 implemented in step 5. [Destination admission and gap/reset handling](state-event-delivery.md)

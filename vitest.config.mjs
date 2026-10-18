@@ -7,6 +7,7 @@ export default defineConfig({
       miniflare: {
         bindings: {
           STATE_QUERY_STREAMS_ENABLED: "true",
+          STATE_EVENT_OPERATIONS_ENABLED: "true",
           TWITCH_CLIENT_ID: "client-id",
           TWITCH_CLIENT_SECRET: "test-client-secret",
           TWITCH_BOT_USER_ID: "bot-user-id",

@@ -1,127 +1,60 @@
 import { createDurableEventClient } from "/event-stream/client.js";
+import { createStateQueryClient } from "/state-query/client.js";
+import { watchStateEvents } from "/event-stream/state-event.js";
 
-const STREAM = "fun.health:impacts:v1";
-const MAX_HEALTH = 100;
-const MAX_RECENT_IDS = 1_000;
-
-const client = createDurableEventClient();
-const access = document.querySelector("#access");
-const grantInput = document.querySelector("#grant");
-const meter = document.querySelector("#meter");
-const fill = document.querySelector("#fill");
-const value = document.querySelector("#value");
-const status = document.querySelector("#status");
-
-let subscription;
-let storageKey;
-
-function readSaved() {
-  const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-  return {
-    health: Number.isInteger(saved.health) &&
-      saved.health >= 0 && saved.health <= MAX_HEALTH
-      ? saved.health
-      : MAX_HEALTH,
-    recentIds: Array.isArray(saved.recentIds)
-      ? saved.recentIds.filter((id) => typeof id === "string")
-        .slice(-MAX_RECENT_IDS)
-      : []
-  };
+const STREAM = "fun.health:impacts:v2";
+const events = createDurableEventClient(), state = createStateQueryClient();
+const access = document.querySelector("#access"), grantInput = document.querySelector("#grant"), readGrantInput = document.querySelector("#read-grant");
+const meter = document.querySelector("#meter"), fill = document.querySelector("#fill"), value = document.querySelector("#value"), status = document.querySelector("#status");
+let subscription, animation, initialized = false;
+function draw(cell) {
+  if (cell.state !== "present" || !Number.isInteger(cell.value) || cell.value < 0 || cell.value > 100) throw Error("Invalid authoritative health snapshot.");
+  initialized = true; meter.hidden = false; status.textContent = "Live";
+  fill.style.width = `${cell.value}%`; value.textContent = `${cell.value} / 100`;
+  meter.setAttribute("aria-valuenow", String(cell.value));
+  requestAnimationFrame(() => meter.classList.add("ready"));
 }
-
-function draw(health) {
-  fill.style.width = `${health}%`;
-  value.textContent = `${health} / ${MAX_HEALTH}`;
-  meter.setAttribute("aria-valuenow", String(health));
+async function impact(event) {
+  const payload = event.payload;
+  if (!payload || !["damage", "heal"].includes(payload.operation) || !Number.isInteger(payload.requestedAmount) || payload.requestedAmount < 1 || payload.requestedAmount > 100 ||
+      !Number.isInteger(payload.appliedAmount) || payload.appliedAmount < 0 || payload.appliedAmount > 100 ||
+      !Number.isInteger(payload.after) || payload.after < 0 || payload.after > 100 || typeof payload.changed !== "boolean") throw Error("Invalid v2 health impact.");
+  // Effects never recalculate the displayed value or copy an old absolute result
+  // over a newer snapshot. Await each effect before acknowledging its event.
+  const damage = payload.operation === "damage";
+  animation = meter.animate(damage ? [
+    { transform: "translateX(0)" }, { transform: "translateX(-7px)", boxShadow: "0 0 25px #ff4242" }, { transform: "translateX(5px)" }, { transform: "translateX(0)" }
+  ] : [{ boxShadow: "0 4px 15px #0009" }, { boxShadow: "0 0 28px #76ff9a" }, { boxShadow: "0 4px 15px #0009" }], { duration: damage ? 450 : 550, easing: "ease-out" });
+  try { await animation.finished; } catch { /* Teardown can cancel an animation. */ }
+  animation = null;
 }
-
-function impact(operation) {
-  meter.classList.remove("damage", "heal");
-  requestAnimationFrame(() => meter.classList.add(operation));
-}
-
-async function handleImpact(event) {
-  const { operation, amount } = event.payload ?? {};
-  if (
-    !["damage", "heal"].includes(operation) ||
-    !Number.isInteger(amount) ||
-    amount < 1 || amount > 100
-  ) {
-    throw new Error("Invalid health impact.");
-  }
-
-  const saved = readSaved();
-  if (saved.recentIds.includes(event.eventId)) {
-    draw(saved.health);
-    return; // Replay: acknowledge without applying damage twice.
-  }
-
-  const change = operation === "damage" ? -amount : amount;
-  const health = Math.max(0, Math.min(MAX_HEALTH, saved.health + change));
-  const next = {
-    health,
-    recentIds: [...saved.recentIds, event.eventId].slice(-MAX_RECENT_IDS)
-  };
-
-  // Save health and its event ID in one localStorage write before the
-  // handler finishes and the client acknowledges the event.
-  localStorage.setItem(storageKey, JSON.stringify(next));
-  draw(health);
-  impact(operation);
-}
-
 function onStatus(update) {
-  status.textContent = update.state === "live"
-    ? "Live"
+  status.textContent = update.state === "live" ? initialized ? "Live" : "Synchronizing health…"
     : `${update.state}${update.code ? `: ${update.code}` : ""}`;
   if (update.state === "ended") access.hidden = false;
 }
-
 async function connect() {
-  const catalog = await client.catalog();
-  const stream = catalog.streams?.[0];
-  const identity = stream &&
-    `${stream.feature}:${stream.stream}:v${stream.version}`;
-
-  if (identity !== STREAM) {
-    throw new Error(`This widget needs a grant for ${STREAM}.`);
-  }
-
-  const { platform, groupId } = catalog.target;
-  storageKey = `elmybot.health.v1:${platform}:${groupId}`;
-  draw(readSaved().health);
-  requestAnimationFrame(() => meter.classList.add("ready"));
-
-  subscription?.unsubscribe();
+  subscription?.unsubscribe(); subscription = null; initialized = false; meter.hidden = true; value.textContent = "— / 100";
+  const catalog = await events.catalog(), stream = catalog.streams?.[0];
+  const identity = stream && `${stream.feature}:${stream.stream}:v${stream.version}`;
+  if (identity === "fun.health:impacts:v1") throw Error("This is a legacy v1 event grant. Use the legacy backlog view below, or issue a v2 event grant and a current-health read grant.");
+  if (identity !== STREAM) throw Error(`This widget needs an event grant for ${STREAM}.`);
+  const readable = await state.catalog();
+  if (readable.target?.platform !== catalog.target.platform || readable.target?.groupId !== catalog.target.groupId) throw Error("The read and event grants must target the same group.");
+  const query = { version: 1, target: catalog.target, bindings: { current: { read: { feature: "fun.health", export: "current", version: 1 } } }, select: { health: { ref: "current" } } };
   access.hidden = true;
-  subscription = client.subscribe(handleImpact, { onStatus });
+  subscription = watchStateEvents({ stateClient: state, eventClient: events, query, selection: "health",
+    storageKey: `elmybot.health.impact-ids.v2:${catalog.target.platform}:${catalog.target.groupId}`,
+    onSnapshot: draw, onEvent: impact, onStatus });
 }
-
 access.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const credential = grantInput.value.trim();
-  grantInput.value = "";
-
+  const eventGrant = grantInput.value.trim(), readGrant = readGrantInput.value.trim(); grantInput.value = ""; readGrantInput.value = "";
   try {
-    subscription?.unsubscribe();
-    subscription = null;
-    await client.session(credential);
-    await connect();
-  } catch (error) {
-    status.textContent = error.message;
-    access.hidden = false;
-  }
+    subscription?.unsubscribe(); subscription = null;
+    await state.session(readGrant); await events.session(eventGrant); await connect();
+  } catch (error) { status.textContent = error.message; access.hidden = false; }
 });
-
-connect().catch((error) => {
-  status.textContent = error.message;
-  access.hidden = false;
-});
-
-window.addEventListener("pagehide", () => {
-  subscription?.unsubscribe();
-  void client.close();
-});
-window.addEventListener("pageshow", (event) => {
-  if (event.persisted) location.reload();
-});
+connect().catch((error) => { status.textContent = error.message; access.hidden = false; });
+window.addEventListener("pagehide", () => { subscription?.unsubscribe(); animation?.cancel(); void events.close(); void state.close(); });
+window.addEventListener("pageshow", (event) => { if (event.persisted) location.reload(); });

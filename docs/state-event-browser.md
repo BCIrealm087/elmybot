@@ -1,9 +1,8 @@
 # Readable snapshots and combined-event browser coordination
 
 Roadmap step 8 exposes private combined commits through ordinary readable-state
-exports and ships a browser coordinator. Production combined commands still fail
-with `state_event_not_implemented`. Health migration is step 9; this step changes
-no installed feature, stream version, grant or credential semantics.
+exports and ships a browser coordinator. [Step 9](health-state-event-migration.md) adds the opt-in health v2 command/widget
+migration. This step-8 layer preserves separate grant and credential semantics.
 
 ## Readable correlation
 

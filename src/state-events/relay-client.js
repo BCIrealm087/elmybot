@@ -7,7 +7,8 @@ export async function boundedStateEventRequest(call, deadline = Date.now() + 500
     return await Promise.race([(async () => {
       const response = await call(), result = await response.json();
       if (!response.ok) throw Object.assign(recoveryError("outcome_unknown", response.status >= 500 ? 503 : response.status), {
-        code: result.code ?? "state_event_outcome_unknown", retryAfterMs: result.retryAfterMs
+        code: result.code ?? "state_event_outcome_unknown", retryAfterMs: result.retryAfterMs,
+        retryAfterSeconds: result.retryAfterSeconds
       });
       return result;
     })(), new Promise((_, reject) => { timer = setTimeout(() => reject(recoveryError("outcome_unknown", 503)), deadline - Date.now()); })]);

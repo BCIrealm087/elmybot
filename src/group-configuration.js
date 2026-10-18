@@ -1,3 +1,4 @@
+import { handleStateEventCommand } from "./state-events/command-origin.js";
 import { drainStateEventRelay, handleStateEventDeliverySource, handleStateEventOriginRetirement } from "./state-events/delivery-source.js";
 import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
 import { commitLocalStateEvent } from "./state-events/local-commit.js";
@@ -320,6 +321,8 @@ export class GroupConfig {
     }
 
     try {
+      const command = await handleStateEventCommand(this.state, this.env, this.featureRegistry, request, url.pathname);
+      if (command !== null) return jsonResponse(command);
       const retirement = await handleStateEventOriginRetirement(this.state, this.env, request, url.pathname);
       if (retirement !== null) return jsonResponse(retirement);
       const delivery = await handleStateEventDeliverySource(this.state, this.env, request, new URL(request.url).pathname, "group_local");
@@ -386,7 +389,7 @@ export class GroupConfig {
         e instanceof StateQueryNotificationError ||
         isDurableEventPublicationError(e)
       ) {
-        return jsonResponse({ userFacingError: e.message, code: e.code }, e.status);
+        return jsonResponse({ userFacingError: e.message, code: e.code, ...(e.retryAfterSeconds ? { retryAfterSeconds: e.retryAfterSeconds } : {}) }, e.status);
       }
 
       const correlationId = request.headers.get("x-correlation-id") ?? crypto.randomUUID();

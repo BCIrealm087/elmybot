@@ -27,6 +27,7 @@ export async function commitLocalStateEvent(state, env, registry, input) {
   const prior = lookupStateEventOwner(state, attempt, attempt.route.key);
   if (prior.state === "committed") return prior;
   if (prior.state === "fenced") throw recoveryError("attempt_fenced");
+  if (env.STATE_EVENT_OPERATIONS_ENABLED !== "true" || env.DURABLE_EVENT_STREAMS_ENABLED !== "true") throw recoveryError("service_unavailable", 503);
   const entry = registry?.stateEvents?.[`${identity.featureId}:${request.operation}`];
   const action = registry?.actions?.[identity.actionKind];
   if (!entry || entry.definition.scope.kind !== "group_local" || action?.featureId !== identity.featureId ||

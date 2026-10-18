@@ -1,3 +1,4 @@
+import { isStateEventRuntime } from "../state-events/runtime-capability.js";
 import {
   createActionDefinition,
   createActionResult,
@@ -252,22 +253,29 @@ export async function executeAction(registry, input, context = {}) {
   if (featureAction) {
     const denial = await enforceModePolicy(action, invocation, context, triggerKind);
     if (denial !== null) return denial;
-    // Authoring declarations and pure contributor previews precede persistent
-    // acceptance. Neither flags nor injected services may turn this into a
-    // successful production command before owner/outbox recovery is implemented.
     if (action.uses.services.includes("stateEvents")) {
-      throw new ActionRegistryError("Combined state/event execution is not implemented yet.", {
+      if (!isStateEventRuntime(context.featureServices?.stateEvents)) throw new ActionRegistryError("A combined state/event runtime is required.", {
         status: 503, code: "state_event_not_implemented"
       });
-    }
-    await enforceFeatureCooldown(action, invocation, context);
+      // Origin preparation claims cooldown atomically with its saved request.
+      // Duplicate recovery must not claim a second cooldown before lookup.
+    } else await enforceFeatureCooldown(action, invocation, context);
   }
-  const value = featureAction
-    ? await action.execute(
-      createFeatureActionContext(action, invocation, context),
-      invocation.args
-    )
-    : await action.execute(invocation, Object.freeze({ ...context }));
+  let value;
+  try {
+    value = featureAction
+      ? await action.execute(
+        createFeatureActionContext(action, invocation, context),
+        invocation.args
+      )
+      : await action.execute(invocation, Object.freeze({ ...context }));
+  } catch (error) {
+    if (featureAction && action.uses.services.includes("stateEvents") && error.code === "state_event_cooldown") {
+      throw new ActionRegistryError("This action is still on cooldown.", { code: "action_cooldown_active", status: 429,
+        retryAfterSeconds: Math.max(1, Number.isSafeInteger(error.retryAfterSeconds) ? error.retryAfterSeconds : 1) });
+    }
+    throw error;
+  }
   const result = normalizedResult(value, action.kind);
   if (featureAction) validateFeatureEffects(action, result, context);
   return result;

@@ -7,7 +7,8 @@ Steps 4–5 add [private local atomic storage](state-event-local-storage.md) and
 Step 6 adds [private deferred admission and gap/reset handling](state-event-delivery.md).
 Step 7 adds the private [bounded relay and producer wakeups](state-event-relay.md).
 Step 8 adds [readable snapshot correlation and browser coordination](state-event-browser.md).
-Production command acceptance remains blocked.
+Step 9 implements [command acceptance and health v2](health-state-event-migration.md)
+behind explicit operational switches, disabled in checked-in Wrangler environments.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework
@@ -15,24 +16,24 @@ API v1 exports; the workspace facade exposes the same objects.
 
 ## Availability and compatibility
 
-Production command execution for the new `stateEvents` service currently fails
-with `state_event_not_implemented` (503), after authorization/mode checks and
-before cooldown claims or feature execution. An environment flag or injected
-runtime service cannot enable it. The production service and existing stream
-publication/append paths also reject combined streams. Protected combined grant
-issuance now checks producer authority and coordinates an explicit reset when
-requested; it does not enable command execution. No installed health
-feature, existing stream version, database, or credential is migrated in step 2.
+Command execution for `stateEvents` is implemented. Fresh acceptance requires
+`STATE_EVENT_OPERATIONS_ENABLED === "true"` and the event master switch. Both
+checked-in Wrangler environments keep fresh combined acceptance disabled while
+steps 10–12 verify failures, costs and rollout. Original accepted receipts remain
+recoverable when acceptance is disabled. Unregistered/injected runtimes still
+fail closed with `state_event_not_implemented`.
 
-The contributor runtime provides a separate synchronous calculation preview.
-It does not simulate successful production acceptance, state persistence,
-receipts, revisions, outboxes, alarms, grants or delivery. Existing event-only
+The contributor runtime keeps a separate synchronous calculation preview that
+creates no acceptance or persistence. Opt into in-memory combined command
+behavior with `createFeatureTestRuntime(feature, { stateEventsEnabled: true })`;
+see the step-9 migration guide for that simulator's limits. Existing event-only
 and state-only test/runtime behavior remains unchanged.
 
 ## Complete feature example
 
 This example is a declaration/preview fixture, not a deployable health migration.
-Its command will fail closed until the later implementation steps are complete.
+Its command requires explicit combined-acceptance and event-master enablement;
+checked-in Wrangler environments leave fresh combined acceptance disabled.
 
 ```js
 import {
@@ -146,7 +147,8 @@ projection field names against the stream's object payload schema. Literal
 projections are schema-checked at composition; the actual computed payload is
 checked by preview and, later, inside the state transaction. A combined stream
 cannot use the independent `eventStreams` service. Its public catalog entry
-includes `publication.implementation: "pending"` while execution is unavailable;
+includes `publication.implementation: "implemented"` for combined support;
+this describes code availability, not operational enablement;
 mutation descriptions, event literals, config values and operation input are
 not public catalog data. Existing event-only catalog entries keep their shape.
 
@@ -227,11 +229,11 @@ Pure previews generate none of these persistence identities:
   checks; ordinary event-only frames are unchanged.
 - Event IDs keep the existing `dev1` tuple and algorithm. No raw origin/source
   IDs are exposed through public correlation. Private receipt/route recovery is
-  implemented in step 3; production command acceptance is still blocked.
+  implemented in step 3; command execution is implemented behind the step-9 switches.
 
 The concrete currently implemented errors are
 `invalid_state_event_operation` for declaration/data problems,
-`state_event_not_implemented` for blocked command/service execution, and the
+`state_event_not_implemented` for an unregistered command runtime, and the
 `feature_state_event_*` registry/context categories exercised by
 `test/state-event-authoring.spec.js`. Existing schema errors retain their type;
 existing production event-only endpoints return their safe service-unavailable

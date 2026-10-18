@@ -18,9 +18,10 @@ atomic storage with lifecycle authority, private deferred admission and
 [gap/reset reconciliation](state-event-delivery.md), and the private
 [bounded relay and producer wakeups](state-event-relay.md), plus
 [readable/browser correlation](state-event-browser.md).
-Persistent combined command execution is
-still blocked with `state_event_not_implemented`; existing independent state/event
-service guards remain in force. See [state/event authoring](state-event-authoring.md)
+Combined command execution and the [health v2 migration](health-state-event-migration.md)
+are implemented behind `STATE_EVENT_OPERATIONS_ENABLED` plus the event master
+switch. Checked-in Wrangler environments keep new acceptance disabled; existing
+independent state/event service guards remain in force. See [state/event authoring](state-event-authoring.md)
 and [the implementation roadmap](state-event-roadmap.md).
 
 ## Supported entry points
@@ -59,7 +60,7 @@ surface consists of:
 - durable-event helpers: `defineDurableEventStream` and
   `DurableEventStreamDefinitionError`;
 - combined-operation declarations: `defineStateEventOperation` and
-  `StateEventOperationDefinitionError` (persistent execution pending);
+  `StateEventOperationDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,

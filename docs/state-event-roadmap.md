@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–8 are complete; implementation steps 9–12 are pending.
+Status: steps 1–9 are complete; implementation steps 10–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -321,6 +321,15 @@ and maintain a defined drain/retirement path for the old stream.
 **Completion evidence:** Discord and Twitch feature tests, shared/standalone
 health behavior, offline command acceptance, bot-state recovery after cleared
 browser storage, per-impact animation and version-transition browser tests.
+
+Completed 2026-10-18: the installed health command now uses the versioned v2
+combined action/stream, authoritative shared bounded health and a normal readable
+export. The v2 widget recovers bot state with separate grants and animates live
+impacts; an explicit v1 view preserves old backlog semantics. The command runtime
+recovers original receipts before configuration/cooldown and gates new acceptance
+behind the contract switch, left false in checked-in Wrangler environments.
+SQLite, feature and Chromium evidence and the one-time transition are documented
+in [`health-state-event-migration.md`](health-state-event-migration.md).
 
 ### 10. Complete failure, compatibility and resource verification
 

@@ -23,25 +23,19 @@
       background: linear-gradient(90deg, #25a85d, #70ed85);
     }
     .ready .fill { transition: width 650ms cubic-bezier(.2, .8, .2, 1); }
-    .meter.damage { animation: hit 450ms ease-out; }
-    .meter.heal { animation: healed 550ms ease-out; }
-    @keyframes hit {
-      25% { transform: translateX(-7px); box-shadow: 0 0 25px #ff4242; }
-      55% { transform: translateX(5px); }
-    }
-    @keyframes healed {
-      50% { box-shadow: 0 0 28px #76ff9a; }
-    }
     #status { margin: 8px 0; font: 14px system-ui, sans-serif; }
-    #access { margin-top: 10px; font: 14px system-ui, sans-serif; }
+    #access { display: grid; gap: 6px; margin-top: 10px; font: 14px system-ui, sans-serif; }
+    #access[hidden] { display: none; }
+    #migration { font: 14px system-ui, sans-serif; }
+    a { color: #b9d8ff; }
     #access input { width: min(440px, 70vw); }
   </style>
   <script type="module" src="/health-widget/app.js"></script>
 </head>
 <body>
   <main>
-    <div class="labels"><span>HEALTH</span><span id="value">100 / 100</span></div>
-    <div id="meter" class="meter" role="progressbar"
+    <div class="labels"><span>HEALTH</span><span id="value">— / 100</span></div>
+    <div id="meter" class="meter" hidden role="progressbar"
          aria-label="Health" aria-valuemin="0" aria-valuemax="100"
          aria-valuenow="100">
       <div id="fill" class="fill"></div>
@@ -49,10 +43,14 @@
     <p id="status">Connecting…</p>
 
     <form id="access" hidden>
-      <label for="grant">Event grant:</label>
+      <label for="read-grant">Current-health read grant:</label>
+      <input id="read-grant" type="password" autocomplete="off" required>
+      <label for="grant">Health v2 event grant:</label>
       <input id="grant" type="password" autocomplete="off" required>
       <button type="submit">Connect</button>
     </form>
+    <p id="migration">Bot health starts at 100; old browser-local values are not imported.
+      <a href="/health-widget/legacy.html">Legacy v1 backlog view</a></p>
   </main>
 </body>
 </html>

@@ -1,10 +1,11 @@
 # Shared atomic state/event storage and lifecycle authority
 
 Roadmap step 5 implements the private `ShareableStateRealm` adapter. Production
-combined commands still fail with `state_event_not_implemented`; deferred stream
+combined commands are connected behind the [step-9 switches](health-state-event-migration.md); deferred stream
 admission is implemented in [step 6](state-event-delivery.md), and
-[bounded relay/cleanup](state-event-relay.md) in step 7. Command integration remains later. No health feature, stream version or credential is migrated here. These modules are private
-framework implementation, not supported feature imports.
+[bounded relay/cleanup](state-event-relay.md) in step 7. Health migration and command
+integration are documented in step 9. These modules are private framework
+implementation, not supported feature imports.
 
 ## Acceptance and owner identity
 

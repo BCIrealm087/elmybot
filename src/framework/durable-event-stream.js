@@ -300,7 +300,7 @@ export function publicDurableEventStream(definition, featureId) {
     access: definition.access,
     payload: definition.payload,
     ...(definition.publication ? {
-      publication: { ...definition.publication, implementation: "pending" }
+      publication: { ...definition.publication, implementation: "implemented" }
     } : {}),
     delivery: DURABLE_EVENT_DELIVERY
   });

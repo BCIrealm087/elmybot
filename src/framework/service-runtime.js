@@ -1,3 +1,4 @@
+import { createStateEventCommandRuntime } from "../state-events/command-runtime.js";
 import {
   FEATURE_STORAGE_PATH_PREFIX,
   INTEGRATION_FEATURE_STATE_PATH_PREFIX
@@ -476,18 +477,7 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
         }
       }),
       eventStreams: createDurableEventStreamRuntime(env, invocation, registry),
-      stateEvents: Object.freeze({
-        async local() {
-          throw new FeatureServiceRuntimeError("Combined state/event execution is not implemented yet.", {
-            code: "state_event_not_implemented", status: 503
-          });
-        },
-        async current() {
-          throw new FeatureServiceRuntimeError("Combined state/event execution is not implemented yet.", {
-            code: "state_event_not_implemented", status: 503
-          });
-        }
-      }),
+      stateEvents: createStateEventCommandRuntime(env, invocation, registry),
       state: Object.freeze({
         async get(featureId, key) {
           const result = await storageRequest(

@@ -24,6 +24,7 @@ export async function commitShareableStateEvent(state, env, registry, input, ada
   const prior = lookupStateEventOwner(state, attempt, adapter.ownerKey);
   if (prior.state === "committed") return prior;
   if (prior.state === "fenced") throw recoveryError("attempt_fenced");
+  if (env.STATE_EVENT_OPERATIONS_ENABLED !== "true" || env.DURABLE_EVENT_STREAMS_ENABLED !== "true") throw recoveryError("service_unavailable", 503);
   const entry = registry?.stateEvents?.[`${identity.featureId}:${request.operation}`];
   const action = registry?.actions?.[identity.actionKind];
   if (!entry || entry.definition.scope.kind !== "effective_shareable" ||

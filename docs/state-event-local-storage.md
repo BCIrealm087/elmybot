@@ -1,8 +1,8 @@
 # Group-local atomic state/event storage
 
 Roadmap step 4 implements the private `GroupConfig` storage adapter. Combined
-command execution remains blocked with `state_event_not_implemented`; no feature
-or existing stream is migrated. [Shareable acceptance](state-event-shareable-storage.md)
+command execution is connected in [step 9](health-state-event-migration.md), with
+fresh acceptance disabled in checked-in Wrangler environments. [Shareable acceptance](state-event-shareable-storage.md)
 is implemented in step 5 and [deferred append/gap handling](state-event-delivery.md)
 in step 6, and [automatic relay](state-event-relay.md) in step 7. Operational
 enablement follows later. These internals are not stable feature API exports.
@@ -96,7 +96,8 @@ is introduced.
 
 The internal `/internal/state-events/owner/commit` binding endpoint uses this
 adapter with the installed registry; it is not a public Worker route. The
-production command/service guard still prevents invocation through a feature.
+production command runtime reaches it only through the declared combined service;
+new acceptance requires both operational switches after original receipt lookup.
 
 ## Automated evidence
 

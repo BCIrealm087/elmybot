@@ -585,12 +585,15 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         code: "feature_state_event_multiple_commits"
       });
       stateEventAttempted = true;
-      const keys = stateEventConfigKeys(entry.definition);
-      if (keys.length) requireDeclaredService(action, "config");
-      const get = runtimeContext.featureServices?.config?.get;
-      if (keys.length && typeof get !== "function") return unavailable("config")();
-      const config = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await get(action.featureId, key)])));
-      return await handle.commit(prepareStateEventOperation(entry.definition, input, config));
+      const prepare = async () => {
+        const keys = stateEventConfigKeys(entry.definition);
+        if (keys.length) requireDeclaredService(action, "config");
+        const get = runtimeContext.featureServices?.config?.get;
+        if (keys.length && typeof get !== "function") return unavailable("config")();
+        const config = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await get(action.featureId, key)])));
+        return prepareStateEventOperation(entry.definition, input, config);
+      };
+      return typeof handle.commitPrepared === "function" ? handle.commitPrepared(prepare) : handle.commit(await prepare());
     } });
   }
   const clockNow = typeof runtimeContext.clock?.now === "function"
