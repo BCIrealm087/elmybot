@@ -863,7 +863,7 @@ function createMemoryEventStreams({
       );
     }
     if (stream.definition.publication && !combinedEnabled) {
-      throw new FeatureTestRuntimeError("Combined delivery is not implemented; use stateEvents.preview for pure calculations.", {
+      throw new FeatureTestRuntimeError("Combined command simulation is disabled; opt in with stateEventsEnabled: true, or use stateEvents.preview for pure calculations.", {
         code: "state_event_not_implemented"
       });
     }

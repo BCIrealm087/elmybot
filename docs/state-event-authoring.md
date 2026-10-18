@@ -18,9 +18,10 @@ API v1 exports; the workspace facade exposes the same objects.
 
 Command execution for `stateEvents` is implemented. Fresh acceptance requires
 `STATE_EVENT_OPERATIONS_ENABLED === "true"` and the event master switch. Both
-checked-in Wrangler environments keep fresh combined acceptance disabled while
-steps 10–12 verify failures, costs and rollout. Original accepted receipts remain
-recoverable when acceptance is disabled. Unregistered/injected runtimes still
+checked-in Wrangler environments keep fresh combined acceptance disabled for
+operator-controlled rollout; [release evidence and procedures](state-event-release.md)
+cover completed failure, cost and contributor verification. Original accepted
+receipts remain recoverable when acceptance is disabled. Unregistered/injected runtimes still
 fail closed with `state_event_not_implemented`.
 
 The contributor runtime keeps a separate synchronous calculation preview that
@@ -145,7 +146,7 @@ The registry requires the namespace and stream to exist, verifies that the
 operation scope exactly equals the stream's declared producer scope, and checks
 projection field names against the stream's object payload schema. Literal
 projections are schema-checked at composition; the actual computed payload is
-checked by preview and, later, inside the state transaction. A combined stream
+checked by preview and inside the state transaction. A combined stream
 cannot use the independent `eventStreams` service. Its public catalog entry
 includes `publication.implementation: "implemented"` for combined support;
 this describes code availability, not operational enablement;
@@ -206,8 +207,8 @@ and the final event payload must pass the stream schema and 4 KiB payload cap.
 in the result. `changed` also distinguishes deletion of a present JSON `null`
 from deleting an absent entry. `appliedAmount` is the absolute safe-integer
 numeric difference, or `null` when not applicable/representable. A clamped
-counter no-op reports zero and `changed: false`; future persistent acceptance
-will still allocate its operation watermark and event.
+counter no-op reports zero and `changed: false`; persistent acceptance
+still allocates its operation watermark and event.
 
 ## Reserved persistence and correlation identities
 
@@ -231,15 +232,65 @@ Pure previews generate none of these persistence identities:
   IDs are exposed through public correlation. Private receipt/route recovery is
   implemented in step 3; command execution is implemented behind the step-9 switches.
 
-The concrete currently implemented errors are
+The declaration/context errors include
 `invalid_state_event_operation` for declaration/data problems,
 `state_event_not_implemented` for an unregistered command runtime, and the
 `feature_state_event_*` registry/context categories exercised by
 `test/state-event-authoring.spec.js`. Existing schema errors retain their type;
 existing production event-only endpoints return their safe service-unavailable
-error for an attempted combined-stream bypass. Persistent acceptance/delivery
-error mappings follow the contract outcomes when their later handlers exist.
+error for an attempted combined-stream bypass.
 
-See [the contract](state-event-contract.md) for the complete transaction,
-retention and lifecycle requirements, and [the roadmap](state-event-roadmap.md)
-for what remains to be implemented.
+## Commit receipts and failures
+
+`await handle.commit(input)` returns only the accepted public receipt:
+`{ accepted: true, operationId, eventId, committedAtMs, expiresAtMs, result,
+stateEvent }`. `result` contains `before`, `after`, `changed`, and `appliedAmount`.
+`stateEvent` is the version-1 correlation marker described above. The original
+thirty-minute deadline does not restart on retry or append. Success means state
+saved and event durably queued at the source; it does not mean browser delivery.
+
+| Code/category | Meaning and response |
+| --- | --- |
+| `state_event_service_unavailable` | Fresh acceptance disabled or required infrastructure unavailable; no fresh mutation is authorized by a disabled switch. |
+| `state_event_source_conflict` | Same source identity with incompatible input/actor/declaration; do not create a replacement operation to conceal it. |
+| `state_event_source_expired` | Unaccepted source outside its two-hour admission lifetime; never execute it late. Existing recoverable receipts take precedence. |
+| `state_event_cooldown`, `state_event_rate_limited` | Fresh admission throttled; honor the bounded retry hint when supplied. |
+| `state_event_capacity`, `state_event_outbox_capacity`, `state_event_partition_capacity` | Source receipt, pending-work or partition budget unavailable; reject before mutation. |
+| `state_event_stream_blocked` | Gap/reset control blocks fresh acceptance for the stream; operator recovery may be required. |
+| `state_event_binding_changed`, `state_event_attempt_fenced` | Framework may repin only with proof the old attempt cannot commit; feature code must not choose a new route itself. |
+| `state_event_outcome_unknown` | Timeout, unavailable proof or malformed response; a commit may already exist. Recover the same platform source, never claim unchanged state. |
+| `feature_state_event_multiple_commits` | More than one commit attempt in an invocation, even after a failed first attempt; fix the action. |
+
+Other `state_event_*` validation/authority failures and existing schema errors
+remain bounded errors; do not parse error message text. A destination capacity or
+transport failure after acceptance is delivery work, not a failed state mutation.
+Do not catch an unknown outcome and call `commit()` again within the invocation,
+or ask the user to create a new command as an idempotent retry: a new platform
+source is a new operation. Keep result rendering static and return `effects: []`.
+
+Offline acceptance remains finite: 100 pending rows / 512 KiB per owner, 10 new
+operations/second per owner, 100 partitions, and receipt/authority budgets. Source
+receipts are retained at least two hours; unresolved work remains charged until
+safe recovery. Delivery is bounded at least once, with retention/lifecycle gaps
+and no exactly-once animation guarantee. See the [full limits](state-event-contract.md#9-initial-resource-and-recovery-limits)
+and [drain/reset procedure](state-event-release.md).
+
+## Contributor verification
+
+Use pure previews to cover calculations without persistence. For command behavior,
+opt in with `createFeatureTestRuntime(feature, { stateEventsEnabled: true })`,
+invoke the real command, and inspect readable state plus events using the normal
+`query` and `eventStreams.connect/receive/acknowledge` helpers. Test authorization,
+input rejection, clamping/no-ops, same-source retry and source conflict, and
+acceptance before any consumer connects. Direct `eventStreams.publish()` rejects
+combined streams. See the installed [health tests](../packages/features/fun-health/test/feature.spec.js).
+
+The simulator models in-memory mutation/correlation, original receipts, cooldowns
+and basic bounded offline retention. It does not emulate SQLite transactions,
+durable crashes, two-hour receipt pruning, authority fencing, relay alarms or
+Cloudflare billing. Those guarantees use the [native verification matrix](state-event-verification.md)
+and [cost tests](state-event-costs.md). The default simulator keeps combined
+execution disabled; preview alone does not enable it.
+
+Run `npm run feature:check -- <feature-directory>` and `npm run feature:workspaces`;
+then the [release checks](state-event-release.md) cover the full installed registry.

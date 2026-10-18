@@ -1,6 +1,8 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–11 are complete; implementation step 12 is pending.
+Status: steps 1–12 complete; implementation and review preparation finished.
+Fresh combined acceptance remains disabled in checked-in environments; deployment
+and live enablement remain operator-controlled.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -400,7 +402,7 @@ expiry/recovery behavior, additive storage upgrades and health-version
 transition. Keep existing migration tags append-only; add a new tag only if a
 binding/class change actually requires one.
 
-Run the full test suite, lint and contributor gates, both browser smoke tests,
+Run the full test suite, lint and contributor gates, all four browser smoke tests,
 syntax checks and the supported CI Wrangler dry run. Inspect the pushed CI run
 and its logs. Summarize the implementation, automated evidence, cost findings
 and remaining limits for review. Deployment remains with the human operator
@@ -409,6 +411,13 @@ unless specifically requested; routine manual testing is not a roadmap gate.
 **Completion evidence:** current documentation, passing authoritative CI, a
 reviewable change on `codex-state-ironing`, and no undocumented change to
 existing feature behavior.
+
+**Implemented:** [release review and operator procedures](state-event-release.md),
+current contributor/API/contract references, explicit health v1/v2 transition,
+and generated stream publication modes. Full-suite, contributor, catalog, syntax,
+browser and non-deploying build checks remain the authoritative release gates.
+No binding/class change requires another migration tag; no deployment or flag
+change is included.
 
 ## Completion criteria
 
@@ -453,3 +462,11 @@ measurements must demonstrate bounded cost without polling idle consumers.
 - 2026-10-17: Step 2 completed: additive authoring/validation and pure previews,
   with fail-closed production execution and compatibility/misuse coverage.
   Persistent operation identity and pinned-owner recovery are next in step 3.
+- 2026-10-18: Steps 3–11 completed recovery, local/shared acceptance, delivery,
+  relay/wakeups, browser correlation, installed health v2, failure verification
+  and measured cost budgets; the corresponding implementation sections above
+  record each step's evidence. Earlier progress entries describe their date.
+- 2026-10-18: Step 12 completes contributor/operator guidance and review
+  preparation. See `state-event-release.md` for the review map, validation gates,
+  rollout/drain/reset instructions and limits. Checked-in acceptance remains
+  disabled; deployment and live operations are outside this milestone.

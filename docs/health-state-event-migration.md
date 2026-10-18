@@ -4,7 +4,8 @@ Roadmap step 9 moves the installed `fun.health` command to atomic shared health
 and per-operation events. The implementation is opt-in: both production and test
 Wrangler configurations explicitly leave `STATE_EVENT_OPERATIONS_ENABLED` at
 `"false"`. No deployment or live migration is performed by this change. The
-failure matrix, cost measurements and final rollout review remain steps 10–12.
+[failure matrix](state-event-verification.md), [cost measurements](state-event-costs.md)
+and [release guidance](state-event-release.md) complete steps 10–12.
 
 ## Versioned behavior
 
@@ -84,7 +85,7 @@ only a bounded recent-ID list under `elmybot.health.impact-ids.v2:*`. It rejects
 v1 event grant with an explicit migration message and link to the legacy view.
 It also rejects read/event catalogs targeting different groups.
 
-For an operator-selected transition after the remaining verification stages:
+For an operator-selected transition after review of the release evidence:
 
 1. Preserve/finish the existing v1 backlog using the current v1 grant and
    `/health-widget/legacy.html`. This explicit compatibility view retains the old

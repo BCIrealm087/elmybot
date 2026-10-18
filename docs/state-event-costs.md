@@ -218,5 +218,5 @@ add measured GB-month to the calculator rather than treating the source's
 
 The measured implementation satisfies the bounded-work gate after the two
 amplification fixes. It preserves hibernating transport and acceptance remains
-disabled. Step 12 still owns final author/operator guidance and review
-preparation; deployment remains with the operator.
+disabled. [Final author/operator guidance and release review](state-event-release.md)
+complete step 12; deployment remains with the operator.

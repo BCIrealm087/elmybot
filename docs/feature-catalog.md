@@ -43,11 +43,13 @@ Readable state is complete replacement state for counters, configuration, and cu
 
 Durable streams are bounded at-least-once delivery for alerts, animations, and commands that must each run. They are not job queues, permanent audit logs, or exactly-once effects.
 
-| Feature | Stream | Version | Platforms | Scope | Access eligibility | Payload root | Delivery |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| fun.health | `impacts` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes |
-| fun.health | `impacts` | 2 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes |
-| widget.data | `updates` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes |
+Publication distinguishes connected-consumer event-only append from atomic state/event acceptance. `implemented` describes code support, not environment enablement; see [state/event release controls](state-event-release.md).
+
+| Feature | Stream | Version | Platforms | Scope | Access eligibility | Payload root | Delivery | Publication |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| fun.health | `impacts` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes | event_only |
+| fun.health | `impacts` | 2 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes | state_event; implemented |
+| widget.data | `updates` | 1 | discord, twitch | effective_shareable | operator_grant | object | bounded_at_least_once; 1 consumer; 1800s; 1000 events; 1048576 bytes | event_only |
 
 ## Workspace packages
 

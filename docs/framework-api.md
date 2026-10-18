@@ -272,6 +272,24 @@ Transport cursors are opaque and may expire; resynchronization remains guarantee
 Internal operational controls and diagnostics are not feature or test-kit exports.
 See [release and migration guidance](state-query-release.md).
 
+## Combined-operation test helpers
+
+`createFeatureTestRuntime(feature, { stateEventsEnabled: true })` opts into
+in-memory combined command behavior. The default is disabled. The additive
+`runtime.stateEvents.preview({ operation, input, before?, config?, feature? })`
+uses production declaration validation/calculation without accepting, persisting
+or retaining an operation. `feature` disambiguates a multi-feature runtime.
+
+The opted-in simulator shares current state with query helpers, creates event
+correlation and original same-source receipts, permits basic bounded offline
+acceptance, and rejects direct publication to combined streams. It does not model
+SQLite rollback/crashes, durable authority fencing, relay scheduling, receipt
+pruning or production billing. Use [native verification](state-event-verification.md)
+for those guarantees. [Authoring](state-event-authoring.md) documents command
+handles, errors and contributor cases; [release guidance](state-event-release.md)
+covers enablement and safe retirement. Internal recovery/relay bindings remain
+unsupported private interfaces; this addition does not expose raw transactions.
+
 ## Manifest compatibility
 
 Every feature binds itself to the contract it was authored against:

@@ -12,7 +12,8 @@ health; otherwise the normal selected/standalone realm applies.
 
 Fresh acceptance requires both event switches; `STATE_EVENT_OPERATIONS_ENABLED`
 remains explicitly false in checked-in Wrangler environments. Deployment and
-rollout remain operator-controlled after the remaining verification stages.
+rollout remain operator-controlled; [release guidance](../../../docs/state-event-release.md)
+summarizes completed verification, measured costs and safe drain/rollback.
 
 The v2 widget at `/health-widget/` needs separate current-health read and v2 event
 grants for the same group. It ignores old browser-local numeric health. The

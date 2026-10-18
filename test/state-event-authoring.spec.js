@@ -284,13 +284,13 @@ describe("combined action boundaries and explicit runtime opt-in", () => {
     const runtime = createFeatureTestRuntime(feature());
     await expect(runtime.discord.command("impact")).rejects.toMatchObject({ code: "state_event_not_implemented" });
     await expect(runtime.twitch.command("impact")).rejects.toMatchObject({ code: "state_event_not_implemented" });
-    expect(() => runtime.eventStreams.connect({ group: discordTestGroup(), stream: "test.impacts:impacts:v2" })).toThrow(/not implemented/);
+    expect(() => runtime.eventStreams.connect({ group: discordTestGroup(), stream: "test.impacts:impacts:v2" })).toThrow(expect.objectContaining({ code: "state_event_not_implemented" }));
     await expect(runtime.eventStreams.publish({ group: discordTestGroup(), stream: "test.impacts:impacts:v2", payload: {} })).rejects.toMatchObject({ code: "state_event_not_implemented" });
     await expect(createFeatureServiceRuntime({}, invocation(), r).featureServices.stateEvents.local()).rejects.toMatchObject({ code: "state_event_service_unavailable" });
     await expect(createDurableEventStreamRuntime({ DURABLE_EVENT_STREAMS_ENABLED: "true" }, invocation(), r).current("test.impacts", "twitch", "impacts")).rejects.toMatchObject({ code: "durable_event_service_unavailable" });
   });
 
-  it("keeps authorization ahead of the unimplemented-mode response", async () => {
+  it("keeps authorization ahead of the unavailable-runtime response", async () => {
     const r = registry(feature({ actions: [action({ capability: access.moderators })] }));
     await expect(executeAction(createActionRegistry(r.actions), invocation(), { authorize: async () => false })).rejects.toMatchObject({ code: "action_forbidden" });
   });

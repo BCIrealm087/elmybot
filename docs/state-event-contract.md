@@ -1,13 +1,11 @@
 # Atomic state changes with durable events: contract
 
-Status: normative implementation contract. Steps 2–9 implement declarations,
-preview, private recovery and local/shareable atomic storage with lifecycle
-authority, private deferred admission and gap/reset reconciliation. Production
-new combined acceptance remains opt-in; bounded relay is implemented in step 7, with
-[readable/browser correlation](state-event-browser.md) implemented in step 8 and
-[health migration](health-state-event-migration.md) implemented in step 9. Failure,
-cost and rollout verification follow in steps 10–12.
-This document alone does not enable runtime support.
+Status: implemented normative contract; roadmap steps 1–12 complete.
+Declarations, local/shareable atomic acceptance, recovery, bounded delivery,
+readable/browser correlation and health v2 are implemented. See the
+[failure evidence](state-event-verification.md), [measured costs](state-event-costs.md)
+and [release/rollout guide](state-event-release.md). Checked-in production and
+test environments disable fresh combined acceptance. No deployment is implied.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `9c3ebf82aae63f5d0ce27ee63a9a3de1fae9f170`.
@@ -18,7 +16,7 @@ does not relax the existing prohibition on independent state writes followed
 by `stream.publish()`. Public helper names, declaration spellings, the finite
 projection vocabulary and reserved identity formats are specified in
 [the step-2 authoring reference](state-event-authoring.md); the semantics and
-limits below constrain that API. Production combined execution is still blocked.
+limits below constrain that API. Execution requires explicit operational enablement.
 
 ## 1. Product guarantee and compatibility
 
@@ -435,11 +433,11 @@ raw platform/source IDs, realm IDs or credentials in event payloads.
 
 ## 11. Worked health cases
 
-`fun.health` will use shareable health, initially 100, bounded to 0–100. Existing
+`fun.health` uses shareable health, initially 100, bounded to 0–100. Existing
 command permissions, one-second group cooldown, damage/heal syntax, default
-amount 10, and valid requested amounts 1–100 remain unchanged. Exact new
-action/stream/readable-export identities are fixed in steps 2 and 9 before
-implementation; `fun.health:impacts:v1` is not silently reinterpreted.
+amount 10, and valid requested amounts 1–100 remain unchanged. The installed
+action is `fun.health.impact.v2`, stream `fun.health:impacts:v2`, and readable
+export `fun.health:current:v1`; `fun.health:impacts:v1` retains its legacy meaning.
 
 | Case | Atomic result and event meaning |
 | --- | --- |
@@ -463,7 +461,7 @@ explicit version-transition guidance in step 9, not an automatic conversion.
 Reserve `STATE_EVENT_OPERATIONS_ENABLED` as the new-acceptance switch; only the
 literal string `true` enables it. New combined acceptance also requires the
 existing event master switch. Missing/malformed values fail closed. Step 9 binds this switch to command preparation and owner acceptance; checked-in
-Wrangler environments leave it false pending the remaining verification stages.
+Wrangler environments leave it false for operator-controlled rollout.
 
 Disabling new combined acceptance does not erase receipts, hide accepted
 results or stop safe drain/cleanup. Keep the event master switch enabled for
@@ -480,8 +478,7 @@ semantic versions. Existing migration tags remain append-only.
 Use stable, safe outcome categories for unavailable/disabled, input invalid,
 source conflict/expired, cooldown, source capacity, transition, outcome unknown,
 pending, delivered/acknowledged, retention gap and lifecycle gap. The authoring
-reference lists the existing identifiers; later persistent handlers must map
-their remaining outcomes explicitly. A transport timeout after mutation can
+reference lists the implemented command identifiers and their outcome meanings. A transport timeout after mutation can
 be ambiguous; never tell the user that state was unchanged without proof.
 
 Aggregate counters may include accepted/duplicate/rejected operations, pending
@@ -500,7 +497,8 @@ Cloudflare invoice. Step 11 sets measured regression ceilings before release.
 
 ## 13. Acceptance evidence and implementation boundary
 
-Steps 2–12 must provide automated evidence for:
+The [verification matrix](state-event-verification.md), [cost budgets](state-event-costs.md)
+and release checks provide automated evidence for:
 
 1. atomic rollback and valid no-op/clamped commits with consistent watermarks;
 2. concurrent duplicates, changed inputs, lost commit/append/finalization
@@ -518,11 +516,12 @@ Steps 2–12 must provide automated evidence for:
 8. bounded memory/storage/SQL work, long offline behavior, switches and safe
    drain/rollback, with the full suite and authoritative CI checks passing.
 
-This document completes the design-contract work of roadmap step 1. It does not
-implement helpers, loosen runtime guards, change health ownership, migrate
-streams, modify production switches or deploy the Worker. Routine manual
-operator tests are not a milestone gate; use simulated time, fault injection,
-storage integration tests and browser CI for the required evidence.
+The implementation preserves API v1 and independent state/event guards. Health
+v2 is an explicit semantic migration, with v1 backlog compatibility retained;
+see [health migration](health-state-event-migration.md). Deployment and live
+enablement remain with the operator. Routine manual operator tests are not a
+milestone gate; simulated time, fault injection, storage integration tests and
+browser CI supply the required evidence.
 
 ## References
 
