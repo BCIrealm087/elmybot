@@ -19,9 +19,12 @@ transaction as state, revision, receipt and intent. `GroupConfig` and
 maintenance and grant work. Eviction recovers the durable due index.
 
 The relay claims work transactionally before outbound I/O. A token and 30-second
-lease protect each row; at most four stream domains have live leases across
-concurrent alarm and explicit recovery handlers. Each physical stream has one
-ordered head. Independent streams use a persisted last-served marker for fair
+lease protect each row; at most four records have live leases across concurrent
+alarm and explicit recovery handlers. Each physical stream has one ordered
+append head. Verified `appended` outcomes and terminal retirement use a separate
+cleanup lane: a delayed cleanup lease cannot hold a new append behind it. Claims
+within each lane still serialize, and both lanes share the same four-record
+owner limit. Independent streams use a persisted last-served marker for fair
 selection. A busy owner defers waiting work until a lease can recover; finishing
 work releases those deferred rows promptly instead of spinning immediate alarms.
 
@@ -29,7 +32,9 @@ Each handler processes at most twenty expiry markers/claimed records and starts
 new attempts for at most five seconds. Already started calls have a five-second
 request deadline. A lost/unknown response retains the lease until recovery; a
 retry recovers the original destination receipt rather than replaying a mutation.
-A timeout is never proof of non-append. Explicit private reconciliation uses the
+A timeout is never proof of non-append. An uncertain `pending`, `parked` or
+`gap_pending` head still blocks later appends until its lease/outcome recovers;
+only a verified append or terminal outcome can move to cleanup scheduling. Explicit private reconciliation uses the
 same lease, ordering and attempt counters.
 
 | Boundary | Behavior |
@@ -114,3 +119,26 @@ A simulated long-offline period verifies no periodic outbound consumer probes.
 Two controller budget tests inject transport completion while retaining real
 SQLite leases; delivery/restart/notification tests use actual binding forwarding.
 The existing state-only, event-only, lifecycle and socket suites remain required.
+
+## Delayed cleanup and publication latency
+
+A live report on 2026-10-18 showed commit-to-append delays of 1.148, 1.143,
+20.244, 10.805, 1.140 and 7.776 seconds. These are inferred directly from the
+frames: source commit is `expiresAt - 30 minutes`, and destination append is
+`acceptedAt`. They establish backend queue/delivery lag, not its precise cause
+or browser receive latency.
+
+A native local/shared regression reproduced one blocking mechanism: lose an
+interest-release response after ACK, retain the terminal cleanup lease, then
+accept another impact. The original single stream lease gate delayed that new
+append until the old thirty-second cleanup lease expired. Separate lanes now
+allow six further ordered/acknowledged impacts while preserving that old lease,
+its charged metadata and retry budget. Recovering cleanup later drains all
+seven obligations without reappending or mutating state again. A companion
+lost-append-response test proves uncertain publication still blocks its
+successor and recovers the original sequence before proceeding.
+
+This correction adds no polling, RPC, table, alarm interval or larger work
+budget. It removes a reproduced cleanup dependency; network/authority outages,
+full owner concurrency and delayed platform alarms can still add latency. The
+production frames alone do not prove that every reported delay had this cause.

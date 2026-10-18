@@ -365,7 +365,7 @@ limits. Raising them or changing retention requires an explicit contract update.
 | Destination admission rate | Existing 10 appends/second per physical stream. |
 | Live producer interests | 1 producer per physical combined stream; at most 100 associated stream interests per state owner. |
 | Relay claim/cleanup batch | At most 20 records per owner handler. |
-| Parallel outbound delivery | At most 4 independent streams per owner handler; 1 ordered head per stream. |
+| Parallel outbound work | At most 4 live relay records per owner across handlers; 1 ordered append head per stream, with separately serialized verified-outcome cleanup sharing the same cap. |
 | Relay work-start budget | Start new attempts for at most 5 seconds per handler; finish bounded calls already started and reschedule remaining due work. |
 | Attempt lease | 30 seconds. |
 | Outbound request timeout | 5 seconds per attempt; abandon/wait for the durable lease on uncertain results. |

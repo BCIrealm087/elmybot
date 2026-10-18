@@ -163,6 +163,79 @@ describe("bounded state/event relay and producer wakeups", () => {
       expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
       expect(await runInDurableObject(f.ownerStub, (_i, state) => state.storage.getAlarm())).toBeNull();
     });
+  it.each([false, true])("does not hold new ordered appends behind an uncertain terminal cleanup lease (shared=%s)", async (shared) => {
+    const f = await fixture({ shared }); await f.commit(); await drain(f);
+    const grant = f.grant(); await f.streamCall("grants/issue", grant);
+    const socket = await f.openSocket(grant.grantId);
+    const received = new Promise((resolve) => socket.addEventListener("message", ({ data }) => { const value = JSON.parse(data); if (value.type === "event") resolve(value); }));
+    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" }));
+    const first = await received;
+    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: first.cursor }));
+    await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/interest-release")) throw Error("cleanup response unavailable");
+      return send();
+    });
+    await drain(f);
+    // A real ACK wakeup can finish its already-claimed cleanup alongside the
+    // controlled drain. Observe its durable failure before admitting new work.
+    await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))[0]?.uncertain).toBe(1);
+    const retiring = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(retiring).toMatchObject({ state: "retiring", uncertain: 1 });
+    expect(retiring.lease_until_ms).toBeGreaterThan(Date.now() + 20_000);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const accepted = [];
+    for (let index = 0; index < 6; index++) {
+      const next = await f.commit(); accepted.push(next); await stop(f);
+      clock.mockReturnValue(next.receipt.committedAtMs + 1100);
+      const delivery = nextMessage(socket);
+      await drain(f, false);
+      const event = await delivery;
+      expect(event.eventId).toBe(next.receipt.eventId);
+      expect(event.sequence).toBe(index + 2);
+      socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: event.cursor }));
+      await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+      await drain(f);
+      const remaining = await f.rows(f.ownerStub, "state_event_outbox");
+      expect(remaining.find((entry) => entry.operation_id === retiring.operation_id)).toMatchObject({ state: "retiring", lease_token: retiring.lease_token, lease_until_ms: retiring.lease_until_ms });
+      expect(remaining.find((entry) => entry.operation_id === next.operationId)).toMatchObject({ state: "appended", attempts: 1 });
+    }
+    // Publication continues beyond the initially fast three/four events, but
+    // cleanup remains charged, serialized, and does not discard its old lease.
+    const rows = await f.rows(f.ownerStub, "state_event_outbox");
+    expect(rows).toHaveLength(7);
+    expect(rows.filter((row) => row.lease_token !== null)).toHaveLength(1);
+    expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0].rows).toBe(7);
+    f.intercept(null); clock.mockReturnValue(retiring.lease_until_ms + 1);
+    await drain(f);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+    const receipts = await f.rows(f.streamStub, "durable_event_stream_receipts");
+    expect(receipts).toHaveLength(7);
+    expect(new Set(receipts.map((row) => row.event_id)).size).toBe(7);
+    for (const next of accepted) expect(receipts.map((row) => row.event_id)).toContain(next.receipt.eventId);
+  });
+  it.each([false, true])("keeps an uncertain unappended head ordered while cleanup uses another lane (shared=%s)", async (shared) => {
+    const f = await fixture({ shared }), first = await f.commit(); let lost = false;
+    f.intercept(async (kind, input, _init, send) => {
+      const result = await send();
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("append reply lost"); }
+      return result;
+    });
+    await drain(f);
+    const head = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(head).toMatchObject({ state: "pending", uncertain: 1 });
+    const second = await f.commit(); await stop(f);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1100);
+    await drain(f, false);
+    expect((await f.rows(f.streamStub, "durable_event_stream_events")).map((row) => row.event_id)).toEqual([first.receipt.eventId]);
+    const waiting = (await f.rows(f.ownerStub, "state_event_outbox")).find((row) => row.operation_id === second.operationId);
+    expect(waiting).toMatchObject({ state: "pending", attempts: 0, next_wakeup_at_ms: head.lease_until_ms });
+    f.intercept(null); clock.mockReturnValue(head.lease_until_ms + 1);
+    await drain(f);
+    const delivered = (await f.rows(f.streamStub, "durable_event_stream_events")).sort((a, b) => a.sequence - b.sequence);
+    expect(delivered.map((row) => row.event_id)).toEqual([first.receipt.eventId, second.receipt.eventId]);
+    expect(delivered.map((row) => row.sequence)).toEqual([1, 2]);
+  });
   it("stops automatic retries at twelve while preserving the original deadline", async () => {
     const f = await fixture(); await f.commit(); let calls = 0;
     f.intercept(async (kind, input, _init, send) => {

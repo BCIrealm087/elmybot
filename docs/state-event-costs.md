@@ -152,6 +152,13 @@ than silently widening an allowance.
 These bounds protect the combined path. They do not establish a new bound for
 all pre-existing event-only source-ledger queries or unrelated registry work.
 
+The cleanup-lane correction on 2026-10-18 was also checked against all twenty
+native measurement cases. SQL calls/rows, writes/deletes, binding requests,
+incoming messages and peak append concurrency match the checked-in baseline;
+no budget or pricing-model allowance was increased. The new local/shared relay
+regressions separately hold a terminal cleanup lease through six further impacts
+and then recover all retained obligations. See [latency evidence](state-event-relay.md#delayed-cleanup-and-publication-latency).
+
 ## Pricing assumptions and worked scenarios
 
 Checked against official

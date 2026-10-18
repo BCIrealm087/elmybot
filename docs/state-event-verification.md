@@ -48,6 +48,17 @@ Primary suites:
   [readable correlation](../test/state-event-readable.spec.js),
   [browser correlation](../test/state-event-browser.spec.js).
 
+## Publication while terminal cleanup is delayed
+
+Relay tests for both owner types retain an uncertain post-ACK interest-release
+lease, then deliver and acknowledge six new operations without waiting for that
+lease. The old receipt/outbox stays charged and keeps its original token and
+attempt budget; later cleanup drains all seven rows without duplicate delivery.
+The companion lost-append-response test keeps a genuinely uncertain unappended
+head in front of its successor, recovering the original two destination sequences
+in order. Both lanes remain inside the existing four-live-record owner limit.
+See [relay latency evidence](state-event-relay.md#delayed-cleanup-and-publication-latency).
+
 ## Security and compatibility
 
 The [authoring suite](../test/state-event-authoring.spec.js) rejects undeclared,

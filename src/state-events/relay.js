@@ -9,6 +9,12 @@ export const STATE_EVENT_RELAY_LIMITS = Object.freeze({ batch: 20, concurrency: 
 const one = (state, sql, ...args) => state.storage.sql.exec(sql, ...args).toArray()[0];
 const backoff = stateEventRetryDelay;
 const control = (row) => ["retiring", "gap_recorded", "reset_discarded"].includes(row.state);
+// A verified append no longer holds the ordered publication head. Its outcome
+// confirmation/ACK retirement may wait independently without blocking new
+// publication. Claims serialize within each lane; all live leases still share
+// the existing four-record owner limit.
+const cleanupStates = "('appended', 'retiring', 'gap_recorded', 'reset_discarded')";
+const cleanupLane = (row) => ["appended", "retiring", "gap_recorded", "reset_discarded"].includes(row.state);
 function current(state, id) { return one(state, "SELECT * FROM state_event_outbox WHERE operation_id = ?", id); }
 function replaceIntent(state, row, intent) {
   const json = canonicalJson(intent), bytes = new TextEncoder().encode(json).byteLength;
@@ -96,7 +102,8 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = NULL WHERE operation_id = ?", row.operation_id);
         continue;
       }
-      if (streams.has(row.stream_route_id)) continue;
+      const cleanup = cleanupLane(row), lane = `${row.stream_route_id}:${cleanup ? "cleanup" : "append"}`;
+      if (streams.has(lane)) continue;
       if (row.deadline_ms > nowMs && ["pending", "parked"].includes(row.state)) {
         const head = one(state, `SELECT next_wakeup_at_ms, deadline_ms FROM state_event_outbox WHERE stream_route_id = ?
           AND operation_sequence < ? AND state IN ('pending', 'parked', 'gap_pending') ORDER BY operation_sequence LIMIT 1`, row.stream_route_id, row.operation_sequence);
@@ -106,7 +113,9 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
           continue;
         }
       }
-      const leased = one(state, "SELECT MIN(lease_until_ms) AS due FROM state_event_outbox WHERE stream_route_id = ? AND lease_until_ms > ?", row.stream_route_id, nowMs);
+      const leased = one(state, `SELECT MIN(lease_until_ms) AS due FROM state_event_outbox
+        WHERE stream_route_id = ? AND lease_until_ms > ? AND (state IN ${cleanupStates}) = ?`,
+      row.stream_route_id, nowMs, cleanup ? 1 : 0);
       if (leased?.due != null) {
         state.storage.sql.exec("UPDATE state_event_outbox SET owner_busy = 1, next_wakeup_at_ms = ? WHERE operation_id = ?", row.deadline_ms > nowMs ? Math.min(row.deadline_ms, leased.due) : leased.due, row.operation_id);
         continue;
@@ -130,7 +139,7 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
       state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 0, lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ?,
         attempts = attempts + ?, scheduled_attempts = scheduled_attempts + ?, control_attempts = control_attempts + ?, control_scheduled = control_scheduled + ? WHERE operation_id = ?`,
       token, nowMs + 30_000, nowMs + 30_000, isControl ? 0 : 1, !isControl && !manual ? 1 : 0, isControl ? 1 : 0, isControl && !manual ? 1 : 0, row.operation_id);
-      result.push({ ...current(state, row.operation_id), wake_generation: row.wake_generation }); streams.add(row.stream_route_id);
+      result.push({ ...current(state, row.operation_id), wake_generation: row.wake_generation }); streams.add(lane);
       if (result.length >= Math.min(remaining, 4 - active)) break;
     }
     await scheduleStorageAlarmInTransaction(state, { nowMs });
