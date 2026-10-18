@@ -1,3 +1,4 @@
+import { handleStateEventDeliverySource } from "../state-events/delivery-source.js";
 import { commitShareableStateEvent, STATE_EVENT_AUTHORITY_HEADER, STATE_EVENT_AUTHORITY_VALUE } from "../state-events/shareable-commit.js";
 import { maintainStateEventOutbox, stateEventOutboxExists } from "../state-events/outbox.js";
 import { recoverStorageAlarm } from "../storage-alarm.js";
@@ -1722,17 +1723,19 @@ export class ShareableStateRealmBackend {
     const url = new URL(request.url);
     if (
       request.method !== "POST" ||
-      !url.pathname.startsWith(SHAREABLE_STATE_REALM_PATH_PREFIX)
+      !url.pathname.startsWith(SHAREABLE_STATE_REALM_PATH_PREFIX) && !url.pathname.startsWith("/internal/state-events/delivery/")
     ) {
       return new Response("Not found", { status: 404 });
     }
     const operation = url.pathname.slice(SHAREABLE_STATE_REALM_PATH_PREFIX.length);
-    if (!REALM_OPERATIONS.has(operation)) {
+    if (!REALM_OPERATIONS.has(operation) && !url.pathname.startsWith("/internal/state-events/delivery/")) {
       return new Response("Not found", { status: 404 });
     }
     const correlationId =
       request.headers.get("x-correlation-id") ?? crypto.randomUUID();
     try {
+      const delivery = await handleStateEventDeliverySource(this.state, this.env, request, new URL(request.url).pathname, "effective_shareable");
+      if (delivery !== null) return new Response(JSON.stringify(delivery), { headers: { "content-type": "application/json" } });
       let input;
       try {
         input = await request.json();

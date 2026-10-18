@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–5 are complete; implementation steps 6–12 are pending.
+Status: steps 1–6 are complete; implementation steps 7–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -229,6 +229,15 @@ inventing a contiguous stream sequence for an event never appended.
 **Completion evidence:** offline append, full stream, expired intent, duplicate
 append, lost append response, lifecycle movement and both gap paths. Existing
 event-only acceptance and socket tests must remain valid.
+
+Completed 2026-10-18: private owner-verified deferred admission preserves stream
+bounds, ordering and original deadlines without requiring a connected consumer.
+Shared appends use durable registry uncertainty/fencing; retries recover the
+original destination outcome. Both expiry paths retain explicit operation gap
+coverage, producer checks prevent false readiness/drain, and the protected reset
+workflow coordinates an idempotent source/destination checkpoint. See
+[`state-event-delivery.md`](state-event-delivery.md). Automatic relay and command
+execution remain deferred; production combined commands still fail closed.
 
 ### 7. Implement bounded relay, reconnect wakeup and cleanup
 

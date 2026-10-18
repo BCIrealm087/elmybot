@@ -1,3 +1,4 @@
+import { handleStateEventDeliverySource } from "./state-events/delivery-source.js";
 import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
 import { commitLocalStateEvent } from "./state-events/local-commit.js";
 import { maintainStateEventOutbox, stateEventOutboxExists } from "./state-events/outbox.js";
@@ -319,6 +320,8 @@ export class GroupConfig {
     }
 
     try {
+      const delivery = await handleStateEventDeliverySource(this.state, this.env, request, new URL(request.url).pathname, "group_local");
+      if (delivery !== null) return new Response(JSON.stringify(delivery), { headers: { "content-type": "application/json" } });
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
       if (request.method === "POST" && url.pathname === "/internal/state-events/origin/commit-shared") {
         return jsonResponse(await commitPreparedSharedStateEvent(this.state, this.env, await request.json()));

@@ -1,3 +1,4 @@
+import { resolveCombinedAppendBarrier } from "./delivery-authority.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import { shareableStateRealmObjectName } from "../shareable-state/realm-client.js";
 import { storageTableExists } from "../storage-alarm.js";
@@ -10,7 +11,7 @@ export function sourceGroupForAttempt(attempt) {
   const [platform, kind, id] = attempt.identity.originGroupKey.split(":");
   return createPlatformGroupRef({ platform, kind, id });
 }
-async function bounded(call, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs) {
+export async function boundedStateEventCall(call, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw recoveryError("recovery_pending", 503);
   let timer;
@@ -18,7 +19,7 @@ async function bounded(call, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.
     timer = setTimeout(() => reject(recoveryError("outcome_unknown", 503)), remaining);
   })]); } finally { clearTimeout(timer); }
 }
-function initialize(state) {
+export function initializeStateEventBarriers(state) {
   state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS state_event_commit_barriers (
     operation_id TEXT PRIMARY KEY, source_group_key TEXT NOT NULL, owner_key TEXT NOT NULL,
     attempt_json TEXT NOT NULL, bytes INTEGER NOT NULL);
@@ -26,23 +27,28 @@ function initialize(state) {
     CREATE TABLE IF NOT EXISTS state_event_barrier_budget (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), rows INTEGER NOT NULL, bytes INTEGER NOT NULL);
     INSERT OR IGNORE INTO state_event_barrier_budget VALUES (1, 0, 0);`);
 }
-function removeBarrier(state, row) {
+export function removeStateEventBarrier(state, row) {
   state.storage.transactionSync(() => {
     const deleted = state.storage.sql.exec("DELETE FROM state_event_commit_barriers WHERE operation_id = ? RETURNING bytes", row.operation_id).toArray()[0];
     if (deleted) state.storage.sql.exec("UPDATE state_event_barrier_budget SET rows = rows - 1, bytes = bytes - ?", deleted.bytes);
   });
 }
-async function resolveBarrier(registry, row, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs) {
+export async function resolveStateEventBarrier(registry, row, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs) {
   const attempt = JSON.parse(row.attempt_json);
+  if (attempt.kind === "append") {
+    const outcome = await resolveCombinedAppendBarrier(registry, attempt, deadline);
+    removeStateEventBarrier(registry.state, row);
+    return outcome;
+  }
   const owner = createStateEventOwnerClient(registry.env);
   let outcome;
   try {
-    outcome = await bounded(() => owner.lookup(attempt), deadline);
-    if (outcome.state !== "committed") outcome = await bounded(() => owner.fence(attempt), deadline);
+    outcome = await boundedStateEventCall(() => owner.lookup(attempt), deadline);
+    if (outcome.state !== "committed") outcome = await boundedStateEventCall(() => owner.fence(attempt), deadline);
     if (outcome?.state === "committed" && outcome.receipt?.operationId !== attempt.identity.operationId) throw recoveryError("outcome_unknown", 503);
     if (!["committed", "fenced"].includes(outcome?.state)) throw recoveryError("outcome_unknown", 503);
   } catch { throw recoveryError("outcome_unknown", 503); }
-  removeBarrier(registry.state, row);
+  removeStateEventBarrier(registry.state, row);
   return outcome;
 }
 export async function recoverStateEventBarriers(registry, groupKeys = null) {
@@ -55,7 +61,7 @@ export async function recoverStateEventBarriers(registry, groupKeys = null) {
   const started = Date.now();
   for (const [index, row] of rows.slice(0, STATE_EVENT_BARRIER_LIMITS.batch).entries()) {
     if (index && Date.now() - started >= STATE_EVENT_BARRIER_LIMITS.timeoutMs) throw recoveryError("recovery_pending", 503);
-    await resolveBarrier(registry, row, started + STATE_EVENT_BARRIER_LIMITS.timeoutMs);
+    await resolveStateEventBarrier(registry, row, started + STATE_EVENT_BARRIER_LIMITS.timeoutMs);
   }
   if (rows.length > STATE_EVENT_BARRIER_LIMITS.batch) throw recoveryError("recovery_pending", 503);
 }
@@ -69,12 +75,18 @@ export async function commitWithStateEventBindingAuthority(registry, raw) {
       identity.environment !== registry.env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT ||
       !["discord", "twitch"].includes(route.targetPlatform)) throw recoveryError("invalid_route", 422);
   if (await fingerprint(request) !== attempt.preparedFingerprint) throw recoveryError("source_conflict");
-  initialize(registry.state);
+  initializeStateEventBarriers(registry.state);
   const existing = registry.state.storage.sql.exec("SELECT * FROM state_event_commit_barriers WHERE operation_id = ?", identity.operationId).toArray()[0];
+  if (existing && JSON.parse(existing.attempt_json).kind === "append") {
+    const owner = createStateEventOwnerClient(registry.env);
+    const committed = await boundedStateEventCall(() => owner.lookup(attempt));
+    if (committed.state === "committed") return committed;
+    throw recoveryError("outcome_unknown", 503);
+  }
   if (existing) {
     const old = JSON.parse(existing.attempt_json);
     if (!sameIdentity(old.identity, identity) || old.preparedFingerprint !== attempt.preparedFingerprint || old.epoch > attempt.epoch) throw recoveryError("source_conflict");
-    const prior = await resolveBarrier(registry, existing);
+    const prior = await resolveStateEventBarrier(registry, existing);
     if (prior.state === "committed") return prior;
     if (old.epoch === attempt.epoch) throw recoveryError("attempt_fenced");
   }
@@ -82,7 +94,7 @@ export async function commitWithStateEventBindingAuthority(registry, raw) {
   if (binding.status !== "ready" || binding.revision !== route.bindingRevision || binding.sourceKey !== route.key) {
     const owner = createStateEventOwnerClient(registry.env);
     let prior;
-    try { prior = await bounded(() => owner.fence(attempt)); } catch { throw recoveryError("outcome_unknown", 503); }
+    try { prior = await boundedStateEventCall(() => owner.fence(attempt)); } catch { throw recoveryError("outcome_unknown", 503); }
     if (prior.state === "committed" && prior.receipt?.operationId === identity.operationId) return prior;
     if (prior.state !== "fenced") throw recoveryError("outcome_unknown", 503);
     throw recoveryError("binding_changed", 409);
@@ -99,7 +111,7 @@ export async function commitWithStateEventBindingAuthority(registry, raw) {
   await registry.state.storage.sync();
   const ns = registry.env.SHAREABLE_STATE_REALM;
   let response;
-  try { response = await bounded(() => ns.get(ns.idFromName(route.key)).fetch("https://realm/internal/shareable-state/realm/state-event-commit", {
+  try { response = await boundedStateEventCall(() => ns.get(ns.idFromName(route.key)).fetch("https://realm/internal/shareable-state/realm/state-event-commit", {
     method: "POST", headers: { "content-type": "application/json", [STATE_EVENT_AUTHORITY_HEADER]: STATE_EVENT_AUTHORITY_VALUE },
     body: JSON.stringify({ realm: route.realm, namespace: route.namespace, storage: input })
   })); } catch { throw recoveryError("outcome_unknown", 503); }
@@ -109,13 +121,13 @@ export async function commitWithStateEventBindingAuthority(registry, raw) {
     // uncertainty budget. Fence it before clearing the locator so a delayed
     // duplicate of the rejected attempt cannot later become admissible.
     if (response.status >= 400 && response.status < 500) {
-      const prior = await resolveBarrier(registry, { operation_id: identity.operationId, attempt_json: json });
+      const prior = await resolveStateEventBarrier(registry, { operation_id: identity.operationId, attempt_json: json });
       if (prior.state === "committed") return prior;
     }
     throw new StateEventRecoveryError(outcome?.code ?? "state_event_outcome_unknown", response.status);
   }
   if (outcome?.state !== "committed" || outcome.receipt?.operationId !== identity.operationId) throw recoveryError("outcome_unknown", 503);
-  removeBarrier(registry.state, { operation_id: identity.operationId });
+  removeStateEventBarrier(registry.state, { operation_id: identity.operationId });
   return outcome;
 }
 

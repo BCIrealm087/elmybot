@@ -4,7 +4,8 @@ Status: declaration, validation and pure preview support implemented in roadmap
 step 2. Step 3 adds the private [identity/recovery protocol](state-event-recovery.md).
 Steps 4–5 add [private local atomic storage](state-event-local-storage.md) and
 [shared storage with lifecycle authority](state-event-shareable-storage.md).
-Production command acceptance and delivery remain blocked.
+Step 6 adds [private deferred admission and gap/reset handling](state-event-delivery.md).
+Production command acceptance and automatic delivery remain blocked.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework
@@ -16,7 +17,9 @@ Production command execution for the new `stateEvents` service currently fails
 with `state_event_not_implemented` (503), after authorization/mode checks and
 before cooldown claims or feature execution. An environment flag or injected
 runtime service cannot enable it. The production service and existing stream
-publication/append/grant paths also reject combined streams. No installed health
+publication/append paths also reject combined streams. Protected combined grant
+issuance now checks producer authority and coordinates an explicit reset when
+requested; it does not enable command execution. No installed health
 feature, existing stream version, database, or credential is migrated in step 2.
 
 The contributor runtime provides a separate synchronous calculation preview.

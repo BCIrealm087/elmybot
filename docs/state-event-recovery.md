@@ -4,7 +4,8 @@ Roadmap step 3 implements an internal persistence protocol. Production combined
 commands still return `state_event_not_implemented`. The group-local
 state/revision/outbox adapter and scheduling are implemented in step 4;
 [shared acceptance and lifecycle checks](state-event-shareable-storage.md) are
-implemented in step 5. Relay and destination admission come later.
+implemented in step 5. [Destination admission and gap/reset handling](state-event-delivery.md)
+are implemented in step 6; automatic relay comes later.
 None of the modules under `src/state-events/` are feature API exports.
 
 ## Identity and immutable input

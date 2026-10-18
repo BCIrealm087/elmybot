@@ -3,9 +3,8 @@
 Roadmap step 4 implements the private `GroupConfig` storage adapter. Combined
 command execution remains blocked with `state_event_not_implemented`; no feature
 or existing stream is migrated. [Shareable acceptance](state-event-shareable-storage.md)
-is implemented in step 5; deferred append
-and gap transport are step 6, relay is step 7, and operational enablement follows
-later. These internals are not stable feature API exports.
+is implemented in step 5 and [deferred append/gap handling](state-event-delivery.md)
+in step 6. Automatic relay is step 7, and operational enablement follows later. These internals are not stable feature API exports.
 
 ## Commit boundary
 
@@ -86,7 +85,7 @@ state/event outbox. The existing notification schedulers use that same decision,
 so neither can delete an event wakeup or overwrite earlier work. `GroupConfig`
 constructor recovery rediscovers outbox work after eviction.
 
-Until the deferred append and relay stages exist, the first durable wakeup parks
+Until automatic relay is integrated in step 7, the first durable wakeup parks
 an intent at its original event deadline. Deadline maintenance removes its
 payload and preserves a bounded `gap_pending` record. It does not declare
 successful delivery, release the authoritative receipt, manufacture a stream

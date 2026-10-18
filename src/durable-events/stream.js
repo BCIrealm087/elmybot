@@ -1,3 +1,5 @@
+import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
+import { StateEventRecoveryError, recoveryError } from "../state-events/identity.js";
 import {
   DURABLE_EVENT_CODES,
   DURABLE_EVENT_LIMITS,
@@ -130,17 +132,17 @@ function requireInternal(request) {
   }
 }
 
-function declaration(registry, featureId, streamId, version) {
+function declaration(registry, featureId, streamId, version, combined = false) {
   const definition = registry?.eventStreams?.[`${featureId}:${streamId}:v${version}`]?.definition ?? null;
-  // Combined append, grants and socket admission require the later storage and
-  // delivery steps; the existing event-only paths must never accept this mode.
-  if (definition?.publication) {
+  // Only private owner-verified admission and coordinated grant/reset paths may
+  // select the combined mode. Ordinary publication keeps its original guard.
+  if (definition?.publication && !combined) {
     throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 503 });
   }
   return definition;
 }
 
-async function validateAppendInput(input, registry) {
+async function validateAppendInput(input, registry, combined = false) {
   if (
     typeof input !== "object" ||
     input === null ||
@@ -156,7 +158,7 @@ async function validateAppendInput(input, registry) {
   ) {
     throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
   }
-  const stream = declaration(registry, input.featureId, input.streamId, input.version);
+  const stream = declaration(registry, input.featureId, input.streamId, input.version, combined);
   if (!stream || stream.scope.kind !== input.route.descriptor?.scopeKind) {
     throw durableEventError(DURABLE_EVENT_CODES.serviceUnavailable, { status: 422 });
   }
@@ -335,6 +337,7 @@ function applyBindingNotification(state, input) {
 }
 
 function pruneExpired(state, nowMs) {
+  pruneCombinedRecords(state, nowMs);
   return state.storage.transactionSync(() => {
     const sql = state.storage.sql;
     const expired = one(
@@ -345,6 +348,7 @@ function pruneExpired(state, nowMs) {
       nowMs
     );
     if (Number(expired?.total ?? 0) > 0) {
+      recordExpiredCombinedEvents(state, nowMs);
       sql.exec("DELETE FROM durable_event_stream_events WHERE expires_at_ms <= ?", nowMs);
       sql.exec(
         `UPDATE durable_event_stream_metadata
@@ -471,7 +475,8 @@ function publicEvent(row, grant) {
     cursor: row.cursor,
     acceptedAt: new Date(Number(row.accepted_at_ms)).toISOString(),
     expiresAt: new Date(Number(row.expires_at_ms)).toISOString(),
-    payload: JSON.parse(row.payload_json)
+    payload: JSON.parse(row.payload_json),
+    ...(row.state_event_json ? { stateEvent: JSON.parse(row.state_event_json) } : {})
   };
 }
 
@@ -494,7 +499,7 @@ function sendNextEvent(state, socket) {
       DURABLE_EVENT_SOCKET_CLOSE_CODES.replaced);
     return false;
   }
-  if (meta.gap_first_sequence !== null) {
+  if ((meta.gap_first_sequence !== null || combinedGap(state))) {
     detachSocket(state, attachment);
     sendStatus(socket, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
     return false;
@@ -510,12 +515,12 @@ function sendNextEvent(state, socket) {
       Number(attachment.acknowledgedSequence ?? 0)) return false;
   const row = one(
     sql,
-    `SELECT sequence, event_id, cursor, payload_json, accepted_at_ms, expires_at_ms
+    `SELECT sequence, event_id, cursor, payload_json, accepted_at_ms, expires_at_ms, state_event_json
      FROM durable_event_stream_events WHERE sequence > ? ORDER BY sequence LIMIT 1`,
     Number(meta.acknowledged_sequence)
   );
   if (!row) {
-    if (grantMoved(sql, grantRowValue)) {
+    if (grantMoved(sql, grantRowValue) && !one(sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'")) {
       detachSocket(state, attachment);
       sendStatus(socket, DURABLE_EVENT_SOCKET_STATUS.streamMoved);
     }
@@ -539,6 +544,18 @@ function sendNextEvent(state, socket) {
     sentCursor: row.cursor
   });
   return true;
+}
+
+async function finishCombinedMovedStream(state, env) {
+  const meta = metadata(state.storage.sql);
+  if (Number(meta.retained_count) || meta.gap_first_sequence !== null || combinedGap(state) ||
+      !one(state.storage.sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'")) return;
+  const grant = meta.consumer_grant_id ? grantRow(state.storage.sql, meta.consumer_grant_id) : null;
+  if (!grantMoved(state.storage.sql, grant)) return;
+  try {
+    const status = await combinedSourceStatus(state, env, JSON.parse(meta.descriptor_json), meta.route_id);
+    if (status.pending === 0 && !status.gap && !status.unresolvedGap && !status.reset) terminateSockets(state, DURABLE_EVENT_SOCKET_STATUS.streamMoved);
+  } catch { /* Unknown producer authority cannot prove a complete drain. */ }
 }
 
 function terminateInvalidSockets(state, env, nowMs = Date.now()) {
@@ -576,14 +593,15 @@ function normalizedGrantLookup(input, { secret = true } = {}) {
   return input;
 }
 
-async function issueGrant(state, registry, input) {
+async function issueGrant(state, env, registry, input) {
   const grant = input?.grant;
   const route = grant?.route;
   const definition = declaration(
     registry,
     grant?.stream?.feature,
     grant?.stream?.stream,
-    grant?.stream?.version
+    grant?.stream?.version,
+    true
   );
   if (
     !definition ||
@@ -626,6 +644,26 @@ async function issueGrant(state, registry, input) {
     });
   }
   const nowMs = grant.issuedAtMs;
+  // Validate physical/binding scope before a coordinated reset can discard source work.
+  const currentMeta = metadata(state.storage.sql);
+  if ((currentMeta.route_id !== null && currentMeta.route_id !== route.routeId) ||
+      (currentMeta.descriptor_json !== null && currentMeta.descriptor_json !== JSON.stringify(route.descriptor)) ||
+      (definition.scope.kind === "group_local" && route.descriptor.realmIdentity !== `${grant.target.platform}:${grant.target.platform === "discord" ? "guild" : "channel"}:${grant.target.groupId}`)) {
+    throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
+  }
+  if (definition.scope.kind === "effective_shareable") state.storage.transactionSync(() => requireEffectiveBinding(state.storage.sql, {
+    definition, binding: { sourceGroupKey: route.binding.sourceGroup.key, targetPlatform: route.binding.targetPlatform,
+      revision: route.binding.revision, sourceKey: route.binding.sourceKey }
+  }));
+  const previous = grantRow(state.storage.sql, input.grantId);
+  if (previous) {
+    if (previous.secret_digest !== input.secretDigest || previous.route_id !== route.routeId) throw durableEventError(DURABLE_EVENT_CODES.sourceConflict, { status: 409 });
+    if (definition.publication && input.resetBacklog) await finishCombinedReset(state, env, {
+      owner: { kind: route.descriptor.scopeKind, key: route.descriptor.realmIdentity }, routeId: route.routeId, resetId: input.grantId
+    });
+    return { created: true, reset: null };
+  }
+  const coordinated = definition.publication ? await prepareCombinedGrant(state, env, input) : null;
   const resetId = crypto.randomUUID();
   const result = state.storage.transactionSync(() => {
     const sql = state.storage.sql;
@@ -659,11 +697,12 @@ async function issueGrant(state, registry, input) {
       });
     }
     meta = metadata(sql);
-    if (meta.gap_first_sequence !== null && !input.resetBacklog) {
+    if ((meta.gap_first_sequence !== null || combinedGap(state)) && !input.resetBacklog) {
       throw durableEventError(DURABLE_EVENT_CODES.gapRequiresReset, { status: 409 });
     }
     let reset = null;
     if (input.resetBacklog) {
+      commitCombinedReset(state, coordinated, input.actor);
       reset = meta.gap_first_sequence === null ? null : {
         firstSequence: Number(meta.gap_first_sequence),
         lastSequence: Number(meta.gap_last_sequence)
@@ -760,6 +799,7 @@ async function issueGrant(state, registry, input) {
     });
   }
   state.waitUntil(scheduleNextAlarm(state));
+  await finishCombinedReset(state, env, coordinated);
   return { created: result.created, reset: result.reset };
 }
 
@@ -795,8 +835,8 @@ function revokeGrant(state, rawInput) {
   return { status: "revoked" };
 }
 
-async function append(state, registry, rawInput) {
-  const input = await validateAppendInput(rawInput, registry);
+async function append(state, registry, rawInput, options = {}) {
+  const input = await validateAppendInput(rawInput, registry, options.combined === true);
   const nowMs = Date.now();
   if (pruneExpired(state, nowMs) > 0) {
     terminateSockets(state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
@@ -874,7 +914,7 @@ async function append(state, registry, rawInput) {
     ) {
       throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
     }
-    if (meta.gap_first_sequence !== null) {
+    if ((meta.gap_first_sequence !== null || combinedGap(state))) {
       throw durableEventError(DURABLE_EVENT_CODES.gapRequiresReset, { status: 409 });
     }
     const epoch = Number(meta.consumer_epoch ?? 0);
@@ -887,8 +927,8 @@ async function append(state, registry, rawInput) {
       Number(selectedGrant.binding_revision) === Number(input.route.bindingRevision) &&
       !grantMoved(sql, selectedGrant);
     const socketIsViable = epoch === 0 || currentSocket(state, meta) !== null;
-    if (Number(meta.consumer_ready) !== 1 ||
-        (epoch > 0 && (!grantIsViable || !socketIsViable))) {
+    if (!options.combined && (Number(meta.consumer_ready) !== 1 ||
+        (epoch > 0 && (!grantIsViable || !socketIsViable)))) {
       throw durableEventError(DURABLE_EVENT_CODES.consumerUnavailable, { status: 409 });
     }
     const ingress = Number(one(
@@ -904,20 +944,19 @@ async function append(state, registry, rawInput) {
     ) {
       throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
     }
+    options.guard?.();
+    if (options.combined && options.expiresAtMs <= Date.now()) throw recoveryError("intent_expired", 409);
     const sequence = Number(meta.next_sequence);
     if (!Number.isSafeInteger(sequence) || sequence < 1 ||
         sequence === Number.MAX_SAFE_INTEGER) {
       throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 409 });
     }
-    const receiptMetadataBytes = Number(one(
-      sql,
-      `SELECT COALESCE(SUM(metadata_bytes), 0) AS total
-       FROM durable_event_stream_receipts`
-    )?.total ?? 0);
-    const receiptRows = Number(one(
-      sql,
-      "SELECT COUNT(*) AS total FROM durable_event_stream_receipts"
-    )?.total ?? 0);
+    const aggregate = one(sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'")
+      ? one(sql, "SELECT rows, bytes FROM state_event_destination_budget") : null;
+    const receiptMetadataBytes = aggregate ? Number(aggregate.bytes) : Number(one(sql,
+      "SELECT COALESCE(SUM(metadata_bytes), 0) AS total FROM durable_event_stream_receipts")?.total ?? 0);
+    const receiptRows = aggregate ? Number(aggregate.rows) : Number(one(sql,
+      "SELECT COUNT(*) AS total FROM durable_event_stream_receipts")?.total ?? 0);
     const metadataBytes =
       input.eventId.length + input.fingerprint.length + cursor.length + 32;
     if (
@@ -927,7 +966,7 @@ async function append(state, registry, rawInput) {
     ) {
       throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
     }
-    const expiresAtMs = nowMs + DURABLE_EVENT_LIMITS.retentionMs;
+    const expiresAtMs = options.expiresAtMs ?? nowMs + DURABLE_EVENT_LIMITS.retentionMs;
     const receiptExpiresAtMs = nowMs + DURABLE_EVENT_LIMITS.receiptRetentionMs;
     sql.exec(
       `INSERT INTO durable_event_stream_events
@@ -973,7 +1012,10 @@ async function append(state, registry, rawInput) {
       sequence + 1,
       input.payloadBytes
     );
-    return { replayed: false, sequence, acceptedAtMs: nowMs };
+    if (options.stateEvent) sql.exec("UPDATE durable_event_stream_events SET state_event_json = ? WHERE event_id = ?", JSON.stringify(options.stateEvent), input.eventId);
+    const receipt = { replayed: false, sequence, acceptedAtMs: nowMs };
+    options.commit?.(receipt);
+    return receipt;
   });
   const socket = currentSocket(state);
   if (socket) sendNextEvent(state, socket);
@@ -1049,7 +1091,7 @@ function readyFrame(row) {
   };
 }
 
-function registerSocket(state, env, socket, attachment) {
+async function registerSocket(state, env, socket, attachment) {
   if (env?.DURABLE_EVENT_STREAMS_ENABLED !== "true") {
     socketFailure("Durable event streams are unavailable.", {
       status: 503,
@@ -1065,11 +1107,17 @@ function registerSocket(state, env, socket, attachment) {
   }, nowMs, { secret: false }) !== "active") {
     socketFailure("Durable-event grant is not active.");
   }
+  const metaBefore = metadata(state.storage.sql);
+  const descriptor = metaBefore.descriptor_json ? JSON.parse(metaBefore.descriptor_json) : null;
+  if (descriptor && one(state.storage.sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'")) {
+    const status = await combinedSourceStatus(state, env, descriptor, attachment.routeId);
+    if (status.gap || status.unresolvedGap || status.reset) throw recoveryError("gap_requires_reset", 409);
+  }
   const priorSockets = streamSockets(state).filter((candidate) => candidate !== socket);
   const registered = state.storage.transactionSync(() => {
     const sql = state.storage.sql;
     const meta = metadata(sql);
-    if (meta.route_id !== attachment.routeId || meta.gap_first_sequence !== null) {
+    if (meta.route_id !== attachment.routeId || (meta.gap_first_sequence !== null || combinedGap(state))) {
       socketFailure("Durable-event stream is unavailable.");
     }
     const currentGrant = grantRow(sql, attachment.grantId);
@@ -1219,7 +1267,8 @@ export async function handleDurableEventSocketMessage(state, env, socket, messag
           !hasOnlyKeys(input, new Set(["protocol", "type"]))) {
         socketFailure("The first durable-event socket message must register.");
       }
-      registerSocket(state, env, socket, attachment);
+      await registerSocket(state, env, socket, attachment);
+      await finishCombinedMovedStream(state, env);
       return;
     }
     if (input.type !== DURABLE_EVENT_SOCKET_TYPES.acknowledge ||
@@ -1228,6 +1277,7 @@ export async function handleDurableEventSocketMessage(state, env, socket, messag
       socketFailure("Durable-event socket control message is invalid.");
     }
     acknowledgeSocketEvent(state, socket, attachment, input.cursor);
+    await finishCombinedMovedStream(state, env);
   } catch (error) {
     detachSocket(state, attachment);
     safeSend(socket, {
@@ -1366,6 +1416,9 @@ export function initializeDurableEventStreamTables(state) {
       );
     }
   }
+  if (!tableColumns("durable_event_stream_events").has("state_event_json")) {
+    state.storage.sql.exec("ALTER TABLE durable_event_stream_events ADD COLUMN state_event_json TEXT");
+  }
   if (!tableColumns("durable_event_stream_events").has("cursor")) {
     state.storage.sql.exec("ALTER TABLE durable_event_stream_events ADD COLUMN cursor TEXT");
   }
@@ -1429,21 +1482,32 @@ export class DurableEventStreamBackend {
       if (request.method === "GET" && url.pathname === DURABLE_EVENT_SOCKET_INTERNAL_PATH) {
         return acceptDurableEventSocket(this.state, this.env, request);
       }
+      if (request.method === "POST" && url.pathname.startsWith(COMBINED_STREAM_PATH)) {
+        if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
+        const operation = url.pathname.slice(COMBINED_STREAM_PATH.length);
+        if (!["append", "lookup", "fence", "gap", "confirm"].includes(operation)) throw recoveryError("invalid_request", 404);
+        const result = await combinedAppend(this.state, this.env, this.registry, await request.json(), operation,
+          (input, options) => append(this.state, this.registry, input, options));
+        if (result.state === "gap") terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
+        return json(result);
+      }
       if (request.method === "POST" && url.pathname === DURABLE_EVENT_APPEND_PATH) {
         return json(await append(this.state, this.registry, await request.json()));
       }
       if (request.method === "POST" && url.pathname === DURABLE_EVENT_BINDING_PATH) {
         const result = applyBindingNotification(this.state, await request.json());
-        if (!result.stale && Number(metadata(this.state.storage.sql).retained_count) === 0) {
+        if (!result.stale && Number(metadata(this.state.storage.sql).retained_count) === 0 &&
+            !one(this.state.storage.sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'")) {
           terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.streamMoved);
         }
+        await finishCombinedMovedStream(this.state, this.env);
         return json(result);
       }
       if (request.method === "POST" && url.pathname.startsWith(`${DURABLE_EVENT_GRANT_PATH}/`)) {
         const operation = url.pathname.slice(`${DURABLE_EVENT_GRANT_PATH}/`.length);
         const input = await request.json();
         if (operation === "issue") {
-          return json(await issueGrant(this.state, this.registry, input), 201);
+          return json(await issueGrant(this.state, this.env, this.registry, input), 201);
         }
         if (operation === "validate") {
           return json(validateGrant(this.state, input));
@@ -1459,7 +1523,7 @@ export class DurableEventStreamBackend {
       }
       return new Response("Not Found", { status: 404 });
     } catch (cause) {
-      if (cause instanceof DurableEventError || cause instanceof DurableEventGrantError) {
+      if (cause instanceof StateEventRecoveryError || cause instanceof DurableEventError || cause instanceof DurableEventGrantError) {
         return json({ error: cause.message, code: cause.code }, cause.status);
       }
       logError("durable_event.stream_failed", {
@@ -1483,7 +1547,8 @@ export class DurableEventStreamBackend {
     const activeGrant = meta.consumer_grant_id
       ? grantRow(this.state.storage.sql, meta.consumer_grant_id)
       : null;
-    if (Number(meta.retained_count) === 0 && grantMoved(this.state.storage.sql, activeGrant)) {
+    if (Number(meta.retained_count) === 0 && grantMoved(this.state.storage.sql, activeGrant) &&
+        !one(this.state.storage.sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'")) {
       terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.streamMoved);
     }
     await scheduleNextAlarm(this.state);

@@ -1,3 +1,4 @@
+import { appendWithStateEventBindingAuthority } from "../state-events/delivery-authority.js";
 import { commitWithStateEventBindingAuthority, recoverLifecycleStateEvents } from "../state-events/binding-authority.js";
 import { STATE_EVENT_ORIGIN_HEADER } from "../state-events/shareable-commit.js";
 import { recoveryError, StateEventRecoveryError } from "../state-events/identity.js";
@@ -3381,6 +3382,11 @@ export class IntegrationRegistry {
         return noStoreJson(await this.resolveEffectiveShareableState(
           await request.json()
         ));
+      }
+      if (request.method === "POST" && url.pathname === "/state-events/append") {
+        if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
+        const input = await request.json();
+        return noStoreJson(await this.withBindingAuthority(() => appendWithStateEventBindingAuthority(this, input)));
       }
       if (request.method === "POST" && url.pathname === "/state-events/commit") {
         if (request.headers.get(STATE_EVENT_ORIGIN_HEADER) !== "prepared-v1") throw recoveryError("origin_required", 403);
