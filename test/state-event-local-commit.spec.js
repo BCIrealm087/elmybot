@@ -177,8 +177,8 @@ describe("group-local atomic state/event commit", () => {
     expect(await f.commit(pending)).toEqual(accepted);
     await runInDurableObject(f.stub, (_i, state) => state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0"));
     expect(await runDurableObjectAlarm(f.stub)).toBe(true);
-    const parked = await f.snapshot(); expect(parked.outbox).toHaveLength(1); expect(parked.outbox[0].state).toBe("parked");
-    expect(parked.alarm).toBe(accepted.receipt.expiresAtMs);
+    const parked = await f.snapshot(); expect(parked.outbox).toHaveLength(1); expect(parked.outbox[0].attempts).toBe(1);
+    expect(parked.alarm).not.toBeNull(); expect(parked.alarm).toBeLessThan(accepted.receipt.expiresAtMs);
     expect(JSON.parse(parked.values[0].value_json)).toBe(90);
   });
 
@@ -203,7 +203,7 @@ describe("group-local atomic state/event commit", () => {
     await runInDurableObject(f.stub, (_i, state) => maintainStateEventOutbox(state, accepted.receipt.expiresAtMs));
     const expired = await f.snapshot(); expect(expired.outbox[0].state).toBe("gap_pending");
     expect(JSON.parse(expired.outbox[0].intent_json)).not.toHaveProperty("payload");
-    expect(JSON.parse(expired.outbox[0].intent_json).gapPending).toBe(true); expect(expired.alarm).toBeNull();
+    expect(JSON.parse(expired.outbox[0].intent_json).gapPending).toBe(true); expect(expired.alarm).not.toBeNull();
     expect(await f.commit(pending)).toEqual(accepted); expect((await f.snapshot()).outbox).toHaveLength(1);
   });
   it("checks a committed receipt before changed declarations, configuration or state can recompute a result", async () => {
@@ -360,7 +360,7 @@ describe("group-local atomic state/event commit", () => {
       await f.commit(pending);
     }
     await runInDurableObject(f.stub, async (_i, state) => {
-      state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0");
+      state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0, deadline_ms = 0");
       expect(await maintainStateEventOutbox(state)).toEqual({ examined: 20 });
       await maintainStateEventOutbox(state);
     });

@@ -9,7 +9,7 @@ export async function callCombinedStream(env, input, operation) {
     body: JSON.stringify({ ...input, authority: "registry-v1" })
   });
   const result = await response.json();
-  if (!response.ok) throw Object.assign(recoveryError("outcome_unknown", response.status), { code: result.code });
+  if (!response.ok) throw Object.assign(recoveryError("outcome_unknown", response.status), { code: result.code, retryAfterMs: result.retryAfterMs });
   return result;
 }
 export async function resolveCombinedAppendBarrier(registry, input, deadline) {

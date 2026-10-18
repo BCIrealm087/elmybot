@@ -5,7 +5,8 @@ step 2. Step 3 adds the private [identity/recovery protocol](state-event-recover
 Steps 4–5 add [private local atomic storage](state-event-local-storage.md) and
 [shared storage with lifecycle authority](state-event-shareable-storage.md).
 Step 6 adds [private deferred admission and gap/reset handling](state-event-delivery.md).
-Production command acceptance and automatic delivery remain blocked.
+Step 7 adds the private [bounded relay and producer wakeups](state-event-relay.md).
+Production command acceptance remains blocked.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework

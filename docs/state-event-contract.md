@@ -1,9 +1,10 @@
 # Atomic state changes with durable events: contract
 
-Status: normative implementation contract. Steps 2–6 implement declarations,
+Status: normative implementation contract. Steps 2–7 implement declarations,
 preview, private recovery and local/shareable atomic storage with lifecycle
 authority, private deferred admission and gap/reset reconciliation. Production
-combined commands remain blocked; relay and integration follow in steps 7–12.
+combined commands remain blocked; bounded relay is implemented in step 7, with
+[integration and enablement](state-event-roadmap.md) following in steps 8–12.
 This document alone does not enable runtime support.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.

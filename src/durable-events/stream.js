@@ -1,3 +1,4 @@
+import { producerInterestExists, nextProducerWakeup, queueProducerWakeup, drainProducerWakeup } from "../state-events/producer-wakeup.js";
 import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
 import { StateEventRecoveryError, recoveryError } from "../state-events/identity.js";
 import {
@@ -369,8 +370,8 @@ function pruneExpired(state, nowMs) {
   });
 }
 
-async function scheduleNextAlarm(state) {
-  const next = one(
+async function scheduleNextAlarmInTransaction(state) {
+  let next = one(
     state.storage.sql,
     `SELECT MIN(deadline) AS deadline FROM (
        SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_events
@@ -382,11 +383,24 @@ async function scheduleNextAlarm(state) {
      ) WHERE deadline IS NOT NULL`,
     Date.now()
   )?.deadline;
+  const deadlines = [next, nextProducerWakeup(state)];
+  if (one(state.storage.sql, "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'")) {
+    deadlines.push(one(state.storage.sql, "SELECT MIN(expires_at_ms) AS due FROM state_event_destination_records")?.due);
+  }
+  const available = deadlines.filter((value) => value !== null && value !== undefined);
+  next = available.length ? Math.min(...available.map(Number)) : null;
   if (next === null || next === undefined) {
     await state.storage.deleteAlarm();
     return;
   }
   await state.storage.setAlarm(Math.max(Date.now() + 1, Number(next)));
+}
+
+async function scheduleNextAlarm(state) {
+  return state.storage.transaction(() => scheduleNextAlarmInTransaction(state));
+}
+function wakeProducer(state) {
+  return queueProducerWakeup(state, () => scheduleNextAlarmInTransaction(state));
 }
 
 function sameSecret(left, right) {
@@ -800,6 +814,7 @@ async function issueGrant(state, env, registry, input) {
   }
   state.waitUntil(scheduleNextAlarm(state));
   await finishCombinedReset(state, env, coordinated);
+  if (coordinated) await wakeProducer(state);
   return { created: result.created, reset: result.reset };
 }
 
@@ -942,7 +957,10 @@ async function append(state, registry, rawInput, options = {}) {
         DURABLE_EVENT_LIMITS.maxRetainedBytes ||
       ingress >= DURABLE_EVENT_LIMITS.maxIngressPerSecond
     ) {
-      throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
+      const error = durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
+      if (ingress >= DURABLE_EVENT_LIMITS.maxIngressPerSecond && Number(meta.retained_count) < DURABLE_EVENT_LIMITS.maxRetainedEvents &&
+          Number(meta.retained_bytes) + input.payloadBytes <= DURABLE_EVENT_LIMITS.maxRetainedBytes) error.retryAfterMs = 1000;
+      throw error;
     }
     options.guard?.();
     if (options.combined && options.expiresAtMs <= Date.now()) throw recoveryError("intent_expired", 409);
@@ -1166,6 +1184,7 @@ async function registerSocket(state, env, socket, attachment) {
     return;
   }
   sendNextEvent(state, socket);
+  await wakeProducer(state);
 }
 
 function acknowledgeSocketEvent(state, socket, attachment, cursor) {
@@ -1215,7 +1234,7 @@ function acknowledgeSocketEvent(state, socket, attachment, cursor) {
     });
     sendNextEvent(state, socket);
     state.waitUntil(scheduleNextAlarm(state));
-    return;
+    return true;
   }
   if (cursor === meta.acknowledged_cursor) return;
   const duplicate = one(
@@ -1276,7 +1295,7 @@ export async function handleDurableEventSocketMessage(state, env, socket, messag
         typeof input.cursor !== "string" || !CURSOR_PATTERN.test(input.cursor)) {
       socketFailure("Durable-event socket control message is invalid.");
     }
-    acknowledgeSocketEvent(state, socket, attachment, input.cursor);
+    if (acknowledgeSocketEvent(state, socket, attachment, input.cursor)) await wakeProducer(state);
     await finishCombinedMovedStream(state, env);
   } catch (error) {
     detachSocket(state, attachment);
@@ -1469,6 +1488,7 @@ export class DurableEventStreamBackend {
     this.env = env;
     this.registry = registry;
     initializeDurableEventStreamTables(state);
+    if (producerInterestExists(state)) state.blockConcurrencyWhile(() => scheduleNextAlarm(state));
     state.setWebSocketAutoResponse(new globalThis.WebSocketRequestResponsePair(
       DURABLE_EVENT_SOCKET_PING,
       DURABLE_EVENT_SOCKET_PONG
@@ -1485,10 +1505,12 @@ export class DurableEventStreamBackend {
       if (request.method === "POST" && url.pathname.startsWith(COMBINED_STREAM_PATH)) {
         if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
         const operation = url.pathname.slice(COMBINED_STREAM_PATH.length);
-        if (!["append", "lookup", "fence", "gap", "confirm"].includes(operation)) throw recoveryError("invalid_request", 404);
+        if (!["append", "lookup", "fence", "gap", "confirm", "outcome", "interest", "interest-release"].includes(operation)) throw recoveryError("invalid_request", 404);
+        if (operation === "outcome" && pruneExpired(this.state, Date.now()) > 0) terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
         const result = await combinedAppend(this.state, this.env, this.registry, await request.json(), operation,
           (input, options) => append(this.state, this.registry, input, options));
         if (result.state === "gap") terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
+        if (["interest-release", "confirm", "outcome"].includes(operation)) await scheduleNextAlarm(this.state);
         return json(result);
       }
       if (request.method === "POST" && url.pathname === DURABLE_EVENT_APPEND_PATH) {
@@ -1524,7 +1546,7 @@ export class DurableEventStreamBackend {
       return new Response("Not Found", { status: 404 });
     } catch (cause) {
       if (cause instanceof StateEventRecoveryError || cause instanceof DurableEventError || cause instanceof DurableEventGrantError) {
-        return json({ error: cause.message, code: cause.code }, cause.status);
+        return json({ error: cause.message, code: cause.code, ...(cause.retryAfterMs ? { retryAfterMs: cause.retryAfterMs } : {}) }, cause.status);
       }
       logError("durable_event.stream_failed", {
         platform: "shared",
@@ -1543,6 +1565,7 @@ export class DurableEventStreamBackend {
       terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
     }
     terminateInvalidSockets(this.state, this.env, nowMs);
+    await drainProducerWakeup(this.state, this.env, () => scheduleNextAlarmInTransaction(this.state), nowMs);
     const meta = metadata(this.state.storage.sql);
     const activeGrant = meta.consumer_grant_id
       ? grantRow(this.state.storage.sql, meta.consumer_grant_id)

@@ -2,8 +2,9 @@
 
 Roadmap step 6 adds private source/destination reconciliation to the atomic
 storage adapters. Combined production commands still return
-`state_event_not_implemented`. Automatic relay, reconnect/capacity wakeups and
-terminal source cleanup are step 7; browser snapshot/event correlation is step 8.
+`state_event_not_implemented`. [Automatic relay, reconnect/capacity wakeups and
+terminal source cleanup](state-event-relay.md) are implemented in step 7; browser
+snapshot/event correlation is step 8.
 No feature, existing stream version or deployment is migrated here.
 
 ## Private delivery boundary
@@ -38,7 +39,7 @@ then confirms its durable cache to the destination. Unconfirmed destination
 outcomes have no expiry: they remain charged to finite receipt capacity until
 source confirmation or a coordinated reset resolves them. Confirmed outcomes
 retain the normal minimum receipt window. Source-side acceptance receipts still
-follow the step-3 rules; terminal owner retirement/relay cleanup is step 7.
+follow the step-3 rules; step 7 implements terminal owner retirement/relay cleanup.
 
 ## Shared lifecycle authority
 
@@ -125,8 +126,8 @@ receipt recovery, durable source caching and destination confirmation. Shared
 work also uses registry forwarding and its durable locator. Producer checks run
 on grant/registration and useful lifecycle/acknowledgement events, not polling.
 No periodic consumer probe, producer enumeration or always-running relay is added.
-Automatic outbox alarms still park at the original deadline until step 7 installs
-the bounded relay. Quantitative cost measurement remains step 11.
+Owner alarms now run the [step-7 bounded relay](state-event-relay.md), including
+lease recovery and terminal cleanup. Quantitative cost measurement remains step 11.
 
 `test/state-event-delivery.spec.js` uses real Durable Object SQLite and binding
 forwarding. It covers offline local/shared append, count/bytes/rate/receipt

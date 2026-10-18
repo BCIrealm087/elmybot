@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–6 are complete; implementation steps 7–12 are pending.
+Status: steps 1–7 are complete; implementation steps 8–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -236,8 +236,8 @@ Shared appends use durable registry uncertainty/fencing; retries recover the
 original destination outcome. Both expiry paths retain explicit operation gap
 coverage, producer checks prevent false readiness/drain, and the protected reset
 workflow coordinates an idempotent source/destination checkpoint. See
-[`state-event-delivery.md`](state-event-delivery.md). Automatic relay and command
-execution remain deferred; production combined commands still fail closed.
+[`state-event-delivery.md`](state-event-delivery.md). Automatic relay is implemented in step 7 below; production combined commands
+still fail closed.
 
 ### 7. Implement bounded relay, reconnect wakeup and cleanup
 
@@ -262,6 +262,15 @@ owner's single alarm with existing maintenance correctly.
 **Completion evidence:** prompt recovery after reconnect, fair bounded draining,
 restart recovery, no lost wakeups, no unnecessary alarm after draining, and a
 long-offline simulation with no periodic consumer probes.
+
+Completed 2026-10-18: durable owner alarms now run bounded, leased reconciliation
+with fair stream selection, finite retries and no consumer polling. Durable
+producer interests and versioned reconnect/capacity notifications resume parked
+work without losing wakeups across eviction. Terminal delivery evidence drives
+owner/origin receipt retirement and interest cleanup; exhausted uncertain work
+remains charged and blocks false completeness. Automated restart, backpressure,
+concurrency, timeout, idle and cleanup evidence is documented in
+[`state-event-relay.md`](state-event-relay.md). Command execution remains blocked.
 
 ### 8. Integrate readable state and browser event correlation
 

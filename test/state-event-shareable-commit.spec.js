@@ -173,7 +173,7 @@ describe("shareable atomic state/event acceptance and lifecycle", () => {
     await runInDurableObject(owner, (_i, state) => state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0"));
     expect(await runDurableObjectAlarm(owner)).toBe(true);
     const stored = await f.inspect(record.attempt.route);
-    expect(stored.outbox[0].state).toBe("parked"); expect(stored.alarm).toBe(accepted.receipt.expiresAtMs);
+    expect(stored.outbox[0].attempts).toBe(1); expect(stored.alarm).not.toBeNull(); expect(stored.alarm).toBeLessThan(accepted.receipt.expiresAtMs);
     expect(stored.values[0].value_json).toBe("2");
     expect((await createStateEventOwnerClient(f.env).lookup(record.attempt)).receipt).toEqual(accepted.receipt);
   });

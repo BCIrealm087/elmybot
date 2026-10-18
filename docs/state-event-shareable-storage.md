@@ -2,8 +2,8 @@
 
 Roadmap step 5 implements the private `ShareableStateRealm` adapter. Production
 combined commands still fail with `state_event_not_implemented`; deferred stream
-admission is implemented in [step 6](state-event-delivery.md); relay and command
-integration remain later steps. No health feature, stream version or credential is migrated here. These modules are private
+admission is implemented in [step 6](state-event-delivery.md), and
+[bounded relay/cleanup](state-event-relay.md) in step 7. Command integration remains later. No health feature, stream version or credential is migrated here. These modules are private
 framework implementation, not supported feature imports.
 
 ## Acceptance and owner identity
@@ -87,8 +87,8 @@ another source's owner is unreachable. The registry authority queue serializes
 active calls globally, so an in-flight unavailable owner can delay other queued
 work until its timeout. Cost measurement and tuning remain roadmap step 11.
 Owner alarms reuse the bounded maintenance/scheduling foundation from
-[state-event-local-storage.md](state-event-local-storage.md); delivery is still
-private and explicit in step 6, with automatic relay pending step 7.
+[state-event-local-storage.md](state-event-local-storage.md); private delivery from step 6 is now automatically reconciled by the
+[step-7 relay](state-event-relay.md).
 
 ## Verification
 

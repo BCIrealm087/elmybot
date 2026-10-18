@@ -1,6 +1,6 @@
-import { handleStateEventDeliverySource } from "../state-events/delivery-source.js";
+import { drainStateEventRelay, handleStateEventDeliverySource } from "../state-events/delivery-source.js";
 import { commitShareableStateEvent, STATE_EVENT_AUTHORITY_HEADER, STATE_EVENT_AUTHORITY_VALUE } from "../state-events/shareable-commit.js";
-import { maintainStateEventOutbox, stateEventOutboxExists } from "../state-events/outbox.js";
+import { stateEventOutboxExists } from "../state-events/outbox.js";
 import { recoverStorageAlarm } from "../storage-alarm.js";
 import { DurableEventError } from "../durable-events/contract.js";
 import { recoveryError, StateEventRecoveryError } from "../state-events/identity.js";
@@ -1901,7 +1901,7 @@ export class ShareableStateRealmBackend {
   }
 
   async alarm() {
-    await maintainStateEventOutbox(this.state);
+    await drainStateEventRelay(this.state, this.env);
     if (stateQueryNotificationTablesExist(this.state)) await drainStateQueryNotifications(this.state, this.env);
   }
 }

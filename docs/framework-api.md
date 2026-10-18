@@ -15,7 +15,8 @@ not turn Worker internals into supported extension points.
 The [state-and-event contract](state-event-contract.md) now has additive
 declaration and pure preview support, plus private recovery and local/shareable
 atomic storage with lifecycle authority, private deferred admission and
-[gap/reset reconciliation](state-event-delivery.md).
+[gap/reset reconciliation](state-event-delivery.md), and the private
+[bounded relay and producer wakeups](state-event-relay.md).
 Persistent combined command execution is
 still blocked with `state_event_not_implemented`; existing independent state/event
 service guards remain in force. See [state/event authoring](state-event-authoring.md)

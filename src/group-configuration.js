@@ -1,7 +1,7 @@
-import { handleStateEventDeliverySource } from "./state-events/delivery-source.js";
+import { drainStateEventRelay, handleStateEventDeliverySource, handleStateEventOriginRetirement } from "./state-events/delivery-source.js";
 import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
 import { commitLocalStateEvent } from "./state-events/local-commit.js";
-import { maintainStateEventOutbox, stateEventOutboxExists } from "./state-events/outbox.js";
+import { stateEventOutboxExists } from "./state-events/outbox.js";
 import { recoverStorageAlarm } from "./storage-alarm.js";
 import { StateEventRecoveryError } from "./state-events/identity.js";
 import { handleLocalStateEventOwnerRequest } from "./state-events/owner-handler.js";
@@ -320,6 +320,8 @@ export class GroupConfig {
     }
 
     try {
+      const retirement = await handleStateEventOriginRetirement(this.state, this.env, request, url.pathname);
+      if (retirement !== null) return jsonResponse(retirement);
       const delivery = await handleStateEventDeliverySource(this.state, this.env, request, new URL(request.url).pathname, "group_local");
       if (delivery !== null) return new Response(JSON.stringify(delivery), { headers: { "content-type": "application/json" } });
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
@@ -399,7 +401,7 @@ export class GroupConfig {
   }
 
   async alarm() {
-    await maintainStateEventOutbox(this.state);
+    await drainStateEventRelay(this.state, this.env);
     await drainStateQueryGrantInvalidations(this.state, this.env);
     if (stateQueryNotificationTablesExist(this.state)) {
       await drainStateQueryNotifications(this.state, this.env);

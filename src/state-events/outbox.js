@@ -24,9 +24,25 @@ export function initializeStateEventOutbox(state) {
   if (!state.storage.sql.exec("PRAGMA table_info(state_event_outbox)").toArray().some((column) => column.name === "stream_route_id")) {
     state.storage.sql.exec("ALTER TABLE state_event_outbox ADD COLUMN stream_route_id TEXT");
   }
+  const columns = new Set(state.storage.sql.exec("PRAGMA table_info(state_event_outbox)").toArray().map((column) => column.name));
+  for (const [name, definition] of [
+    ["attempts", "INTEGER NOT NULL DEFAULT 0"], ["scheduled_attempts", "INTEGER NOT NULL DEFAULT 0"],
+    ["control_attempts", "INTEGER NOT NULL DEFAULT 0"], ["control_scheduled", "INTEGER NOT NULL DEFAULT 0"],
+    ["lease_token", "TEXT"], ["lease_until_ms", "INTEGER"], ["destination_confirmed", "INTEGER NOT NULL DEFAULT 0"],
+    ["last_error", "TEXT"], ["uncertain", "INTEGER NOT NULL DEFAULT 0"], ["owner_busy", "INTEGER NOT NULL DEFAULT 0"]
+  ]) if (!columns.has(name)) state.storage.sql.exec(`ALTER TABLE state_event_outbox ADD COLUMN ${name} ${definition}`);
+  const streamColumns = new Set(state.storage.sql.exec("PRAGMA table_info(state_event_source_streams)").toArray().map((column) => column.name));
+  for (const [name, definition] of [
+    ["interest_epoch", "INTEGER NOT NULL DEFAULT 1"], ["registered_epoch", "INTEGER NOT NULL DEFAULT 0"],
+    ["wake_generation", "INTEGER NOT NULL DEFAULT 0"], ["last_wake_version", "INTEGER NOT NULL DEFAULT 0"],
+    ["last_wake_ms", "INTEGER NOT NULL DEFAULT 0"], ["last_sequence", "INTEGER NOT NULL DEFAULT 0"], ["last_served_ms", "INTEGER NOT NULL DEFAULT 0"]
+  ]) if (!streamColumns.has(name)) state.storage.sql.exec(`ALTER TABLE state_event_source_streams ADD COLUMN ${name} ${definition}`);
+  if (!streamColumns.has("last_sequence")) state.storage.sql.exec(`UPDATE state_event_source_streams SET last_sequence =
+    COALESCE((SELECT MAX(operation_sequence) FROM state_event_outbox WHERE stream_route_id = route_id), 0)`);
   for (const row of state.storage.sql.exec("SELECT operation_id, intent_json FROM state_event_outbox WHERE stream_route_id IS NULL LIMIT 100").toArray()) {
     state.storage.sql.exec("UPDATE state_event_outbox SET stream_route_id = ? WHERE operation_id = ?", JSON.parse(row.intent_json).route.streamRouteId, row.operation_id);
   }
+  state.storage.sql.exec("CREATE INDEX IF NOT EXISTS state_event_outbox_expiry ON state_event_outbox(state, deadline_ms)");
   state.storage.sql.exec("CREATE INDEX IF NOT EXISTS state_event_outbox_stream ON state_event_outbox(stream_route_id, operation_sequence)");
 }
 export function allocateStateEventSequence(state, featureId, candidateToken, nowMs) {
@@ -49,7 +65,7 @@ export function enqueueStateEventIntent(state, intent) {
   const json = canonicalJson(intent, STATE_EVENT_OUTBOX_LIMITS.bytes);
   const bytes = jsonBytes(json);
   const budget = one(state, "SELECT * FROM state_event_outbox_budget");
-  if (budget.rows >= STATE_EVENT_OUTBOX_LIMITS.rows || budget.bytes + bytes > STATE_EVENT_OUTBOX_LIMITS.bytes) {
+  if (budget.rows >= STATE_EVENT_OUTBOX_LIMITS.rows || budget.bytes + bytes + (budget.rows + 1) * 512 > STATE_EVENT_OUTBOX_LIMITS.bytes) {
     throw recoveryError("outbox_capacity", 503);
   }
   const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", intent.route.streamRouteId);
@@ -59,37 +75,42 @@ export function enqueueStateEventIntent(state, intent) {
     if (total >= STATE_EVENT_OUTBOX_LIMITS.partitions) throw recoveryError("partition_capacity", 503);
     state.storage.sql.exec("INSERT INTO state_event_source_streams (route_id) VALUES (?)", intent.route.streamRouteId);
   }
-  state.storage.sql.exec("INSERT INTO state_event_outbox VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+  const current = one(state, "SELECT interest_epoch FROM state_event_source_streams WHERE route_id = ?", intent.route.streamRouteId);
+  if (!Number.isSafeInteger(Number(current.interest_epoch) + 1)) throw recoveryError("sequence_exhausted", 409);
+  state.storage.sql.exec(`UPDATE state_event_source_streams SET interest_epoch = interest_epoch + 1,
+    wake_generation = wake_generation + 1, last_sequence = ? WHERE route_id = ?`, intent.stateEvent.operationSequence, intent.route.streamRouteId);
+  // New accepted work is a useful wakeup for the earlier ordered head, within
+  // its existing attempt budgets. It never bypasses a live lease or a reset.
+  state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = MIN(COALESCE(next_wakeup_at_ms, deadline_ms), ?), last_error = 'useful_wakeup'
+    WHERE stream_route_id = ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) AND attempts < 19
+      AND state NOT IN ('retiring', 'gap_recorded', 'reset_discarded')`, intent.committedAtMs + 1000, intent.route.streamRouteId, intent.committedAtMs);
+  state.storage.sql.exec(`INSERT INTO state_event_outbox
+    (operation_id, partition_key, operation_sequence, state, deadline_ms, next_wakeup_at_ms, intent_json, intent_bytes, stream_route_id)
+    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
     intent.operationId, intent.partitionKey ?? intent.featureId, intent.stateEvent.operationSequence, intent.expiresAtMs,
     intent.committedAtMs + 1000, json, bytes, intent.route.streamRouteId);
   state.storage.sql.exec("UPDATE state_event_outbox_budget SET rows = rows + 1, bytes = bytes + ?", bytes);
 }
 
-// The bounded automatic relay is step 7. Step 6 provides explicit reconciliation;
-// until relay integration the first automatic wake parks at the original deadline.
-// Expiry clears payloads and retains bounded gap-pending metadata, never success.
-export async function maintainStateEventOutbox(state, nowMs = Date.now()) {
+// Expiry persists an unresolved gap before removing a payload. It is not proof
+// of an absent append; the relay must still recover the original destination.
+export async function maintainStateEventOutbox(state, nowMs = Date.now(), operationId = null) {
   if (!stateEventOutboxExists(state)) return { examined: 0 };
+  initializeStateEventOutbox(state);
   let examined = 0;
   await state.storage.transaction(async () => {
-    state.storage.transactionSync(() => {
-      const rows = state.storage.sql.exec(`SELECT * FROM state_event_outbox
-        WHERE next_wakeup_at_ms <= ? ORDER BY next_wakeup_at_ms LIMIT ?`, nowMs, STATE_EVENT_OUTBOX_LIMITS.batch).toArray();
-      examined = rows.length;
-      for (const row of rows) {
-        if (row.deadline_ms > nowMs) {
-          state.storage.sql.exec("UPDATE state_event_outbox SET state = 'parked', next_wakeup_at_ms = deadline_ms WHERE operation_id = ?", row.operation_id);
-        } else {
-          const intent = JSON.parse(row.intent_json);
-          delete intent.payload;
-          const json = canonicalJson({ ...intent, gapPending: true });
-          const bytes = jsonBytes(json);
-          state.storage.sql.exec(`UPDATE state_event_outbox SET state = 'gap_pending', next_wakeup_at_ms = NULL,
-            intent_json = ?, intent_bytes = ? WHERE operation_id = ?`, json, bytes, row.operation_id);
-          state.storage.sql.exec("UPDATE state_event_outbox_budget SET bytes = bytes + ?", bytes - row.intent_bytes);
-        }
-      }
-    });
+    const rows = state.storage.sql.exec(`SELECT * FROM state_event_outbox
+      WHERE deadline_ms <= ? AND state IN ('pending', 'parked') AND (? IS NULL OR operation_id = ?)
+      ORDER BY deadline_ms LIMIT ?`, nowMs, operationId, operationId, STATE_EVENT_OUTBOX_LIMITS.batch).toArray();
+    examined = rows.length;
+    for (const row of rows) {
+      const intent = JSON.parse(row.intent_json); delete intent.payload;
+      const json = canonicalJson({ ...intent, gapPending: true }), bytes = jsonBytes(json);
+      state.storage.sql.exec(`UPDATE state_event_outbox SET state = 'gap_pending', intent_json = ?, intent_bytes = ?,
+        next_wakeup_at_ms = CASE WHEN attempts >= 20 THEN NULL WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END WHERE operation_id = ?`,
+      json, bytes, nowMs, nowMs, row.operation_id);
+      state.storage.sql.exec("UPDATE state_event_outbox_budget SET bytes = bytes + ?", bytes - row.intent_bytes);
+    }
     await scheduleStorageAlarmInTransaction(state, { nowMs });
   });
   return { examined };

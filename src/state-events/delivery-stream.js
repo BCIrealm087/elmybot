@@ -1,3 +1,4 @@
+import { registerProducerInterest, releaseProducerInterest } from "./producer-wakeup.js";
 import { durableEventId, durableEventRouteId, serializeDurableEventPayload, sha256Hex, DURABLE_EVENT_CODES, durableEventError, DURABLE_EVENT_LIMITS } from "../durable-events/contract.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { deliverySourceRequest } from "./delivery-source.js";
@@ -71,17 +72,19 @@ export function pruneCombinedRecords(state, nowMs) {
 }
 export async function combinedAppend(state, env, registry, raw, operation, append) {
   const input = JSON.parse(canonicalJson(raw, 8192));
-  if (!/^seo1\.[\w-]{43}$/.test(input.operationId ?? "") || !/^des1\.[\w-]{43}$/.test(input.routeId ?? "") ||
+  if ((operation !== "interest-release" && !/^seo1\.[\w-]{43}$/.test(input.operationId ?? "")) || !/^des1\.[\w-]{43}$/.test(input.routeId ?? "") ||
       env.DURABLE_EVENT_STREAM.idFromName(input.routeId).toString() !== state.id.toString() ||
       !["group_local", "effective_shareable"].includes(input.owner?.kind)) throw recoveryError("invalid_route", 422);
   initialize(state);
+  if (operation === "interest-release") return releaseProducerInterest(state, input.owner, input.routeId, input.epoch);
   const stored = one(state, "SELECT * FROM state_event_destination_records WHERE operation_id = ?", input.operationId);
   // A receipt read/fence needs no producer round trip once the outcome is known.
   const producer = one(state, "SELECT owner_json FROM state_event_destination");
   if (producer && producer.owner_json !== canonicalJson(input.owner)) throw recoveryError("wrong_owner", 422);
   if (stored && operation !== "confirm") {
     const outcome = JSON.parse(stored.outcome_json);
-    if (["appended", "gap"].includes(outcome.state)) return outcome;
+    if (["appended", "gap"].includes(outcome.state) && operation !== "interest") return operation === "outcome"
+      ? terminalDestinationOutcome(state, outcome, stored.operation_sequence) : outcome;
   }
   const proof = await deliverySourceRequest(env, input.owner, "proof", { operationId: input.operationId, routeId: input.routeId });
   const intent = proof.intent;
@@ -100,11 +103,23 @@ export async function combinedAppend(state, env, registry, raw, operation, appen
       intent.stateEvent?.version !== 1 || !/^ses1\.[\w-]{22}$/.test(intent.stateEvent.scopeToken) ||
       !Number.isSafeInteger(intent.stateEvent.operationSequence) || intent.stateEvent.operationSequence < 1 ||
       !Number.isSafeInteger(intent.stateEvent.stateRevision)) throw recoveryError("invalid_receipt", 422);
+  if (operation === "interest") {
+    if (input.epoch !== proof.interestEpoch) throw recoveryError("source_conflict", 409);
+    return state.storage.transactionSync(() => {
+      bindProducer(state, input.owner, descriptor, input.routeId);
+      return registerProducerInterest(state, input.owner, input.routeId, input.epoch);
+    });
+  }
+  if (operation === "outcome") {
+    if (proof.intent.delivery?.state === "appended") return terminalDestinationOutcome(state, proof.intent.delivery, intent.stateEvent.operationSequence);
+    return { state: "absent", operationId: input.operationId };
+  }
   const fingerprint = await sha256Hex(canonicalJson({ operationId: intent.operationId, eventId: intent.eventId,
     committedAtMs: intent.committedAtMs, expiresAtMs: intent.expiresAtMs, stateEvent: intent.stateEvent, routeId: input.routeId }));
   if (stored?.fingerprint && stored.fingerprint !== fingerprint) throw recoveryError("source_conflict", 409);
   const prior = stored ? JSON.parse(stored.outcome_json) : null;
   if (operation === "confirm") {
+    if (!stored && proof.intent.delivery?.state === "appended" && terminalDestinationOutcome(state, proof.intent.delivery, intent.stateEvent.operationSequence).terminal) return { confirmed: true };
     if (!stored || !["appended", "gap_recorded"].includes(proof.state) || proof.intent.delivery?.operationId !== intent.operationId) throw recoveryError("missing_receipt", 409);
     state.storage.sql.exec("UPDATE state_event_destination_records SET expires_at_ms = COALESCE(expires_at_ms, ?) WHERE operation_id = ?",
       Math.max(Date.now(), Number(prior.acceptedAtMs ?? intent.committedAtMs) + DURABLE_EVENT_LIMITS.receiptRetentionMs), intent.operationId);
@@ -210,4 +225,18 @@ export async function finishCombinedReset(state, env, reset) {
   if (!reset) return;
   await deliverySourceRequest(env, reset.owner, "reset-release", { routeId: reset.routeId, resetId: reset.resetId });
   state.storage.sql.exec("UPDATE state_event_destination SET reset_id = NULL WHERE singleton = 1 AND reset_id = ?", reset.resetId);
+}
+
+function terminalDestinationOutcome(state, outcome, operationSequence) {
+  if (outcome.state === "gap") return { ...outcome, terminal: outcome.reason };
+  const reset = one(state, "SELECT reset_checkpoint FROM state_event_destination");
+  if (Number(reset?.reset_checkpoint ?? 0) >= operationSequence) return { ...outcome, terminal: "reset" };
+  const meta = one(state, "SELECT acknowledged_sequence FROM durable_event_stream_metadata");
+  if (Number(meta.acknowledged_sequence) >= outcome.sequence) return { ...outcome, terminal: "acknowledged" };
+  const event = one(state, "SELECT 1 FROM durable_event_stream_events WHERE event_id = ?", outcome.eventId ?? "");
+  // Existing receipts predate eventId in the safe delivery result; sequence is
+  // equally authoritative within this already pinned physical stream.
+  const retained = event || one(state, "SELECT 1 FROM durable_event_stream_events WHERE sequence = ?", outcome.sequence);
+  if (!retained && outcome.expiresAtMs <= Date.now()) return { ...outcome, terminal: "retention" };
+  return { ...outcome, terminal: null };
 }

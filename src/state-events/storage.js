@@ -19,7 +19,13 @@ function initialize(state) {
   state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS state_event_budget (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1), rows INTEGER NOT NULL,
     metadata_bytes INTEGER NOT NULL, pending_rows INTEGER NOT NULL, pending_bytes INTEGER NOT NULL)`);
-  state.storage.sql.exec("INSERT OR IGNORE INTO state_event_budget VALUES (1, 0, 0, 0, 0)");
+  const budgetColumns = state.storage.sql.exec("PRAGMA table_info(state_event_budget)").toArray();
+  if (!budgetColumns.some((column) => column.name === "terminal_reserve_bytes")) {
+    state.storage.sql.exec("ALTER TABLE state_event_budget ADD COLUMN terminal_reserve_bytes INTEGER NOT NULL DEFAULT 0");
+    state.storage.sql.exec(`UPDATE state_event_budget SET terminal_reserve_bytes = 512 * (
+      SELECT COUNT(*) FROM state_event_records WHERE json_extract(metadata_json, '$.pendingDelivery') = 1)`);
+  }
+  state.storage.sql.exec("INSERT OR IGNORE INTO state_event_budget (singleton, rows, metadata_bytes, pending_rows, pending_bytes) VALUES (1, 0, 0, 0, 0)");
 }
 function read(state, key) {
   const row = one(state, "SELECT * FROM state_event_records WHERE record_key = ?", key);
@@ -29,6 +35,7 @@ function remove(state, row) {
   state.storage.sql.exec(`UPDATE state_event_budget SET rows = rows - 1,
     metadata_bytes = metadata_bytes - ?, pending_rows = pending_rows - ?, pending_bytes = pending_bytes - ? WHERE singleton = 1`,
   row.metadata_bytes, row.pending, row.request_bytes);
+  if ((row.metadata ?? JSON.parse(row.metadata_json)).pendingDelivery === true) state.storage.sql.exec("UPDATE state_event_budget SET terminal_reserve_bytes = terminal_reserve_bytes - 512");
   state.storage.sql.exec("DELETE FROM state_event_records WHERE record_key = ?", row.record_key);
 }
 function prune(state, nowMs) {
@@ -39,17 +46,22 @@ function prune(state, nowMs) {
   for (const row of rows) remove(state, row);
 }
 function write(state, key, metadata, request, pruneAtMs = null) {
-  const json = canonicalJson(metadata, LIMITS.maxRecordBytes);
+  const json = canonicalJson(metadata, LIMITS.maxRecordBytes - (metadata.pendingDelivery === true ? 512 : 0));
   const requestJson = request === null ? null : canonicalJson(request);
   const bytes = jsonBytes(json), requestBytes = requestJson === null ? 0 : jsonBytes(requestJson);
   const pending = requestJson === null ? 0 : 1;
   const old = read(state, key);
-  const budget = one(state, "SELECT * FROM state_event_budget WHERE singleton = 1");
+  let budget = one(state, "SELECT * FROM state_event_budget WHERE singleton = 1");
+  if (!Object.hasOwn(budget, "terminal_reserve_bytes")) {
+    initialize(state);
+    budget = one(state, "SELECT * FROM state_event_budget WHERE singleton = 1");
+  }
   const next = { rows: budget.rows + (old ? 0 : 1),
     bytes: budget.metadata_bytes + bytes - (old?.metadata_bytes ?? 0),
     pending: budget.pending_rows + pending - (old?.pending ?? 0),
     requestBytes: budget.pending_bytes + requestBytes - (old?.request_bytes ?? 0) };
-  if (next.rows > LIMITS.maxRows || next.bytes > LIMITS.maxMetadataBytes ||
+  const reserve = Number(budget.terminal_reserve_bytes) + (metadata.pendingDelivery === true ? 512 : 0) - (old?.metadata.pendingDelivery === true ? 512 : 0);
+  if (next.rows > LIMITS.maxRows || next.bytes + reserve > LIMITS.maxMetadataBytes ||
       next.pending > LIMITS.maxPendingRows || next.requestBytes > LIMITS.maxPendingBytes) {
     throw recoveryError("capacity", 503);
   }
@@ -60,6 +72,7 @@ function write(state, key, metadata, request, pruneAtMs = null) {
   key, json, bytes, requestJson, requestBytes, pending, pruneAtMs);
   state.storage.sql.exec(`UPDATE state_event_budget SET rows = ?, metadata_bytes = ?, pending_rows = ?, pending_bytes = ? WHERE singleton = 1`,
     next.rows, next.bytes, next.pending, next.requestBytes);
+  state.storage.sql.exec("UPDATE state_event_budget SET terminal_reserve_bytes = ?", reserve);
 }
 function conflictUnless(condition) {
   if (!condition) throw recoveryError("source_conflict");
@@ -252,5 +265,19 @@ export function markStateEventOriginConfirmed(state, attempt) {
     delete metadata.request;
     const row = read(state, originKey(attempt.identity));
     write(state, originKey(attempt.identity), metadata, null, row.prune_at_ms);
+  });
+}
+
+// Trusted relay bookkeeping. The caller has already recovered a definitive
+// destination terminal outcome; this never creates an acceptance receipt.
+export function retireStoredStateEventOwner(state, operationId, deliveryOutcome, nowMs = Date.now()) {
+  return state.storage.transactionSync(() => {
+    const row = read(state, `owner:${operationId}`);
+    if (!row?.metadata.receipt) throw recoveryError("missing_receipt", 503);
+    write(state, row.record_key, { ...row.metadata, pendingDelivery: false, deliveryOutcome }, null,
+      row.metadata.originConfirmed ? Math.max(row.metadata.receipt.committedAtMs + LIMITS.receiptRetentionMs, nowMs) : null);
+    const origin = lookupStateEventOrigin(state, row.metadata.identity);
+    if (origin?.state === "committed") finalizeStateEventOrigin(state, origin.attempt, row.metadata.receipt, nowMs, true);
+    return row.metadata.identity;
   });
 }

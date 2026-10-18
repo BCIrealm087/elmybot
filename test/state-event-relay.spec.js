@@ -1,0 +1,348 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { env, evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
+import { queueProducerWakeup, drainProducerWakeup } from "../src/state-events/producer-wakeup.js";
+import { boundedStateEventRequest } from "../src/state-events/relay-client.js";
+import { wakeStateEventRelay, runStateEventRelay } from "../src/state-events/relay.js";
+import { drainStateEventRelay } from "../src/state-events/delivery-source.js";
+
+const fixture = (options = {}) => deliveryFixture({ suppressLocalCommitAlarm: true, ...options });
+afterEach(async () => { vi.restoreAllMocks(); await cleanupDeliveryFixtures(); });
+const edit = (f, sql, ...args) => runInDurableObject(f.ownerStub, (_i, state) => state.storage.sql.exec(sql, ...args).toArray());
+async function drain(f, force = true) {
+  return runInDurableObject(f.ownerStub, async (instance, state) => {
+    instance.env = f.testEnv;
+    if (force) state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0 WHERE lease_token IS NULL");
+    // Exercise one handler deterministically; alarm installation is covered by
+    // the native alarm/reconnect tests, which use the real storage object.
+    const controlled = { id: state.id, storage: new Proxy(state.storage, { get(target, key) {
+      if (key === "setAlarm") return async () => {};
+      const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+    } }) };
+    const result = await drainStateEventRelay(controlled, f.testEnv);
+    await state.storage.deleteAlarm();
+    return result;
+  });
+}
+async function stop(f) { await runInDurableObject(f.ownerStub, (_i, state) => state.storage.deleteAlarm()); }
+function nextMessage(socket) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error("socket message timed out")), 3000);
+    socket.addEventListener("message", ({ data }) => { clearTimeout(timer); resolve(JSON.parse(data)); }, { once: true });
+  });
+}
+describe("bounded state/event relay and producer wakeups", () => {
+  it.each([false, true])("automatically drains local/shared work through the owner alarm (shared=%s)", async (shared) => {
+    const f = await fixture({ shared, suppressLocalCommitAlarm: false }), accepted = await f.commit();
+    await edit(f, "UPDATE state_event_outbox SET next_wakeup_at_ms = 0");
+    await runInDurableObject(f.ownerStub, (instance) => { instance.env = f.testEnv; return instance.alarm(); });
+    const pending = await f.rows(f.ownerStub, "state_event_outbox");
+    expect(pending[0]).toMatchObject({ state: "appended", attempts: 1, destination_confirmed: 1 });
+    expect(pending[0].next_wakeup_at_ms).toBe(accepted.receipt.expiresAtMs);
+    expect(await f.rows(f.streamStub, "durable_event_stream_events")).toHaveLength(1);
+  });
+  it("parks under retained-capacity pressure and performs no consumer polling while idle", async () => {
+    const f = await fixture(); await f.commit(); await stop(f);
+    await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 1000"));
+    let outbound = 0;
+    f.intercept(async (kind, _input, _init, send) => { if (kind === "DURABLE_EVENT_STREAM") outbound++; return send(); });
+    await drain(f); const first = outbound;
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(row.next_wakeup_at_ms).toBe(row.deadline_ms);
+    const clock = vi.spyOn(Date, "now");
+    for (let minute = 1; minute < 29; minute++) { clock.mockReturnValue(row.deadline_ms - (30 - minute) * 60_000); await drain(f, false); }
+    expect(outbound).toBe(first); expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].attempts).toBe(1);
+  });
+  it("does not schedule repeated attempts after a confirmed offline append", async () => {
+    const f = await fixture(); await f.commit(); await drain(f);
+    let calls = 0; f.intercept(async (kind, _input, _init, send) => { if (kind === "DURABLE_EVENT_STREAM") calls++; return send(); });
+    for (let i = 0; i < 20; i++) await drain(f, false);
+    expect(calls).toBe(0);
+  });
+  it("cleans acknowledged obligations, retires receipts and removes the source alarm", async () => {
+    const f = await fixture(), accepted = await f.commit(); await drain(f);
+    const grant = f.grant(); expect((await f.streamCall("grants/issue", grant)).status).toBe(201);
+    const socket = await f.openSocket(grant.grantId), frames = [];
+    const event = new Promise((resolve) => socket.addEventListener("message", ({ data }) => { const value = JSON.parse(data); frames.push(value); if (value.type === "event") resolve(value); }));
+    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" }));
+    const impact = await event; socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: impact.cursor }));
+    await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("SELECT 1"));
+    await drain(f);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+    const owner = (await f.rows(f.ownerStub, "state_event_records")).find((row) => row.record_key === `owner:${accepted.operationId}`);
+    expect(JSON.parse(owner.metadata_json).pendingDelivery).toBe(false); expect(owner.prune_at_ms).not.toBeNull();
+    expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
+    expect((await f.rows(f.streamStub, "state_event_producer_interest"))[0].active).toBe(0);
+    expect(await runInDurableObject(f.ownerStub, (_i, state) => state.storage.getAlarm())).toBeNull();
+  });
+  it("recovers an in-flight lease after owner eviction without a duplicate append", async () => {
+    const f = await fixture(), accepted = await f.commit(); let lost = false;
+    f.intercept(async (kind, input, _init, send) => { const result = await send();
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("reply lost"); } return result; });
+    await drain(f);
+    const leased = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(leased.lease_token).not.toBeNull();
+    await evictDurableObject(f.ownerStub); f.intercept(null);
+    expect((await drain(f, false)).attempted).toBe(0);
+    await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
+    await drain(f, false);
+    const events = await f.rows(f.streamStub, "durable_event_stream_events"); expect(events).toHaveLength(1); expect(events[0].event_id).toBe(accepted.receipt.eventId);
+  });
+  it("stops automatic retries at twelve while preserving the original deadline", async () => {
+    const f = await fixture(); await f.commit(); let calls = 0;
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append")) { calls++; return new Response(JSON.stringify({ code: "durable_event_service_unavailable" }), { status: 503 }); }
+      return send();
+    });
+    for (let i = 0; i < 12; i++) { await edit(f, "UPDATE state_event_outbox SET lease_token = NULL, lease_until_ms = NULL, next_wakeup_at_ms = 0"); await drain(f, false); }
+    expect(calls).toBe(12);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(row.scheduled_attempts).toBe(12); expect(row.next_wakeup_at_ms).toBe(row.deadline_ms);
+    await drain(f, false); expect(calls).toBe(12);
+  });
+  it("bounds a definite transient retry by the original event deadline", async () => {
+    const f = await fixture(), accepted = await f.commit();
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append")) return new Response(JSON.stringify({ code: "durable_event_service_unavailable" }), { status: 503 });
+      return send();
+    });
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs - 500); await drain(f);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(row).toMatchObject({ attempts: 1, next_wakeup_at_ms: accepted.receipt.expiresAtMs, lease_token: null });
+  });
+  it("reserves the final delivery attempt for expiry and does not reset budgets on wakeup", async () => {
+    const f = await fixture(); await f.commit(); await edit(f, "UPDATE state_event_outbox SET attempts = 19, scheduled_attempts = 12");
+    await f.source("wake", { version: 1 });
+    expect((await drain(f)).attempted).toBe(0);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(row.attempts).toBe(19); expect(row.next_wakeup_at_ms).toBe(row.deadline_ms);
+  });
+  it("lets one blocked stream coexist with fair draining of independent streams", async () => {
+    const f = await fixture({ streams: 6 }); for (let i = 0; i < 6; i++) { await f.commit(i); await stop(f); }
+    await runInDurableObject(f.streamStubs[0], (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 1000"));
+    const result = await drain(f);
+    expect({ attempted: result.attempted, rows: (await f.rows(f.ownerStub, "state_event_outbox")).map((r) => ({ state: r.state, error: r.last_error, attempts: r.attempts })) }).toEqual({ attempted: 6, rows: [
+      { state: "pending", error: "durable_event_stream_full", attempts: 1 }, ...Array.from({ length: 5 }, () => ({ state: "appended", error: null, attempts: 1 }))
+    ] });
+    expect(await f.rows(f.streamStubs[0], "durable_event_stream_events")).toEqual([]);
+    for (const stub of f.streamStubs.slice(1)) expect(await f.rows(stub, "durable_event_stream_events")).toHaveLength(1);
+  });
+  it("processes at most twenty queued records per owner handler", async () => {
+    const f = await fixture({ streams: 6 });
+    for (let i = 0; i < 25; i++) {
+      if (i) await edit(f, "UPDATE state_event_outbox_budget SET rate_json = '[]'");
+      await f.commit(i % 6); await stop(f);
+    }
+    expect((await drain(f)).attempted).toBe(20);
+    let retained = 0; for (const stub of f.streamStubs) retained += (await f.rows(stub, "durable_event_stream_events")).length;
+    expect(retained).toBe(20);
+  });
+  it("persists producer interest before capacity rejection and wakes on reconnect", async () => {
+    const f = await fixture(); await f.commit();
+    await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 1000"));
+    await drain(f); expect((await f.rows(f.streamStub, "state_event_producer_interest"))[0].active).toBe(1);
+    await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 0"));
+    const grant = f.grant(); await f.streamCall("grants/issue", grant); const socket = await f.openSocket(grant.grantId), ready = nextMessage(socket);
+    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" })); expect((await ready).type).toBe("ready");
+    await runInDurableObject(f.streamStub, async (instance, state) => { state.storage.sql.exec("UPDATE state_event_producer_interest SET due_ms = 0"); await instance.alarm(); });
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].last_error).toBe("useful_wakeup");
+    await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events"), { timeout: 4000 }).toHaveLength(1);
+  });
+  it("deduplicates producer wakeups across retries and object restart", async () => {
+    const f = await fixture(); await f.commit(); await stop(f);
+    await f.source("wake", { version: 7 }); const before = (await f.rows(f.ownerStub, "state_event_source_streams"))[0];
+    await evictDurableObject(f.ownerStub); await f.source("wake", { version: 7 });
+    const after = (await f.rows(f.ownerStub, "state_event_source_streams"))[0]; expect(after.wake_generation).toBe(before.wake_generation);
+  });
+  it("resumes disabled work on an observed enable transition without polling", async () => {
+    const f = await fixture(); await f.commit(); f.testEnv.DURABLE_EVENT_STREAMS_ENABLED = "false";
+    await drain(f); const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(row.next_wakeup_at_ms).toBe(row.deadline_ms);
+    f.testEnv.DURABLE_EVENT_STREAMS_ENABLED = "true"; await f.source("status");
+    await drain(f, false); await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events"), { timeout: 4000 }).toHaveLength(1);
+  });
+  it("retains a useful wakeup that races an in-flight capacity rejection", async () => {
+    const f = await fixture(); await f.commit(); let once = false;
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !once) {
+        once = true;
+        await runInDurableObject(env.CONFIG.get(env.CONFIG.idFromName(f.owner.key)), (_i, state) => wakeStateEventRelay(state, f.route.streamRouteId, 1));
+        return new Response(JSON.stringify({ code: "durable_event_stream_full" }), { status: 429 });
+      }
+      return send();
+    });
+    await drain(f);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(row.next_wakeup_at_ms).toBeLessThan(row.deadline_ms);
+    f.intercept(null); await drain(f); expect(await f.rows(f.streamStub, "durable_event_stream_events")).toHaveLength(1);
+  });
+  it("coalesces many capacity notifications into at most one wakeup per second", async () => {
+    const f = await fixture(); await f.commit(); await drain(f);
+    let notifications = 0;
+    f.intercept(async (kind, input, _init, send) => { if (kind === "CONFIG" && String(input).endsWith("delivery/wake")) notifications++; return send(); });
+    await runInDurableObject(f.streamStub, async (_i, state) => {
+      for (let i = 0; i < 100; i++) await queueProducerWakeup(state, async () => {});
+      expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(1);
+      for (let i = 0; i < 100; i++) await queueProducerWakeup(state, async () => {});
+      expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(0);
+    });
+    expect(notifications).toBe(1);
+  });
+  it("rolls back a wakeup marker when its durable alarm cannot be written", async () => {
+    const f = await fixture(); await f.commit(); await drain(f);
+    await runInDurableObject(f.streamStub, async (_i, state) => {
+      const before = state.storage.sql.exec("SELECT version, due_ms FROM state_event_producer_interest").one(), alarm = await state.storage.getAlarm();
+      await expect(queueProducerWakeup(state, async () => { await state.storage.setAlarm(Date.now() + 1000); throw Error("alarm failed"); })).rejects.toThrow("alarm failed");
+      expect(state.storage.sql.exec("SELECT version, due_ms FROM state_event_producer_interest").one()).toEqual(before);
+      expect(await state.storage.getAlarm()).toBe(alarm);
+    });
+  });
+  it("retries a lost notification acknowledgement after stream eviction without double waking the source", async () => {
+    const f = await fixture(); await f.commit(); await drain(f); let lost = false;
+    f.intercept(async (kind, input, _init, send) => {
+      const response = await send(); if (kind === "CONFIG" && String(input).endsWith("delivery/wake") && !lost) { lost = true; throw Error("wake reply lost"); } return response;
+    });
+    await runInDurableObject(f.streamStub, async (_i, state) => {
+      await queueProducerWakeup(state, async () => {}); await drainProducerWakeup(state, f.testEnv, async () => {}); await state.storage.deleteAlarm();
+    });
+    const generation = (await f.rows(f.ownerStub, "state_event_source_streams"))[0].wake_generation;
+    await evictDurableObject(f.streamStub); f.intercept(null);
+    await runInDurableObject(f.streamStub, async (_i, state) => {
+      state.storage.sql.exec("UPDATE state_event_producer_interest SET due_ms = 0"); await drainProducerWakeup(state, f.testEnv, async () => {});
+    });
+    expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0].wake_generation).toBe(generation);
+  });
+  it("never exceeds four concurrent stream domains, including a competing manual request", async () => {
+    const f = await fixture({ streams: 8 }), accepted = [];
+    for (let i = 0; i < 8; i++) { accepted.push(await f.commit(i)); await stop(f); }
+    const report = await runInDurableObject(f.ownerStub, async (_i, state) => {
+      state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = interest_epoch");
+      state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0");
+      const controlled = controlledState(state); let active = 0, peak = 0, rejected = false, checked = false, release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const request = async () => {
+        active++; peak = Math.max(peak, active);
+        if (active === 4 && !checked) {
+          checked = true;
+          try { await runStateEventRelay(controlled, f.testEnv, request, { onlyOperationId: accepted[4].operationId }); }
+          catch (error) { rejected = error.code === "state_event_attempt_in_progress"; }
+          release();
+        }
+        await gate; active--; throw Object.assign(Error("temporary service rejection"), { code: "durable_event_service_unavailable", status: 503 });
+      };
+      const result = await runStateEventRelay(controlled, f.testEnv, request);
+      await state.storage.deleteAlarm(); return { peak, rejected, attempted: result.attempted };
+    });
+    expect(report).toEqual({ peak: 4, rejected: true, attempted: 8 });
+  });
+  it("stops starting work after five seconds and retains the timed-out attempt leases", async () => {
+    const f = await fixture({ streams: 8 }); for (let i = 0; i < 8; i++) { await f.commit(i); await stop(f); }
+    const report = await runInDurableObject(f.ownerStub, async (_i, state) => {
+      state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = interest_epoch");
+      state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0");
+      let release; const gate = new Promise((resolve) => { release = resolve; });
+      try {
+        const result = await runStateEventRelay(controlledState(state), f.testEnv, async (_state, _env, _owner, _id, _route, options) =>
+          boundedStateEventRequest(async () => { await gate; return new Response(JSON.stringify({ state: "appended" })); }, options.deadline));
+        const counts = state.storage.sql.exec("SELECT SUM(attempts = 0) AS untouched, SUM(lease_token IS NOT NULL) AS leased FROM state_event_outbox").one();
+        return { attempted: result.attempted, ...counts };
+      } finally { release(); await state.storage.deleteAlarm(); }
+    });
+    expect(report).toEqual({ attempted: 4, untouched: 4, leased: 4 });
+  }, 15000);
+  it("retires shared owner and origin receipts after expiry without changing feature state", async () => {
+    const f = await fixture({ shared: true }), accepted = await f.commit(); await drain(f);
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1);
+    await drain(f);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+    expect((await f.rows(f.ownerStub, "shareable_state_realm_values"))[0].value_json).toBe("1");
+    const owner = (await f.rows(f.ownerStub, "state_event_records"))[0]; expect(JSON.parse(owner.metadata_json).pendingDelivery).toBe(false);
+    const origin = env.CONFIG.get(env.CONFIG.idFromName(f.group.key));
+    expect((await f.rows(origin, "state_event_records")).find((row) => row.record_key.startsWith("origin:")).prune_at_ms).not.toBeNull();
+  });
+  it("reserves metadata space so terminal cleanup can complete at receipt capacity", async () => {
+    const f = await fixture(), accepted = await f.commit(); await drain(f);
+    await edit(f, "UPDATE state_event_budget SET metadata_bytes = 16777216 - terminal_reserve_bytes");
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1); await drain(f);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+    const budget = (await f.rows(f.ownerStub, "state_event_budget"))[0]; expect(budget.metadata_bytes).toBeLessThanOrEqual(16777216); expect(budget.terminal_reserve_bytes).toBe(0);
+  });
+  it("retains unresolved gap authority when its reserved final attempt cannot reach the stream", async () => {
+    const f = await fixture(), accepted = await f.commit(); await stop(f);
+    await edit(f, "UPDATE state_event_outbox SET attempts = 19, scheduled_attempts = 12");
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append")) return new Response(JSON.stringify({ code: "state_event_outcome_unknown" }), { status: 503 });
+      return send();
+    });
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1); await drain(f);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(row).toMatchObject({ state: "gap_pending", attempts: 20, next_wakeup_at_ms: null });
+    expect(JSON.parse(row.intent_json)).not.toHaveProperty("payload");
+    for (let i = 1; i < 10; i++) await f.source("wake", { version: i });
+    expect((await drain(f, false)).attempted).toBe(0);
+    expect((await f.source("status")).data.unresolvedGap).toBe(true);
+  });
+  it("keeps terminal-origin cleanup recoverable across an outage and restart", async () => {
+    const f = await fixture({ shared: true }), accepted = await f.commit(); await drain(f);
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "CONFIG" && String(input).endsWith("origin/retire")) return new Response(JSON.stringify({ code: "state_event_outcome_unknown" }), { status: 503 });
+      return send();
+    });
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1); await drain(f);
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].state).toBe("retiring");
+    await evictDurableObject(f.ownerStub); f.intercept(null);
+    await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0"); await drain(f, false);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+  });
+
+  it("parks terminal cleanup after twelve automatic failures even after the event deadline", async () => {
+    const f = await fixture({ shared: true }), accepted = await f.commit(); await drain(f);
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "CONFIG" && String(input).endsWith("origin/retire")) return new Response(JSON.stringify({ code: "state_event_outcome_unknown" }), { status: 503 });
+      return send();
+    });
+    vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1); await drain(f);
+    await edit(f, "UPDATE state_event_outbox SET control_attempts = 12, control_scheduled = 12, lease_until_ms = 0, next_wakeup_at_ms = 0");
+    expect((await drain(f, false)).attempted).toBe(0);
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].next_wakeup_at_ms).toBeNull();
+    await f.source("wake", { version: 1 });
+    await drain(f);
+    await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))[0].control_attempts).toBe(13);
+  });
+  it("parks a busy owner's due work until a lease can recover instead of spinning alarms", async () => {
+    const f = await fixture({ streams: 5 }); for (let i = 0; i < 5; i++) await f.commit(i);
+    const until = Date.now() + 30_000;
+    const rows = await f.rows(f.ownerStub, "state_event_outbox");
+    for (const row of rows.slice(0, 4)) await edit(f, "UPDATE state_event_outbox SET lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ? WHERE operation_id = ?", crypto.randomUUID(), until, until, row.operation_id);
+    await edit(f, "UPDATE state_event_outbox SET next_wakeup_at_ms = 0 WHERE lease_token IS NULL");
+    await runInDurableObject(f.ownerStub, (instance) => { instance.env = f.testEnv; return instance.alarm(); });
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).find((row) => row.lease_token === null).next_wakeup_at_ms).toBe(until);
+    expect(await runInDurableObject(f.ownerStub, (_i, state) => state.storage.getAlarm())).toBe(until);
+    await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
+    expect((await drain(f, false)).attempted).toBe(5);
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
+  });
+  it("bounds destination notification retries when a producer is unreachable", async () => {
+    const f = await fixture(); await f.commit(); await drain(f); let count = 0;
+    f.intercept(async (kind, input, _init, send) => {
+      if (kind === "CONFIG" && String(input).endsWith("delivery/wake")) { count++; return new Response(JSON.stringify({ code: "state_event_outcome_unknown" }), { status: 503 }); }
+      return send();
+    });
+    await runInDurableObject(f.streamStub, async (_i, state) => {
+      await queueProducerWakeup(state, async () => {});
+      for (let i = 0; i < 12; i++) { state.storage.sql.exec("UPDATE state_event_producer_interest SET due_ms = 0"); await drainProducerWakeup(state, f.testEnv, async () => {}); }
+    });
+    expect(count).toBe(12); expect((await f.rows(f.streamStub, "state_event_producer_interest"))[0].due_ms).toBeNull();
+  });
+  it("restores a reset-discarded lease's wakeup after releasing the reset fence", async () => {
+    const f = await fixture(); await f.commit(); const until = Date.now() + 30_000;
+    await edit(f, "UPDATE state_event_outbox SET lease_token = 'interrupted', lease_until_ms = ?, next_wakeup_at_ms = ?", until, until);
+    expect((await f.streamCall("grants/issue", f.grant(true))).status).toBe(201);
+    const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(row).toMatchObject({ state: "reset_discarded", next_wakeup_at_ms: until });
+    await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0"); await drain(f, false);
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+  });
+
+});
+
+function controlledState(state) {
+  return { id: state.id, storage: new Proxy(state.storage, { get(target, key) {
+    if (key === "setAlarm") return async () => {};
+    const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+  } }) };
+}

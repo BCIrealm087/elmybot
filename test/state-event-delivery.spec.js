@@ -39,10 +39,11 @@ describe("combined deferred admission and gaps", () => {
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("lost reply"); }
       return response;
     });
-    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(500);
+    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(503);
     f.intercept(null);
     await runInDurableObject(f.streamStub, (_i, state) => state.storage.deleteAlarm());
     await evictDurableObject(f.streamStub);
+    await expireRelayLease(f);
     const retry = await f.source("reconcile", { operationId: a.operationId });
     expect(retry.data).toMatchObject({ state: "appended", sequence: 1, expiresAtMs: a.receipt.expiresAtMs });
     expect(await f.rows(f.streamStub, "durable_event_stream_events")).toHaveLength(1);
@@ -74,13 +75,14 @@ describe("combined deferred admission and gaps", () => {
     f.intercept(async (kind, input, _init, send) => {
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/confirm")) throw Error("confirmation lost"); return send();
     });
-    expect((await f.source("reconcile", { operationId: a.operationId })).data.state).toBe("appended");
+    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(503);
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].state).toBe("appended");
     expect((await f.rows(f.streamStub, "state_event_destination_records"))[0].expires_at_ms).toBeNull();
     await runInDurableObject(f.streamStub, async (instance, state) => {
       state.storage.sql.exec("UPDATE durable_event_stream_receipts SET expires_at_ms = 0"); await instance.alarm();
     });
     expect((await f.streamCall("combined/lookup", { operationId: a.operationId })).data.state).toBe("appended");
-    f.intercept(null); await f.source("reconcile", { operationId: a.operationId });
+    f.intercept(null); await expireRelayLease(f); await f.source("reconcile", { operationId: a.operationId });
     expect((await f.rows(f.streamStub, "state_event_destination_records"))[0].expires_at_ms).not.toBeNull();
   });
   it("rejects a stale proof that resumes after a completed reset", async () => {
@@ -103,7 +105,7 @@ describe("combined deferred admission and gaps", () => {
     expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
     expect((await f.source("reconcile", { operationId: a.operationId })).data).toEqual(result.data);
     expect(await f.rows(f.streamStub, "state_event_destination_records")).toHaveLength(1);
-    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].state).toBe("gap_recorded");
+    expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
     await expect(f.commit()).rejects.toMatchObject({ code: "state_event_stream_blocked" });
   });
   it.each(["bytes", "rate", "receipts"])("enforces the destination %s budget without losing the accepted source intent", async (limit) => {
@@ -162,7 +164,7 @@ describe("combined deferred admission and gaps", () => {
     await f.source("reconcile", { operationId: a.operationId });
     const reset = f.grant(true);
     const response = await f.streamCall("grants/issue", reset); expect(response.status).toBe(201);
-    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].state).toBe("reset_discarded");
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).every((row) => row.state === "reset_discarded")).toBe(true);
     expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0]).toMatchObject({ reset_id: null, gap_first: null, checkpoint: 1 });
     expect((await f.rows(f.streamStub, "state_event_destination"))[0]).toMatchObject({ gap_first: null, reset_id: null, reset_checkpoint: 1 });
     const b = await f.commit(); expect(b.receipt.stateEvent.operationSequence).toBe(2);
@@ -181,7 +183,7 @@ describe("combined deferred admission and gaps", () => {
     expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0].reset_id).toBe(reset.grantId);
     f.intercept(null); expect((await f.streamCall("grants/issue", reset)).status).toBe(201);
     expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0].reset_id).toBeNull();
-    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].operation_id).toBe(a.operationId);
+    expect((await f.source("reconcile", { operationId: a.operationId })).data.terminal).toBe("reset");
   });
   it("turns an unappended moved binding into a gap on the original stream", async () => {
     const f = await deliveryFixture({ shared: true }), a = await f.commit();
@@ -197,8 +199,9 @@ describe("combined deferred admission and gaps", () => {
       }
       return send();
     });
-    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(500);
+    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(503);
     f.intercept(null); expect((await f.move()).status).toBe(200);
+    await expireRelayLease(f);
     const late = await f.streamCall("combined/append", delayed);
     expect(late.data.code).toBe("state_event_attempt_fenced");
     expect((await f.source("reconcile", { operationId: a.operationId })).data.reason).toBe("lifecycle");
@@ -211,8 +214,9 @@ describe("combined deferred admission and gaps", () => {
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("lost committed reply"); }
       return response;
     });
-    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(500);
+    expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(503);
     f.intercept(null); expect((await f.move()).status).toBe(200);
+    await expireRelayLease(f);
     expect((await f.source("reconcile", { operationId: a.operationId })).data).toMatchObject({ state: "appended", sequence: 1 });
     expect((await f.rows(f.streamStub, "state_event_destination"))[0].gap_first).toBeNull();
   });
@@ -232,4 +236,8 @@ async function expireIntent(f, operationId) {
 
 function nextMessage(socket) {
   return new Promise((resolve) => socket.addEventListener("message", ({ data }) => resolve(JSON.parse(data)), { once: true }));
+}
+
+async function expireRelayLease(f) {
+  await runInDurableObject(f.ownerStub, (_i, state) => state.storage.sql.exec("UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0"));
 }

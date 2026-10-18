@@ -4,7 +4,8 @@ Roadmap step 4 implements the private `GroupConfig` storage adapter. Combined
 command execution remains blocked with `state_event_not_implemented`; no feature
 or existing stream is migrated. [Shareable acceptance](state-event-shareable-storage.md)
 is implemented in step 5 and [deferred append/gap handling](state-event-delivery.md)
-in step 6. Automatic relay is step 7, and operational enablement follows later. These internals are not stable feature API exports.
+in step 6, and [automatic relay](state-event-relay.md) in step 7. Operational
+enablement follows later. These internals are not stable feature API exports.
 
 ## Commit boundary
 
@@ -77,7 +78,7 @@ Counters bound admission without scanning receipt or outbox history. Pending
 byte accounting includes routing and correlation, not just feature payload text.
 SQL/index overhead remains additional storage, as described by the contract.
 
-## Wakeup coordination and staged maintenance
+## Wakeup coordination and bounded relay
 
 `storage-alarm.js` serializes alarm decisions and considers all durable work in
 the object: grant invalidations, state-query notifications/watch leases and the
@@ -85,13 +86,13 @@ state/event outbox. The existing notification schedulers use that same decision,
 so neither can delete an event wakeup or overwrite earlier work. `GroupConfig`
 constructor recovery rediscovers outbox work after eviction.
 
-Until automatic relay is integrated in step 7, the first durable wakeup parks
-an intent at its original event deadline. Deadline maintenance removes its
-payload and preserves a bounded `gap_pending` record. It does not declare
-successful delivery, release the authoritative receipt, manufacture a stream
-sequence, or discard the future gap obligation. Gap records remain charged
-against the 100-record/512-KiB outbox ceiling until the later transport/lifecycle
-work can resolve them. No repeated presence probe or idle timer is introduced.
+The first durable wakeup runs the [step-7 bounded relay](state-event-relay.md)
+one second after commit. Successful append parks a compact outcome until useful
+ACK/reconnect evidence or original expiry. Deadline maintenance persists
+`gap_pending` before releasing an unappended payload; unresolved authority stays
+charged to the 100-record/512-KiB ceiling. Only proven terminal outcomes retire
+receipts and release source capacity. No repeated presence probe or idle timer
+is introduced.
 
 The internal `/internal/state-events/owner/commit` binding endpoint uses this
 adapter with the installed registry; it is not a public Worker route. The

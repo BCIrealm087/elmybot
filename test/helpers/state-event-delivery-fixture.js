@@ -20,18 +20,24 @@ export async function cleanupDeliveryFixtures() {
   for (const { kind, id } of objects.values()) await runInDurableObject(env[kind].get(id), (_i, state) => state.storage.deleteAlarm());
   objects.clear();
 }
-export async function deliveryFixture({ shared = false } = {}) {
+export async function deliveryFixture({ shared = false, streams = 1, suppressLocalCommitAlarm = false } = {}) {
   const featureId = "test.delivery", scope = shared ? { kind: "effective_shareable", namespace: "health" } : { kind: "group_local" };
-  const operation = defineStateEventOperation({ id: "change", scope, stream: { id: "impacts", version: 2 }, input: schema.object({}),
-    mutation: { kind: "increment", key: { literal: "health" }, amount: { literal: 1 } }, event: { value: { result: "after" } } });
-  const stream = defineDurableEventStream({ id: "impacts", version: 2, label: "Impacts", description: "Test delivery", platforms: ["discord", "twitch"],
-    scope: { kind: scope.kind }, publication: { kind: "state_event", source: scope }, access: { kind: "operator_grant" },
-    payload: { schema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] } } });
-  const action = defineAction({ kind: "test.delivery.change.v1", supportedOrigins: ["discord"], input: operation.input,
-    uses: { services: ["stateEvents"], stateEvents: ["change"] }, cooldown: { scope: "group", seconds: 1 }, async execute() { throw Error("blocked"); } });
+  const entries = Array.from({ length: streams }, (_, index) => {
+    const suffix = index ? `-${index}` : "";
+    const operation = defineStateEventOperation({ id: `change${suffix}`, scope, stream: { id: `impacts${suffix}`, version: 2 }, input: schema.object({}),
+      mutation: { kind: "increment", key: { literal: `health${suffix}` }, amount: { literal: 1 } }, event: { value: { result: "after" } } });
+    const stream = defineDurableEventStream({ id: `impacts${suffix}`, version: 2, label: "Impacts", description: "Test delivery", platforms: ["discord", "twitch"],
+      scope: { kind: scope.kind }, publication: { kind: "state_event", source: scope }, access: { kind: "operator_grant" },
+      payload: { schema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] } } });
+    const action = defineAction({ kind: `test.delivery.change${suffix}.v1`, supportedOrigins: ["discord"], input: operation.input,
+      uses: { services: ["stateEvents"], stateEvents: [operation.id] }, cooldown: { scope: "group", seconds: 1 }, async execute() { throw Error("blocked"); } });
+    return { operation, stream, action, name: `change${suffix}` };
+  });
+  const { stream } = entries[0];
   const registry = createFeatureRegistry([defineFeature({ id: featureId, apiVersion: frameworkApiVersion, description: "Delivery fixture",
     ...(shared ? { shareableState: [{ id: "health", label: "Health", schemaVersion: 1, compatibleVersions: [1], limits: { maxEntries: 100, maxValueBytes: 1024 } }] } : {}),
-    actions: [action], stateEvents: [operation], eventStreams: [stream], commands: { discord: [discordActionCommand({ name: "change", description: "Change", availability: "guild", actionKind: action.kind })] } })], { availableServices: ["stateEvents"] });
+    actions: entries.map((entry) => entry.action), stateEvents: entries.map((entry) => entry.operation), eventStreams: entries.map((entry) => entry.stream),
+    commands: { discord: entries.map((entry) => discordActionCommand({ name: entry.name, description: "Change", availability: "guild", actionKind: entry.action.kind })) } })], { availableServices: ["stateEvents"] });
   const group = createPlatformGroupRef({ platform: "discord", kind: "guild", id: `${Date.now()}${++sequence}` });
   const registryId = env.INTEGRATION_REGISTRY.idFromName(`delivery-${group.id}`);
   const ownerBindings = ["CONFIG", "SHAREABLE_STATE_REALM", "DURABLE_EVENT_STREAM"];
@@ -50,32 +56,41 @@ export async function deliveryFixture({ shared = false } = {}) {
   const route = shared ? await resolveStateEventSharedRoute(testEnv, { sourceGroup: group, targetPlatform: "twitch", featureId, namespaceId: "health", schemaVersion: 1, stream }) : {
     kind: "group_local", key: group.key, bindingRevision: 0, streamRouteId: await durableEventRouteId({ deploymentEnvironment: env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT,
       scopeKind: "group_local", realmIdentity: group.key, featureId, streamId: stream.id, version: stream.version }) };
+  const routes = await Promise.all(entries.map(async (entry) => ({ ...route, streamRouteId: await durableEventRouteId({
+    deploymentEnvironment: env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT, scopeKind: route.kind, realmIdentity: route.key,
+    featureId, streamId: entry.stream.id, version: entry.stream.version }) })));
   const owner = { kind: route.kind, key: route.key }, ownerKind = shared ? "SHAREABLE_STATE_REALM" : "CONFIG";
   const ownerStub = tracked(ownerKind, env[ownerKind].idFromName(route.key));
-  const streamStub = tracked("DURABLE_EVENT_STREAM", env.DURABLE_EVENT_STREAM.idFromName(route.streamRouteId));
+  const streamStubs = routes.map((value) => tracked("DURABLE_EVENT_STREAM", env.DURABLE_EVENT_STREAM.idFromName(value.streamRouteId)));
+  const streamStub = streamStubs[0];
   const source = async (path, body = {}) => {
     const response = await bindings[ownerKind].get(env[ownerKind].idFromName(route.key)).fetch(`https://owner/internal/state-events/delivery/${path}`, {
-      method: "POST", headers: STATE_EVENT_DELIVERY_HEADERS, body: JSON.stringify({ ...body, owner, routeId: route.streamRouteId }) });
+      method: "POST", headers: STATE_EVENT_DELIVERY_HEADERS, body: JSON.stringify({ ...body, owner, routeId: body.routeId ?? route.streamRouteId }) });
     return { status: response.status, data: await response.json() };
   };
   const streamCall = async (path, body = {}, headers = {}) => {
-    const response = await bindings.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(route.streamRouteId)).fetch(`https://stream/internal/events/${path}`, {
+    const response = await bindings.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(body.routeId ?? route.streamRouteId)).fetch(`https://stream/internal/events/${path}`, {
       method: "POST", headers: { ...durableEventInternalHeaders, ...STATE_EVENT_DELIVERY_HEADERS, ...headers },
       body: JSON.stringify({ owner, routeId: route.streamRouteId, ...body }) });
     return { status: response.status, data: await response.json() };
   };
-  const commit = async () => {
+  const commit = async (index = 0) => {
+    const { action, operation } = entries[index], selectedRoute = routes[index];
     const invocation = createCommandInvocation({ kind: action.kind, args: {}, sourceCreatedAtMs: Date.now(), sourceEventId: `discord:interaction:${group.id}-${++sequence}`,
       origin: { group, actor: { platform: "discord", id: "actor", claims: [] } } });
     const identity = await createStateEventIdentity({ environment: env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT, featureId, invocation, declaration: { mutation: operation.mutation, stream: operation.stream } });
     const origin = tracked("CONFIG", env.CONFIG.idFromName(group.key));
     const record = await runInDurableObject(origin, (_i, state) => {
       state.storage.sql.exec("DELETE FROM framework_feature_cooldowns");
-      return prepareStateEventOrigin(state, { identity, request: prepareStateEventOperation(operation, {}), route, cooldownSeconds: 1 });
+      return prepareStateEventOrigin(state, { identity, request: prepareStateEventOperation(operation, {}), route: selectedRoute, cooldownSeconds: 1 });
     });
-    const accepted = await runInDurableObject(origin, (_i, state) => shared
-      ? commitPreparedSharedStateEvent(state, testEnv, record)
-      : commitLocalStateEvent(state, testEnv, registry, record));
+    const accepted = await runInDurableObject(origin, (_i, state) => {
+      const controlled = suppressLocalCommitAlarm ? { id: state.id, storage: new Proxy(state.storage, { get(target, key) {
+        if (key === "setAlarm") return async () => {};
+        const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+      } }) } : state;
+      return shared ? commitPreparedSharedStateEvent(state, testEnv, record) : commitLocalStateEvent(controlled, testEnv, registry, record);
+    });
     return { ...accepted, operationId: identity.operationId };
   };
   const descriptor = { deploymentEnvironment: env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT, scopeKind: route.kind,
@@ -108,7 +123,7 @@ export async function deliveryFixture({ shared = false } = {}) {
     if (response.status !== 101) throw Error(`Socket status ${response.status}`);
     response.webSocket.accept(); sockets.add(response.webSocket); return response.webSocket;
   };
-  return { openSocket, move, group, owner, route, testEnv, registry, ownerStub, streamStub, registryStub, source, streamCall, commit, grant,
+  return { routes, streamStubs, openSocket, move, group, owner, route, testEnv, registry, ownerStub, streamStub, registryStub, source, streamCall, commit, grant,
     intercept(fn) { interceptor = fn; },
     rows(stub, table) { return runInDurableObject(stub, (_i, state) => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray()); } };
 }
