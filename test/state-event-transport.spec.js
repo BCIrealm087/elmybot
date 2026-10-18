@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { boundedStateEventRequest } from "../src/state-events/relay-client.js";
 import { deliverySourceRequest } from "../src/state-events/delivery-source.js";
+import { callCombinedStream } from "../src/state-events/delivery-authority.js";
 
 describe("private state/event transport diagnostics", () => {
   const secret = "private-payload-and-grant-secret";
@@ -11,10 +12,11 @@ describe("private state/event transport diagnostics", () => {
     array: async () => Response.json({ code: ["state_event_cooldown"] }, { status: 503 }),
     null: async () => Response.json(null, { status: 503 })
   };
-  it.each(Object.keys(faults))("redacts %s failures at both binding boundaries", async (fault) => {
+  it.each(Object.keys(faults))("redacts %s failures at private binding boundaries", async (fault) => {
     const call = faults[fault], owner = { kind: "group_local", key: "private-owner" };
-    const env = { CONFIG: { idFromName: () => "id", get: () => ({ fetch: call }) } };
-    for (const request of [() => boundedStateEventRequest(call), () => deliverySourceRequest(env, owner, "proof", {})]) {
+    const binding = { idFromName: () => "id", get: () => ({ fetch: call }) }, env = { CONFIG: binding, DURABLE_EVENT_STREAM: binding };
+    for (const request of [() => boundedStateEventRequest(call), () => deliverySourceRequest(env, owner, "proof", {}),
+      () => callCombinedStream(env, { routeId: "private-route" }, "append")]) {
       await expect(request()).rejects.toMatchObject({ code: "state_event_outcome_unknown", message: "state_event_outcome_unknown", status: 503 });
     }
   });

@@ -1,19 +1,17 @@
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import { deliverySourceRequest } from "./delivery-source.js";
 import { canonicalJson, recoveryError } from "./identity.js";
-import { boundedStateEventCall, initializeStateEventBarriers, removeStateEventBarrier, resolveStateEventBarrier, STATE_EVENT_BARRIER_LIMITS } from "./binding-authority.js";
+import { initializeStateEventBarriers, removeStateEventBarrier, resolveStateEventBarrier, STATE_EVENT_BARRIER_LIMITS } from "./binding-authority.js";
+import { boundedStateEventRequest } from "./relay-client.js";
 
-export async function callCombinedStream(env, input, operation) {
-  const response = await env.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(input.routeId)).fetch(`https://stream/internal/events/combined/${operation}`, {
+export function callCombinedStream(env, input, operation, deadline) {
+  return boundedStateEventRequest(() => env.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(input.routeId)).fetch(`https://stream/internal/events/combined/${operation}`, {
     method: "POST", headers: { "x-elmybot-durable-event-internal": "v1", "x-elmybot-state-event-delivery": "v1" },
     body: JSON.stringify({ ...input, authority: "registry-v1" })
-  });
-  const result = await response.json();
-  if (!response.ok) throw Object.assign(recoveryError("outcome_unknown", response.status), { code: result.code, retryAfterMs: result.retryAfterMs });
-  return result;
+  }), deadline);
 }
 export async function resolveCombinedAppendBarrier(registry, input, deadline) {
-  const outcome = await boundedStateEventCall(() => callCombinedStream(registry.env, input, "fence"), deadline);
+  const outcome = await callCombinedStream(registry.env, input, "fence", deadline);
   if (!["appended", "gap", "fenced"].includes(outcome.state) || outcome.operationId !== input.operationId) throw recoveryError("outcome_unknown", 503);
   return outcome;
 }
@@ -33,7 +31,7 @@ export async function appendWithStateEventBindingAuthority(registry, raw) {
   }
   const current = registry.stateQueryBinding(source, intent.route.targetPlatform);
   if (current.status !== "ready" || current.revision !== intent.route.bindingRevision || current.sourceKey !== input.owner.key) {
-    return boundedStateEventCall(() => callCombinedStream(registry.env, input, "gap"));
+    return callCombinedStream(registry.env, input, "gap");
   }
   const call = { ...input, kind: "append", callId: crypto.randomUUID(), binding: {
     sourceGroupKey: source.key, targetPlatform: intent.route.targetPlatform, revision: intent.route.bindingRevision, sourceKey: input.owner.key } };
@@ -46,7 +44,7 @@ export async function appendWithStateEventBindingAuthority(registry, raw) {
   });
   await registry.state.storage.sync();
   let result;
-  try { result = await boundedStateEventCall(() => callCombinedStream(registry.env, call, "append")); }
+  try { result = await callCombinedStream(registry.env, call, "append"); }
   catch (error) {
     if (error.status >= 400 && error.status < 500) await resolveStateEventBarrier(registry, { operation_id: input.operationId, attempt_json: json });
     throw error;
