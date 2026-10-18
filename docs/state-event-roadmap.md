@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–9 are complete; implementation steps 10–12 are pending.
+Status: steps 1–10 are complete; implementation steps 11–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -347,6 +347,13 @@ checks. Use simulated time and fault injection for retention and long outages.
 **Completion evidence:** the full automated suite plus a documented matrix
 showing no double mutation, no untracked partial write, bounded storage/work,
 and explicit terminal outcomes.
+
+**Implemented:** the [failure, compatibility and resource verification
+matrix](state-event-verification.md) maps commit/append/ACK/cleanup faults to
+executable local/shared tests. Step 10 fixes interrupted gap confirmation and
+post-retention recovery, validates accepted command receipts, and redacts
+private transport errors. The full suite and CI remain the completion gates;
+acceptance stays disabled in checked-in environments.
 
 ### 11. Measure cost and enforce bounded work
 

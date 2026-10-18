@@ -32,6 +32,50 @@ function nextMessage(socket) {
   });
 }
 describe("bounded state/event relay and producer wakeups", () => {
+  it.each([false, true].flatMap((shared) => [false, true].map((lostReply) => ({ shared, lostReply }))))(
+    "confirms a recorded gap before retiring its proof after restart (%j)", async ({ shared, lostReply }) => {
+      const f = await fixture({ shared }), accepted = await f.commit(); await stop(f);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(accepted.receipt.expiresAtMs + 1);
+      let confirmations = 0;
+      f.intercept(async (kind, input, _init, send) => {
+        if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/confirm")) {
+          confirmations++;
+          if (lostReply) await send();
+          throw Error("confirmation interrupted");
+        }
+        return send();
+      });
+      await drain(f);
+      expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({ state: "gap_recorded", destination_confirmed: 0 });
+      const receipt = (await f.rows(f.streamStub, "state_event_destination_records"))[0];
+      expect(receipt.expires_at_ms === null).toBe(!lostReply);
+      if (lostReply) {
+        clock.mockReturnValue(accepted.receipt.committedAtMs + 7_200_001);
+        await runInDurableObject(f.streamStub, async (instance, state) => { instance.env = f.testEnv; await instance.alarm(); await state.storage.deleteAlarm(); });
+        expect(await f.rows(f.streamStub, "state_event_destination_records")).toEqual([]);
+      }
+      await evictDurableObject(f.ownerStub);
+      await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
+      await drain(f, false);
+      // The second interruption must retain the proof and charged source row.
+      expect(confirmations).toBe(2);
+      expect(await f.rows(f.ownerStub, "state_event_outbox")).toHaveLength(1);
+      const owner = (await f.rows(f.ownerStub, "state_event_records")).find((row) => row.record_key === `owner:${accepted.operationId}`);
+      expect(JSON.parse(owner.metadata_json).pendingDelivery).toBe(true);
+      f.intercept(null);
+      await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
+      await drain(f, false);
+      expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+      expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
+      const confirmed = await f.rows(f.streamStub, "state_event_destination_records");
+      if (lostReply) expect(confirmed).toEqual([]);
+      else expect(confirmed[0].expires_at_ms).not.toBeNull();
+      expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+      clock.mockReturnValue(accepted.receipt.committedAtMs + 7_200_001);
+      await runInDurableObject(f.streamStub, async (instance, state) => { instance.env = f.testEnv; await instance.alarm(); await state.storage.deleteAlarm(); });
+      expect(await f.rows(f.streamStub, "state_event_destination_records")).toEqual([]);
+      expect((await f.rows(f.streamStub, "state_event_destination_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
+    });
   it.each([false, true])("automatically drains local/shared work through the owner alarm (shared=%s)", async (shared) => {
     const f = await fixture({ shared, suppressLocalCommitAlarm: false }), accepted = await f.commit();
     await edit(f, "UPDATE state_event_outbox SET next_wakeup_at_ms = 0");
@@ -87,6 +131,38 @@ describe("bounded state/event relay and producer wakeups", () => {
     await drain(f, false);
     const events = await f.rows(f.streamStub, "durable_event_stream_events"); expect(events).toHaveLength(1); expect(events[0].event_id).toBe(accepted.receipt.eventId);
   });
+  it.each([false, true].flatMap((shared) => [false, true].map((lostReply) => ({ shared, lostReply }))))(
+    "recovers interrupted interest release after ACK without replay or uncharged work (%j)", async ({ shared, lostReply }) => {
+      const f = await fixture({ shared }), accepted = await f.commit(); await drain(f);
+      f.intercept(async (kind, input, _init, send) => {
+        if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/interest-release")) {
+          if (lostReply) await send();
+          throw Error("release interrupted after ACK");
+        }
+        return send();
+      });
+      const grant = f.grant(); await f.streamCall("grants/issue", grant);
+      const socket = await f.openSocket(grant.grantId);
+      const delivered = new Promise((resolve) => socket.addEventListener("message", ({ data }) => { const frame = JSON.parse(data); if (frame.type === "event") resolve(frame); }));
+      socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" }));
+      const event = await delivered;
+      socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: event.cursor }));
+      await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+      await drain(f);
+      const rows = await f.rows(f.ownerStub, "state_event_outbox"), budget = (await f.rows(f.ownerStub, "state_event_outbox_budget"))[0];
+      expect(rows).toHaveLength(1); expect(rows[0].state).toBe("retiring");
+      expect(budget).toMatchObject({ rows: rows.length, bytes: rows.reduce((sum, row) => sum + new TextEncoder().encode(row.intent_json).byteLength, 0) });
+      await evictDurableObject(f.ownerStub); f.intercept(null);
+      await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
+      await drain(f, false);
+      expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+      expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
+      expect((await f.rows(f.streamStub, "state_event_producer_interest"))[0].active).toBe(0);
+      const receipt = (await f.rows(f.ownerStub, "state_event_records")).find((row) => row.record_key === `owner:${accepted.operationId}`);
+      expect(JSON.parse(receipt.metadata_json)).toMatchObject({ pendingDelivery: false, deliveryOutcome: { terminal: "acknowledged" }, receipt: accepted.receipt });
+      expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+      expect(await runInDurableObject(f.ownerStub, (_i, state) => state.storage.getAlarm())).toBeNull();
+    });
   it("stops automatic retries at twelve while preserving the original deadline", async () => {
     const f = await fixture(); await f.commit(); let calls = 0;
     f.intercept(async (kind, input, _init, send) => {

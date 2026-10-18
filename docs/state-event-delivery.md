@@ -41,6 +41,13 @@ source confirmation or a coordinated reset resolves them. Confirmed outcomes
 retain the normal minimum receipt window. Source-side acceptance receipts still
 follow the step-3 rules; step 7 implements terminal owner retirement/relay cleanup.
 
+Gap cleanup also confirms the destination before retiring the source proof.
+A restart at that boundary retries confirmation. If a confirmation reply was
+lost and the confirmed receipt has since expired, the verified source gap cache
+allows cleanup without recreating the destination receipt. See the
+[failure verification matrix](state-event-verification.md) for the local/shared
+restart and retention evidence.
+
 ## Shared lifecycle authority
 
 Shared appends pass through the integration registry's binding authority queue.

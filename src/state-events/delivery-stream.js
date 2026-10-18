@@ -119,6 +119,11 @@ export async function combinedAppend(state, env, registry, raw, operation, appen
   if (stored?.fingerprint && stored.fingerprint !== fingerprint) throw recoveryError("source_conflict", 409);
   const prior = stored ? JSON.parse(stored.outcome_json) : null;
   if (operation === "confirm") {
+    // A confirmed receipt may expire while its reply is lost. The durable
+    // source cache still proves the gap outcome; do not recreate that receipt
+    // or strand cleanup after the destination's bounded retention window.
+    if (!stored && proof.state === "gap_recorded" && proof.intent.delivery?.state === "gap" &&
+        proof.intent.delivery.operationId === intent.operationId) return { confirmed: true };
     if (!stored && proof.intent.delivery?.state === "appended" && terminalDestinationOutcome(state, proof.intent.delivery, intent.stateEvent.operationSequence).terminal) return { confirmed: true };
     if (!stored || !["appended", "gap_recorded"].includes(proof.state) || proof.intent.delivery?.operationId !== intent.operationId) throw recoveryError("missing_receipt", 409);
     state.storage.sql.exec("UPDATE state_event_destination_records SET expires_at_ms = COALESCE(expires_at_ms, ?) WHERE operation_id = ?",

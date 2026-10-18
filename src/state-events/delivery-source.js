@@ -27,6 +27,10 @@ export async function deliverySourceRequest(env, owner, operation, input) {
       if (!response.ok) throw recoveryError("outcome_unknown", 503);
       return result;
     })(), new Promise((_, reject) => { timer = setTimeout(() => reject(recoveryError("outcome_unknown", 503)), 5000); })]);
+  } catch {
+    // Binding exceptions and JSON parse failures may contain private transport
+    // details. The delivery protocol exposes only the stable unknown outcome.
+    throw recoveryError("outcome_unknown", 503);
   } finally { clearTimeout(timer); }
 }
 export function sourceIntentProof(state, operationId, routeId) {

@@ -1,4 +1,4 @@
-import { recoveryError } from "./identity.js";
+import { recoveryError, StateEventRecoveryError } from "./identity.js";
 
 export async function boundedStateEventRequest(call, deadline = Date.now() + 5000) {
   if (deadline <= Date.now()) throw recoveryError("outcome_unknown", 503);
@@ -6,14 +6,17 @@ export async function boundedStateEventRequest(call, deadline = Date.now() + 500
   try {
     return await Promise.race([(async () => {
       const response = await call(), result = await response.json();
-      if (!response.ok) throw Object.assign(recoveryError("outcome_unknown", response.status >= 500 ? 503 : response.status), {
-        code: result.code ?? "state_event_outcome_unknown", retryAfterMs: result.retryAfterMs,
-        retryAfterSeconds: result.retryAfterSeconds
-      });
+      if (!response.ok) {
+        const code = typeof result?.code === "string" && /^(state_event|durable_event)_[a-z_]{1,64}$/.test(result.code) ? result.code : "state_event_outcome_unknown";
+        throw Object.assign(recoveryError("outcome_unknown", response.status >= 500 ? 503 : response.status), {
+          code, retryAfterMs: Number.isSafeInteger(result?.retryAfterMs) && result.retryAfterMs > 0 && result.retryAfterMs <= 300_000 ? result.retryAfterMs : undefined,
+          retryAfterSeconds: Number.isSafeInteger(result?.retryAfterSeconds) && result.retryAfterSeconds > 0 && result.retryAfterSeconds <= 86400 ? result.retryAfterSeconds : undefined
+        });
+      }
       return result;
     })(), new Promise((_, reject) => { timer = setTimeout(() => reject(recoveryError("outcome_unknown", 503)), deadline - Date.now()); })]);
   } catch (error) {
-    if (error?.code) throw error;
+    if (error instanceof StateEventRecoveryError) throw error;
     throw recoveryError("outcome_unknown", 503);
   } finally { clearTimeout(timer); }
 }

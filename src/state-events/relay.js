@@ -31,6 +31,15 @@ async function interest(state, env, row, intent, deadline) {
   state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = ? WHERE route_id = ? AND interest_epoch = ?", stream.interest_epoch, row.stream_route_id, stream.interest_epoch);
 }
 async function cleanup(state, env, row, intent, deadline) {
+  // A gap is cached before confirmation. A crash at that boundary must not
+  // retire its proof while the destination still holds an unprunable receipt.
+  if (row.state === "gap_recorded" && !row.destination_confirmed) {
+    const outcome = await relayStreamRequest(env, row.stream_route_id, "confirm", {
+      owner: selectedOwner(intent), operationId: row.operation_id
+    }, deadline);
+    if (outcome?.confirmed !== true) throw recoveryError("outcome_unknown", 503);
+    state.storage.sql.exec("UPDATE state_event_outbox SET destination_confirmed = 1 WHERE operation_id = ? AND lease_token = ?", row.operation_id, row.lease_token);
+  }
   if (row.state !== "retiring") {
     await state.storage.transaction(async () => {
       const active = current(state, row.operation_id);

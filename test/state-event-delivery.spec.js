@@ -157,7 +157,7 @@ describe("combined deferred admission and gaps", () => {
     f.intercept(async (kind, input, _init, send) => {
       if (kind === "CONFIG" && String(input).endsWith("delivery/status")) throw Error("producer unreachable"); return send();
     });
-    expect((await f.streamCall("grants/issue", f.grant())).status).toBe(500);
+    expect(await f.streamCall("grants/issue", f.grant())).toMatchObject({ status: 503, data: { code: "state_event_outcome_unknown" } });
   });
   it("coordinates reset across both owners, fences new acceptance and preserves operation sequence", async () => {
     const f = await deliveryFixture(), a = await f.commit(); await expireIntent(f, a.operationId);
@@ -178,7 +178,7 @@ describe("combined deferred admission and gaps", () => {
     f.intercept(async (kind, input, _init, send) => {
       if (kind === "CONFIG" && String(input).endsWith("reset-release")) throw Error("release unavailable"); return send();
     });
-    expect((await f.streamCall("grants/issue", reset)).status).toBe(500);
+    expect(await f.streamCall("grants/issue", reset)).toMatchObject({ status: 503, data: { code: "state_event_outcome_unknown" } });
     await expect(f.commit()).rejects.toMatchObject({ code: "state_event_stream_blocked" });
     expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0].reset_id).toBe(reset.grantId);
     f.intercept(null); expect((await f.streamCall("grants/issue", reset)).status).toBe(201);
