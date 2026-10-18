@@ -1,5 +1,10 @@
 # Bounded state/event relay and producer wakeups
 
+Step 11's [cost measurements and regression budgets](state-event-costs.md)
+verify the relay's work under bursts, history growth and long outages. New
+admission wakes unresolved work without rescheduling confirmed appended rows;
+consumer/capacity wakeups still allow their terminal cleanup.
+
 Roadmap step 7 automatically reconciles accepted private local/shared intents.
 [Step 9](health-state-event-migration.md) adds command execution behind explicit
 new-acceptance switches, disabled in checked-in Wrangler environments.

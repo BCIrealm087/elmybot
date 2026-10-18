@@ -338,7 +338,7 @@ function applyBindingNotification(state, input) {
 }
 
 function pruneExpired(state, nowMs) {
-  pruneCombinedRecords(state, nowMs);
+  const combined = pruneCombinedRecords(state, nowMs);
   return state.storage.transactionSync(() => {
     const sql = state.storage.sql;
     const expired = one(
@@ -364,7 +364,11 @@ function pruneExpired(state, nowMs) {
         Number(expired.last_sequence)
       );
     }
-    sql.exec("DELETE FROM durable_event_stream_receipts WHERE expires_at_ms <= ?", nowMs);
+    // Combined appends keep both their authority receipt and the existing event
+    // receipt. Bound both ledgers after a long outage, including trigger writes.
+    sql.exec(combined ? `DELETE FROM durable_event_stream_receipts WHERE event_id IN (
+      SELECT event_id FROM durable_event_stream_receipts WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20)`
+      : "DELETE FROM durable_event_stream_receipts WHERE expires_at_ms <= ?", nowMs);
     sql.exec("DELETE FROM durable_event_stream_ingress WHERE accepted_at_ms <= ?", nowMs - 1_000);
     return Number(expired?.total ?? 0);
   });

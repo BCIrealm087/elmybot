@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–10 are complete; implementation steps 11–12 are pending.
+Status: steps 1–11 are complete; implementation step 12 is pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -377,6 +377,14 @@ retain hibernation and deadline-driven recovery.
 **Completion evidence:** a reproducible cost/operation report and automated
 bounded-work assertions. Report limitations without requiring a manual live
 billing experiment as a routine gate.
+
+**Implemented:** [native measurements, operation budgets and priced
+scenarios](state-event-costs.md), with machine-readable results and an automated
+measurement command/CI artifact. Local/shared tests cover the installed health
+command, baselines, bursts, duplicates, large history, delayed deletes, watcher
+work and long outages. Admission no longer wakes confirmed appends; both
+destination receipt ledgers now have batched cleanup. Billing assumptions and
+unmeasured active duration remain explicit. No environment is enabled here.
 
 ### 12. Finish contributor guidance and prepare review
 

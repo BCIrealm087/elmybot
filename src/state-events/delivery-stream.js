@@ -63,12 +63,13 @@ export function recordExpiredCombinedEvents(state, nowMs) {
     gap_last = MAX(COALESCE(gap_last, 0), ?), gap_reasons = gap_reasons | 1 WHERE singleton = 1`, first, first, last);
 }
 export function pruneCombinedRecords(state, nowMs) {
-  if (!storageTableExists(state, "state_event_destination_records")) return;
+  if (!storageTableExists(state, "state_event_destination_records")) return false;
   state.storage.transactionSync(() => {
     const rows = state.storage.sql.exec(`DELETE FROM state_event_destination_records WHERE operation_id IN (
       SELECT operation_id FROM state_event_destination_records WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20) RETURNING metadata_bytes`, nowMs).toArray();
     if (rows.length) state.storage.sql.exec("UPDATE state_event_destination_budget SET rows = rows - ?, bytes = bytes - ?", rows.length, rows.reduce((sum, row) => sum + row.metadata_bytes, 0));
   });
+  return true;
 }
 export async function combinedAppend(state, env, registry, raw, operation, append) {
   const input = JSON.parse(canonicalJson(raw, 8192));

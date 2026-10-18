@@ -83,7 +83,7 @@ export function enqueueStateEventIntent(state, intent) {
   // its existing attempt budgets. It never bypasses a live lease or a reset.
   state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = MIN(COALESCE(next_wakeup_at_ms, deadline_ms), ?), last_error = 'useful_wakeup'
     WHERE stream_route_id = ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) AND attempts < 19
-      AND state NOT IN ('retiring', 'gap_recorded', 'reset_discarded')`, intent.committedAtMs + 1000, intent.route.streamRouteId, intent.committedAtMs);
+      AND state IN ('pending', 'parked', 'gap_pending')`, intent.committedAtMs + 1000, intent.route.streamRouteId, intent.committedAtMs);
   state.storage.sql.exec(`INSERT INTO state_event_outbox
     (operation_id, partition_key, operation_sequence, state, deadline_ms, next_wakeup_at_ms, intent_json, intent_bytes, stream_route_id)
     VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
