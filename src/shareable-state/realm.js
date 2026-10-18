@@ -1,3 +1,4 @@
+import { readableStateEventWatermark } from "../state-events/readable.js";
 import { drainStateEventRelay, handleStateEventDeliverySource } from "../state-events/delivery-source.js";
 import { commitShareableStateEvent, STATE_EVENT_AUTHORITY_HEADER, STATE_EVENT_AUTHORITY_VALUE } from "../state-events/shareable-commit.js";
 import { stateEventOutboxExists } from "../state-events/outbox.js";
@@ -1639,8 +1640,11 @@ async function runOperation(state, namespace, operation, input) {
       return getValue(state, namespace, input);
     case "query-read":
       return queryReadValue(state, namespace, input);
-    case "revision":
-      return namespaceRevision(state, namespace);
+    case "revision": {
+      const revision = namespaceRevision(state, namespace);
+      return input?.stateEvent === true ? { ...revision, stateEvent: readableStateEventWatermark(state,
+        JSON.stringify([namespace.featureId, namespace.namespaceId]), revision.mutationVersion) } : revision;
+    }
     case "set":
       return setValue(state, namespace, input);
     case "delete":

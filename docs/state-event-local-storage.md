@@ -71,8 +71,8 @@ An ordinary group allocates none of these tables.
 The receipt and intent persist matching private `stateEvent` correlation with
 version, operation ID, producer scope token, operation sequence and readable
 state revision. A scope token is generated once for the local producer incarnation.
-This step stores correlation; step 8 will expose it through snapshot/event wire
-surfaces. Nothing is added to existing public event frames yet.
+[Step 8](state-event-browser.md) exposes snapshot watermarks and matching combined
+event correlation. Existing event-only frames remain unchanged.
 
 Counters bound admission without scanning receipt or outbox history. Pending
 byte accounting includes routing and correlation, not just feature payload text.

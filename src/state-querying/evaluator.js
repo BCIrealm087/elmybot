@@ -112,11 +112,12 @@ function dependencyKey(dependency) {
 }
 
 async function sourceRevision(source) {
-  const revision = await source.revision();
+  const observation = source.observe ? await source.observe() : { mutationVersion: await source.revision() };
+  const revision = observation.mutationVersion;
   if (!Number.isSafeInteger(revision) || revision < 0) {
     throw new TypeError("State-query source returned an invalid revision.");
   }
-  return revision;
+  return observation;
 }
 
 async function sourceLifecycleStillCurrent(source) {
@@ -218,7 +219,7 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
     if (!sourceState) {
       sourceState = {
         source,
-        startRevision: await sourceRevision(source)
+        startObservation: await sourceRevision(source)
       };
       sourceStates.set(source.bindingKey, sourceState);
     }
@@ -258,16 +259,18 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
         });
       }
     }
-    const cell = normalizedCell(binding.definition, resolved, alias);
+    const normalized = normalizedCell(binding.definition, resolved, alias);
+    const cell = sourceState.startObservation.stateEvent
+      ? Object.freeze({ ...normalized, stateEvent: freezeJson(sourceState.startObservation.stateEvent) }) : normalized;
     cells[alias] = cell;
     readCache.set(cacheKey, cell);
   }
 
   let stable = true;
   for (const sourceState of sourceStates.values()) {
-    sourceState.endRevision = await sourceRevision(sourceState.source);
+    sourceState.endObservation = await sourceRevision(sourceState.source);
     if (
-      sourceState.endRevision !== sourceState.startRevision ||
+      canonicalStateQueryJson(sourceState.endObservation) !== canonicalStateQueryJson(sourceState.startObservation) ||
       !await sourceLifecycleStillCurrent(sourceState.source)
     ) {
       stable = false;
@@ -281,7 +284,8 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
       return [alias, sourceCell.state === "present"
         ? Object.freeze({
             state: "present",
-            value: freezeJson(projectStateQueryValue(sourceCell.value, selection.path))
+            value: freezeJson(projectStateQueryValue(sourceCell.value, selection.path)),
+            ...(sourceCell.stateEvent ? { stateEvent: sourceCell.stateEvent } : {})
           })
         : sourceCell];
     }
@@ -298,13 +302,13 @@ async function evaluateAttempt(plan, sourceRuntime, authorizeBinding, maxResultB
   }
   const sourceBindings = [...sourceStates.values()].map((state) => ({
     binding: state.source.bindingKey,
-    revision: state.startRevision
+    revision: state.startObservation.mutationVersion
   })).sort((left, right) => left.binding.localeCompare(right.binding));
   const sourceWatches = [...sourceStates.values()].flatMap((state) =>
     state.source.watch ? [{
       binding: state.source.bindingKey,
       ...state.source.watch,
-      expectedRevision: state.startRevision
+      expectedRevision: state.startObservation.mutationVersion
     }] : []
   );
   const bindingWatches = [...new Map([...sourceStates.values()].flatMap((state) =>
@@ -413,6 +417,7 @@ export async function evaluateStateQuery(registry, input, {
       ? await sourceRuntimeFactory({ attempt: attemptNumber + 1, plan })
       : sourceRuntime ?? createStateQuerySourceRuntime(env, {
           target: plan.query.target,
+          registry,
           correlationId
         });
     try {

@@ -1,3 +1,4 @@
+import { readableStateEventWatermark } from "../state-events/readable.js";
 const FEATURE_ID_PATTERN = /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/;
 const VERSIONED_KIND_PATTERN =
   /^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+\.v[1-9]\d*$/;
@@ -715,8 +716,10 @@ export async function handleFeatureStateStorageOperation(state, operation, input
       return getValue(state.storage.sql, "state", input);
     case "state/query-read":
       return queryReadValue(state.storage.sql, input);
-    case "state/revision":
-      return featureStateRevision(state.storage.sql, input);
+    case "state/revision": {
+      const revision = featureStateRevision(state.storage.sql, input);
+      return input?.stateEvent === true ? { ...revision, stateEvent: readableStateEventWatermark(state, input.featureId, revision.mutationVersion) } : revision;
+    }
     case "state/set":
       return setValue(state, "state", input);
     case "state/delete":

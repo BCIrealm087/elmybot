@@ -276,9 +276,9 @@ export function createStateQueryClient({
   }
   return Object.freeze({
     async catalog() { return (await http("catalog")).json(); },
-    async read(query) {
+    async read(query, { signal } = {}) {
       return (await http("snapshot", { method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(query) })).json();
+        body: JSON.stringify(query), signal })).json();
     },
     async session(credential) {
       if (typeof credential !== "string" || !credential || /\s/.test(credential)) throw new Error("Enter a read grant.");

@@ -6,6 +6,7 @@ Steps 4–5 add [private local atomic storage](state-event-local-storage.md) and
 [shared storage with lifecycle authority](state-event-shareable-storage.md).
 Step 6 adds [private deferred admission and gap/reset handling](state-event-delivery.md).
 Step 7 adds the private [bounded relay and producer wakeups](state-event-relay.md).
+Step 8 adds [readable snapshot correlation and browser coordination](state-event-browser.md).
 Production command acceptance remains blocked.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
@@ -208,8 +209,8 @@ will still allocate its operation watermark and event.
 
 ## Reserved persistence and correlation identities
 
-The operation identity is implemented privately in step 3. Scope tokens and wire
-correlation remain reserved for later implementation; previews generate neither:
+Operation identity, scope tokens and correlation are implemented in steps 3–8.
+Pure previews generate none of these persistence identities:
 
 - Operation format version 1 uses the exact compact JSON tuple
   `["elmybot.state-event-operation.v1", environment, featureId, actionKind,
@@ -219,10 +220,11 @@ correlation remain reserved for later implementation; previews generate neither:
 - Scope token `ses1.` plus 16 cryptographically random bytes as unpadded
   base64url is generated/persisted once per producer partition incarnation.
   A successor receives a fresh token; tokens are not credentials or order keys.
-- Public correlation is named `stateEvent` with `version: 1`, `operationId`,
-  `scopeToken`, `operationSequence`, and `stateRevision`. Step 8 integrates this
-  record with the snapshot/event wire surfaces and their compatibility checks;
-  it is not emitted on existing event frames in step 2.
+- Public event correlation is named `stateEvent` with `version: 1`, `operationId`,
+  `scopeToken`, `operationSequence`, and `stateRevision`. Snapshot result cells
+  carry the same marker without `operationId`, representing a partition watermark
+  rather than one operation. Step 8 implements the wire surfaces and compatibility
+  checks; ordinary event-only frames are unchanged.
 - Event IDs keep the existing `dev1` tuple and algorithm. No raw origin/source
   IDs are exposed through public correlation. Private receipt/route recovery is
   implemented in step 3; production command acceptance is still blocked.

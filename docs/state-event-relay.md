@@ -2,8 +2,8 @@
 
 Roadmap step 7 automatically reconciles accepted private local/shared intents.
 Production combined commands still fail with `state_event_not_implemented`.
-No feature, stream version or credential is migrated. Browser correlation is
-step 8; measured cost/load evidence is step 11.
+No feature, stream version or credential is migrated. [Browser correlation](state-event-browser.md)
+is implemented in step 8; measured cost/load evidence is step 11.
 
 ## Durable scheduling and ordering
 

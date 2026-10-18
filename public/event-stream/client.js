@@ -1,3 +1,4 @@
+import { validStateEvent } from "./correlation.js";
 // Browser-only durable-event client: no Worker, feature, or storage imports.
 const protocol = "durable-event-socket/v1";
 const ping = "durable-event-ping/v1";
@@ -38,7 +39,8 @@ function eventFrame(message, expectedStream) {
       !Number.isFinite(Date.parse(message.acceptedAt)) ||
       typeof message.expiresAt !== "string" ||
       !Number.isFinite(Date.parse(message.expiresAt)) ||
-      !("payload" in message)) {
+      !("payload" in message) ||
+      ("stateEvent" in message && !validStateEvent(message.stateEvent, { event: true }))) {
     throw failure("Invalid durable-event frame.", "client_protocol_error");
   }
   return message;

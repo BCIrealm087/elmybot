@@ -242,3 +242,12 @@ The remaining contributor-facing proof and test workflow is recorded in
 [`state-query-deaths-proof.md`](state-query-deaths-proof.md). Grants, authorized
 discovery, snapshots, revisions, lifecycle-aware observation, and WebSockets were
 implemented by roadmap steps 5–9.
+
+## Combined-operation correlation
+
+Readable exports sharing a combined-operation producer partition receive reserved
+`stateEvent` metadata on selected cells. Its opaque scope, operation watermark
+and observed readable revision participate in ordinary snapshot/watch consistency
+and result hashing, including accepted clamped no-ops. See
+[state/event browser coordination](state-event-browser.md) for wire fields,
+separate credentials, startup buffering, reconnect and deduplication limits.

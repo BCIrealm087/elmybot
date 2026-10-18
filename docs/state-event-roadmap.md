@@ -1,6 +1,6 @@
 # Atomic state changes with durable events: development roadmap
 
-Status: steps 1–7 are complete; implementation steps 8–12 are pending.
+Status: steps 1–8 are complete; implementation steps 9–12 are pending.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -291,6 +291,15 @@ bounded limits of browser-side acknowledgement and local deduplication.
 
 **Completion evidence:** automated browser cases for both arrival orders,
 setup races, duplicate events, rapid updates, no-op impacts and resynchronization.
+
+Completed 2026-10-18: selected readable cells now include opaque, owner-scoped
+operation watermarks under the existing revision/watch consistency checks. The
+browser coordinator buffers setup work, keeps snapshots authoritative, handles
+live impacts once within bounded deduplication, and requires a replacement
+baseline after reconnect or a newly authorized stream after scope/gap changes.
+SQLite, race and Chromium evidence is documented in
+[`state-event-browser.md`](state-event-browser.md). Production commands remain
+blocked; health migration is next.
 
 ### 9. Migrate the health feature as the end-to-end proof
 

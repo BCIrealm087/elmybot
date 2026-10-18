@@ -3,8 +3,8 @@
 Roadmap step 6 adds private source/destination reconciliation to the atomic
 storage adapters. Combined production commands still return
 `state_event_not_implemented`. [Automatic relay, reconnect/capacity wakeups and
-terminal source cleanup](state-event-relay.md) are implemented in step 7; browser
-snapshot/event correlation is step 8.
+terminal source cleanup](state-event-relay.md) are implemented in step 7;
+[browser snapshot/event correlation](state-event-browser.md) is implemented in step 8.
 No feature, existing stream version or deployment is migrated here.
 
 ## Private delivery boundary
@@ -85,7 +85,8 @@ reset, and an unreachable producer fails closed. An empty moved stream reports
 `stream_moved` only after a producer check proves no unresolved work. Existing
 grant revocation/replacement and one-consumer/one-in-flight acknowledgement rules
 continue to apply. Server event frames carry the reserved `stateEvent` v1
-correlation object; consumer interpretation and snapshot integration are step 8.
+correlation object; [step 8](state-event-browser.md) implements consumer
+interpretation and snapshot integration.
 
 Once the source learns of a destination reset requirement, it blocks further
 combined acceptance for that stream before mutation. This does not roll back an

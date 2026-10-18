@@ -430,6 +430,9 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
         async queryRead(featureId, scope, key) {
           return await shareableRequest(featureId, scope, "query-read", { key });
         },
+        async queryRevision(featureId, scope, stateEvent = false) {
+          return await shareableRequest(featureId, scope, "revision", { stateEvent });
+        },
         async revision(featureId, scope) {
           const result = await shareableRequest(featureId, scope, "revision", {});
           return result.mutationVersion;
@@ -502,6 +505,9 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
             "state/query-read",
             input(featureId, { key })
           );
+        },
+        async queryRevision(featureId, stateEvent = false) {
+          return await storageRequest(env, invocation, "state/revision", input(featureId, { stateEvent }));
         },
         async revision(featureId) {
           const result = await storageRequest(

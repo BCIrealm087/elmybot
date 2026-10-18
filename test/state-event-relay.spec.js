@@ -141,9 +141,13 @@ describe("bounded state/event relay and producer wakeups", () => {
     await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 0"));
     const grant = f.grant(); await f.streamCall("grants/issue", grant); const socket = await f.openSocket(grant.grantId), ready = nextMessage(socket);
     socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" })); expect((await ready).type).toBe("ready");
+    // Ready can reach the socket before registration persists its wakeup. Wait
+    // for durable interest, then assert the eventual result rather than a
+    // transient last_error marker that the native owner alarm may consume.
+    await expect.poll(async () => (await f.rows(f.streamStub, "state_event_producer_interest"))[0].version).toBeGreaterThan(0);
     await runInDurableObject(f.streamStub, async (instance, state) => { state.storage.sql.exec("UPDATE state_event_producer_interest SET due_ms = 0"); await instance.alarm(); });
-    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0].last_error).toBe("useful_wakeup");
     await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events"), { timeout: 4000 }).toHaveLength(1);
+    expect((await f.rows(f.ownerStub, "state_event_source_streams"))[0].last_wake_version).toBeGreaterThan(0);
   });
   it("deduplicates producer wakeups across retries and object restart", async () => {
     const f = await fixture(); await f.commit(); await stop(f);

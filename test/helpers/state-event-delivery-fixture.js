@@ -1,5 +1,5 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { defineAction, defineDurableEventStream, defineFeature, defineStateEventOperation, discordActionCommand, frameworkApiVersion, schema } from "../../src/framework/index.js";
+import { defineAction, defineReadableStateExport, defineDurableEventStream, defineFeature, defineStateEventOperation, discordActionCommand, frameworkApiVersion, schema } from "../../src/framework/index.js";
 import { createFeatureRegistry } from "../../src/framework/feature-registry.js";
 import { prepareStateEventOperation } from "../../src/framework/state-event-operation.js";
 import { createCommandInvocation, createPlatformGroupRef } from "../../src/integrations/contracts.js";
@@ -20,12 +20,13 @@ export async function cleanupDeliveryFixtures() {
   for (const { kind, id } of objects.values()) await runInDurableObject(env[kind].get(id), (_i, state) => state.storage.deleteAlarm());
   objects.clear();
 }
-export async function deliveryFixture({ shared = false, streams = 1, suppressLocalCommitAlarm = false } = {}) {
+export async function deliveryFixture({ shared = false, streams = 1, suppressLocalCommitAlarm = false, bounded = false } = {}) {
   const featureId = "test.delivery", scope = shared ? { kind: "effective_shareable", namespace: "health" } : { kind: "group_local" };
   const entries = Array.from({ length: streams }, (_, index) => {
     const suffix = index ? `-${index}` : "";
     const operation = defineStateEventOperation({ id: `change${suffix}`, scope, stream: { id: `impacts${suffix}`, version: 2 }, input: schema.object({}),
-      mutation: { kind: "increment", key: { literal: `health${suffix}` }, amount: { literal: 1 } }, event: { value: { result: "after" } } });
+      mutation: bounded ? { kind: "bounded_counter", name: "health", subject: { literal: "current" }, min: 0, max: 1, initial: 1, operation: "increment", amount: { literal: 1 } }
+        : { kind: "increment", key: { literal: `health${suffix}` }, amount: { literal: 1 } }, event: { value: { result: "after" } } });
     const stream = defineDurableEventStream({ id: `impacts${suffix}`, version: 2, label: "Impacts", description: "Test delivery", platforms: ["discord", "twitch"],
       scope: { kind: scope.kind }, publication: { kind: "state_event", source: scope }, access: { kind: "operator_grant" },
       payload: { schema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] } } });
@@ -36,6 +37,11 @@ export async function deliveryFixture({ shared = false, streams = 1, suppressLoc
   const { stream } = entries[0];
   const registry = createFeatureRegistry([defineFeature({ id: featureId, apiVersion: frameworkApiVersion, description: "Delivery fixture",
     ...(shared ? { shareableState: [{ id: "health", label: "Health", schemaVersion: 1, compatibleVersions: [1], limits: { maxEntries: 100, maxValueBytes: 1024 } }] } : {}),
+    readableState: [defineReadableStateExport({ id: "current", version: 1, label: "Current", description: "Current value", kind: "value",
+      platforms: ["discord", "twitch"], scope, access: { kind: "operator_grant" }, parameters: {},
+      result: { schema: { type: "integer" }, absence: { kind: "default" } },
+      async resolve(ctx) { return { state: "present", value: bounded ? await ctx.state.boundedCounter("health", "current", { min: 0, max: 1, initial: 1 }) : (await ctx.state.get("health")).value ?? 0 }; }
+    })],
     actions: entries.map((entry) => entry.action), stateEvents: entries.map((entry) => entry.operation), eventStreams: entries.map((entry) => entry.stream),
     commands: { discord: entries.map((entry) => discordActionCommand({ name: entry.name, description: "Change", availability: "guild", actionKind: entry.action.kind })) } })], { availableServices: ["stateEvents"] });
   const group = createPlatformGroupRef({ platform: "discord", kind: "guild", id: `${Date.now()}${++sequence}` });
