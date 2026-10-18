@@ -7,6 +7,9 @@ import { createCommandInvocation, createPlatformGroupRef } from "../src/integrat
 import { evaluateStateQuery } from "../src/state-querying/evaluator.js";
 import { resolveStateEventSharedRoute } from "../src/state-events/shared-publication.js";
 
+import { commands as discordCommands } from "../src/platforms/discord/commands.js";
+import { commands as twitchCommands } from "../src/platforms/twitch/commands.js";
+
 let serial = 0;
 const objects = new Map();
 afterEach(async () => { vi.restoreAllMocks(); for (const { kind, id } of objects.values()) await runInDurableObject(env[kind].get(id), (_i, state) => state.storage.deleteAlarm()); objects.clear(); });
@@ -59,6 +62,32 @@ async function fixture() {
   return { discord, twitch, env: testEnv, invocation, command, read, route, owner, rows, link, tracked, intercept(value) { intercept = value; } };
 }
 describe("installed health command and durable state/event integration", () => {
+  it.each(["discord", "twitch"])("returns an actionable unavailable reply through the %s command adapter when acceptance is disabled", async (platform) => {
+    const f = await fixture(); f.env.STATE_EVENT_OPERATIONS_ENABLED = "false";
+    const command = async () => {
+      if (platform === "discord") return (await discordCommands.health.exec({
+        id: (((BigInt(Date.now()) - 1420070400000n) << 22n) + BigInt(++serial)).toString(), guild_id: f.discord.id,
+        member: { user: { id: "moderator" } },
+        data: { options: [{ name: "operation", value: "damage" }, { name: "amount", value: 30 }] }
+      }, f.env, "health", { authorizedCapability: "framework.moderators" }));
+      return twitchCommands.health.exec({ broadcaster_user_id: f.twitch.id, chatter_user_id: "moderator", badges: [{ set_id: "moderator" }] },
+        f.env, { messageId: `health-disabled-${++serial}`, argsText: "damage 30", messageTimestamp: new Date().toISOString() });
+    };
+    const result = await command();
+    const reply = platform === "discord" ? result.content : result;
+    expect(reply).toContain("This command is currently unavailable.");
+    expect(reply).toContain("check whether it is enabled");
+    if (platform === "discord") expect(result.flags).toBe(64);
+    expect((await f.read(platform === "discord" ? f.discord : f.twitch)).value).toBe(100);
+
+    // A lost lookup response remains an unknown outcome, not an unavailable
+    // reply or advice to resend a potentially accepted command.
+    f.intercept(async (kind, url, _init, send) => {
+      if (kind === "CONFIG" && String(url).endsWith("command/lookup")) throw Error("private transport detail");
+      return send();
+    });
+    await expect(command()).rejects.toMatchObject({ code: "state_event_outcome_unknown" });
+  });
   it("commits offline, exposes bot health, and appends its correlated v2 event through the native alarm", async () => {
     const f = await fixture(), input = f.invocation();
     expect((await f.command(input)).output.message).toBe("Health saved and impact queued.");

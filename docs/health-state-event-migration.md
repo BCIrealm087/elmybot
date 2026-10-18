@@ -63,6 +63,12 @@ enabled to drain accepted events normally. Turning off the master also stops new
 appends/sockets while retaining expiry/gap authority. Do not remove the tables,
 handlers or semantic versions needed by existing obligations.
 
+Grant issuance and current-health reads do not enable command acceptance. A
+disabled environment can display initial health while fresh commands are
+unavailable. The Discord/Twitch adapters return an explicit unavailable reply
+for the known service-unavailable outcome; ambiguous acceptance still follows
+the unknown-outcome error path.
+
 ## Widget and one-time transition
 
 `/health-widget/` is the v2 widget. It needs **two separately scoped grants for
@@ -70,6 +76,11 @@ the same group**: a read grant for `fun.health:current:v1` and an event grant fo
 `fun.health:impacts:v2`. Its credential form exchanges them into the existing
 separate same-origin sessions. Credentials are cleared from the fields and never
 placed in the OBS URL. An event grant does not confer read access.
+The top field is the current-health read grant; the bottom is the v2 event grant.
+Setup labels and status have opaque contrasting backgrounds while the outer
+widget canvas stays transparent. On first load the saved-session catalog check
+can return 401/403 before credentials are connected; continued denials after
+connection require checking the grant/session rather than changing health state.
 
 The widget obtains a fresh snapshot/watch through `watchStateEvents`, draws only
 bot health, and awaits one animation per live impact before acknowledgement.

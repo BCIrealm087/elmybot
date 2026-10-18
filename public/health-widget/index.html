@@ -8,6 +8,12 @@
     html, body { margin: 0; background: transparent; }
     body { font: 700 20px system-ui, sans-serif; color: white; }
     main { box-sizing: border-box; width: min(700px, 96vw); padding: 16px; }
+    .labels, #status, #access, #migration {
+      color: #f4f4f5;
+      background: #18181b;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
     .labels { display: flex; justify-content: space-between; margin-bottom: 8px; }
     .meter {
       height: 38px;
@@ -44,9 +50,9 @@
 
     <form id="access" hidden>
       <label for="read-grant">Current-health read grant:</label>
-      <input id="read-grant" type="password" autocomplete="off" required>
+      <input id="read-grant" placeholder="Paste the current-health read grant" type="password" autocomplete="off" required>
       <label for="grant">Health v2 event grant:</label>
-      <input id="grant" type="password" autocomplete="off" required>
+      <input id="grant" placeholder="Paste the health v2 event grant" type="password" autocomplete="off" required>
       <button type="submit">Connect</button>
     </form>
     <p id="migration">Bot health starts at 100; old browser-local values are not imported.

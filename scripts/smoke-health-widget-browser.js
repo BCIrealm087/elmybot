@@ -91,7 +91,28 @@ async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "
   }, { key: `elmybot.health.v1:${target.platform}:${target.groupId}`, legacyNumber });
   const page = await context.newPage(); page.on("pageerror", (error) => errors.push(error)); await page.goto(`${origin}/health-widget/`);
   await page.locator("#access").waitFor({ state: "visible" });
-  await page.locator("#read-grant").fill(readGrant); await page.locator("#grant").fill(eventGrant);
+  // Transparent overlays must retain readable setup text on a white browser
+  // canvas. DOM visibility alone does not detect white-on-white labels.
+  const contrast = await page.evaluate(() => {
+    const luminance = (color) => {
+      const channels = color.match(/[\d.]+/g).slice(0, 3).map((value) => {
+        const channel = Number(value) / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    return [".labels", "#status", "#access", "#migration"].map((selector) => {
+      const style = getComputedStyle(document.querySelector(selector));
+      const foreground = luminance(style.color), background = luminance(style.backgroundColor);
+      return { selector, ratio: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05), background: style.backgroundColor };
+    });
+  });
+  for (const { selector, ratio, background } of contrast) {
+    assert.ok(!background.endsWith(", 0)"), `${selector} needs its own readable background`);
+    assert.ok(ratio >= 4.5, `${selector} text contrast must be at least 4.5:1`);
+  }
+  await page.getByLabel("Current-health read grant:", { exact: true }).fill(readGrant);
+  await page.getByLabel("Health v2 event grant:", { exact: true }).fill(eventGrant);
   await page.getByRole("button", { name: "Connect", exact: true }).click(); return { page, context };
 }
 try {
@@ -129,7 +150,7 @@ try {
   await mismatch.page.waitForFunction(() => document.getElementById("status").textContent.includes("same group"));
   assert.equal(connections.size, 0); await mismatch.context.close();
   assert.deepEqual(errors, []);
-  console.log("Health v2 Chromium smoke passed: authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
+  console.log("Health v2 Chromium smoke passed: readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
 } finally {
   await browser?.close(); for (const connection of connections) connection.socket.terminate(); sockets.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
 }
