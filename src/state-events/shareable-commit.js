@@ -1,3 +1,5 @@
+import { requestStateEventActivation } from "./activation.js";
+import { drainStateEventRelay } from "./delivery-source.js";
 import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import { calculatePreparedStateEvent, StateEventOperationDefinitionError, validatePreparedStateEventOperation } from "../framework/state-event-operation.js";
 import { durableEventId, durableEventRouteId } from "../durable-events/contract.js";
@@ -77,5 +79,6 @@ export async function commitShareableStateEvent(state, env, registry, input, ada
     routeId: attempt.route.streamRouteId, eventId: committed.receipt.eventId,
     committedAtMs: committed.receipt.committedAtMs, sequence: committed.receipt.stateEvent.operationSequence,
     stateRevision: committed.receipt.stateEvent.stateRevision });
+  requestStateEventActivation(state, env, "relay", () => drainStateEventRelay(state, env, { activation: true }));
   return committed;
 }

@@ -87,7 +87,7 @@ async function cleanup(state, env, row, intent, deadline, work) {
   });
   traceStateEventRow(env, "cleanup.finish", row);
 }
-async function claim(state, env, budget, { onlyOperationId = null, manual = false, nowMs = Date.now() } = {}) {
+async function claim(state, env, budget, { onlyOperationId = null, manual = false, activation = false, nowMs = Date.now() } = {}) {
   return state.storage.transaction(async () => {
     const active = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).total);
     if (active >= STATE_EVENT_RELAY_LIMITS.concurrency) {
@@ -105,12 +105,16 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
       await scheduleStorageAlarmInTransaction(state, { nowMs });
       return [];
     }
+    // A commit activation may start a never-attempted publication before its
+    // one-second recovery alarm. It cannot pull retries, coalesced wakeups or
+    // leased rows forward. All ordering/reset/admission checks below still run.
     const candidates = state.storage.sql.exec(`SELECT outbox.*, stream.wake_generation, stream.reset_id FROM state_event_outbox outbox
       JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
       WHERE (outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?)
-        AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?)
+        AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?
+          OR (? AND outbox.state = 'pending' AND outbox.attempts = 0))
       ORDER BY stream.last_served_ms, COALESCE(outbox.next_wakeup_at_ms, 0), outbox.operation_sequence LIMIT 100`,
-    nowMs, onlyOperationId, onlyOperationId, manual ? 1 : 0, nowMs).toArray();
+    nowMs, onlyOperationId, onlyOperationId, manual ? 1 : 0, nowMs, activation ? 1 : 0).toArray();
     const result = [], streams = new Set();
     for (const row of candidates) {
       if (row.reset_id) {
@@ -285,8 +289,10 @@ export async function wakeStateEventRelay(state, routeId, version, nowMs = Date.
     const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", routeId);
     if (!stream) return { accepted: true, pending: false };
     if (version !== null && (!Number.isSafeInteger(version) || version < 1)) throw recoveryError("invalid_request", 422);
+    let activate = false;
     if (version === null || version > stream.last_wake_version) {
       const due = Math.max(nowMs, Number(stream.last_wake_ms) + 1000);
+      activate = due <= nowMs;
       state.storage.sql.exec(`UPDATE state_event_source_streams SET last_wake_version = MAX(last_wake_version, ?),
         wake_generation = wake_generation + 1 WHERE route_id = ?`, version ?? 0, routeId);
       state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = CASE WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END,
@@ -295,7 +301,7 @@ export async function wakeStateEventRelay(state, routeId, version, nowMs = Date.
         (state NOT IN ('retiring', 'gap_recorded', 'reset_discarded') AND attempts < CASE WHEN deadline_ms <= ? THEN 20 ELSE 19 END))`, nowMs, due, routeId, nowMs);
     }
     await scheduleStorageAlarmInTransaction(state);
-    return { accepted: true, pending: Boolean(one(state, "SELECT 1 FROM state_event_outbox WHERE stream_route_id = ? LIMIT 1", routeId)) };
+    return { accepted: true, activate, pending: Boolean(one(state, "SELECT 1 FROM state_event_outbox WHERE stream_route_id = ? LIMIT 1", routeId)) };
   });
 }
 

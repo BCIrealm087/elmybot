@@ -15,8 +15,11 @@ is implemented in step 8; measured cost/load evidence is step 11.
 
 ## Durable scheduling and ordering
 
-Acceptance schedules the first owner alarm one second after commit in the same
-transaction as state, revision, receipt and intent. `GroupConfig` and
+Acceptance schedules the first recovery alarm one second after commit in the
+same transaction as state, revision, receipt and intent. Latency roadmap step 5
+also requests an immediate bounded background pass after commit: a new first
+publication need not wait for that alarm. See
+[immediate delivery and fallback](state-event-immediate-delivery.md). `GroupConfig` and
 `ShareableStateRealm` share their existing alarm with notifications, watcher
 maintenance and grant work. Eviction recovers the durable due index.
 

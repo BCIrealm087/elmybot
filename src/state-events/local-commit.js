@@ -1,3 +1,5 @@
+import { requestStateEventActivation } from "./activation.js";
+import { drainStateEventRelay } from "./delivery-source.js";
 import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import {
   applyLocalStateEventMutation, prepareLocalStateEventMutation, readLocalStateEventMutation
@@ -92,5 +94,6 @@ export async function commitLocalStateEvent(state, env, registry, input) {
     routeId: attempt.route.streamRouteId, eventId: committed.receipt.eventId,
     committedAtMs: committed.receipt.committedAtMs, sequence: committed.receipt.stateEvent.operationSequence,
     stateRevision: committed.receipt.stateEvent.stateRevision });
+  requestStateEventActivation(state, env, "relay", () => drainStateEventRelay(state, env, { activation: true }));
   return committed;
 }

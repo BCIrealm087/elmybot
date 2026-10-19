@@ -1,3 +1,4 @@
+import { requestStateEventActivation } from "./activation.js";
 import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import { runStateEventRelay, wakeStateEventRelay, observeStateEventRelayMode } from "./relay.js";
 import { relayStreamRequest, boundedStateEventRequest } from "./relay-client.js";
@@ -143,7 +144,9 @@ export async function handleStateEventDeliverySource(state, env, request, path, 
   }
   if (operation === "wake") {
     traceStateEvent(env, "wake.receive", { ownerId: state.id.toString(), routeId: input.routeId, version: input.version });
-    return wakeStateEventRelay(state, input.routeId, input.version ?? null);
+    const result = await wakeStateEventRelay(state, input.routeId, input.version ?? null);
+    if (result.pending && result.activate) requestStateEventActivation(state, env, "relay", () => drainStateEventRelay(state, env));
+    return { accepted: result.accepted, pending: result.pending };
   }
   if (operation === "reconcile") {
     if (!stateEventOutboxExists(state)) throw recoveryError("missing_intent", 409);
@@ -163,7 +166,7 @@ export async function handleStateEventDeliverySource(state, env, request, path, 
   if (!["reset-prepare", "reset-commit", "reset-release"].includes(operation) ||
       !/^[a-f0-9-]{36}$/.test(input.resetId ?? "")) throw recoveryError("invalid_request", 422);
   initializeStateEventOutbox(state);
-  return state.storage.transaction(async () => {
+  const result = await state.storage.transaction(async () => {
     let stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", input.routeId);
     if (!stream) {
       if (Number(one(state, "SELECT COUNT(*) AS total FROM state_event_source_streams").total) >= 100) throw recoveryError("partition_capacity", 503);
@@ -199,4 +202,6 @@ export async function handleStateEventDeliverySource(state, env, request, path, 
     await scheduleStorageAlarmInTransaction(state);
     return streamStatus(state, input.routeId);
   });
+  if (operation === "reset-release") requestStateEventActivation(state, env, "relay", () => drainStateEventRelay(state, env));
+  return result;
 }

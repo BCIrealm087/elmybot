@@ -134,6 +134,16 @@ step 8's bounded visual queue regression. Fault-recovery assertions remain safet
 requirements: no second state mutation, no duplicate event, and no premature
 lease release.
 
+## Immediate delivery in step 5
+
+[Immediate bounded activation](state-event-immediate-delivery.md) now requests
+one background pass after owner commit and eligible consumer/capacity wakeups.
+First publication can precede the one-second recovery deadline. Durable alarms,
+leases, retry/coalescing windows and all authority checks remain. Commands never
+await publication through the registry's still-held commit queue. No self-RPC,
+polling timer, new schema or coordinator is needed. `waitUntil` retains request
+context and does not enlarge the relay budget or prove production depth safety.
+
 ## Remaining uncertainty
 
 This work does not establish a numeric production request-depth budget, the

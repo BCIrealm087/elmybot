@@ -65,7 +65,12 @@ budget exhaustion is never used to declare a remote append absent. Registry
 barriers, destination deduplication, ordering, original expiry and source replay
 identity are unchanged. No schema migration or feature API change is required.
 
-Only a later alarm or explicit request creates another invocation budget.
+Step 5 adds [immediate activation](state-event-immediate-delivery.md): one
+non-awaited bounded pass after commit or an eligible useful wakeup, with no
+self-request or trailing loop. It uses these same limits. The first attempt can
+precede its fallback alarm; retries cannot bypass their deadlines.
+
+Only a later alarm or independent request creates another invocation budget.
 Continuing through a promise, microtask or `waitUntil` does not create more
 budget. An explicit request still passes the same owner-wide lease gate.
 Opt-in `relay.yield` records expose the reason, reserved-call total and limit.

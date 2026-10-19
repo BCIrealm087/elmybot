@@ -1,3 +1,4 @@
+import { requestStateEventActivation } from "../state-events/activation.js";
 import { configureStateEventDiagnostics, traceStateEventForOwner } from "../state-events/diagnostics.js";
 import { producerInterestExists, nextProducerWakeup, queueProducerWakeup, drainProducerWakeup } from "../state-events/producer-wakeup.js";
 import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
@@ -408,8 +409,10 @@ async function scheduleNextAlarmInTransaction(state) {
 async function scheduleNextAlarm(state) {
   return state.storage.transaction(() => scheduleNextAlarmInTransaction(state));
 }
-function wakeProducer(state) {
-  return queueProducerWakeup(state, () => scheduleNextAlarmInTransaction(state));
+async function wakeProducer(state, env) {
+  const ready = await queueProducerWakeup(state, () => scheduleNextAlarmInTransaction(state));
+  if (ready) requestStateEventActivation(state, env, "producer", () =>
+    drainProducerWakeup(state, env, () => scheduleNextAlarmInTransaction(state)));
 }
 
 function sameSecret(left, right) {
@@ -825,7 +828,7 @@ async function issueGrant(state, env, registry, input) {
   }
   state.waitUntil(scheduleNextAlarm(state));
   await finishCombinedReset(state, env, coordinated);
-  if (coordinated) await wakeProducer(state);
+  if (coordinated) await wakeProducer(state, env);
   return { created: result.created, reset: result.reset };
 }
 
@@ -1199,7 +1202,7 @@ async function registerSocket(state, env, socket, attachment) {
     return;
   }
   sendNextEvent(state, socket);
-  await wakeProducer(state);
+  await wakeProducer(state, env);
 }
 
 function acknowledgeSocketEvent(state, socket, attachment, cursor) {
@@ -1311,7 +1314,7 @@ export async function handleDurableEventSocketMessage(state, env, socket, messag
         typeof input.cursor !== "string" || !CURSOR_PATTERN.test(input.cursor)) {
       socketFailure("Durable-event socket control message is invalid.");
     }
-    if (acknowledgeSocketEvent(state, socket, attachment, input.cursor)) await wakeProducer(state);
+    if (acknowledgeSocketEvent(state, socket, attachment, input.cursor)) await wakeProducer(state, env);
     await finishCombinedMovedStream(state, env);
   } catch (error) {
     detachSocket(state, attachment);

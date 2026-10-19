@@ -30,6 +30,17 @@ Snapshots add bounded transient request bytes, with no registry snapshot/payload
 storage or new durable phase. Current CI artifacts contain these measurements;
 the historical billing scenarios below still await the step-10 refresh.
 
+Step 5 adds two immediate cold/warm profiles alongside the existing twenty
+alarm-driven profiles. In the local run, cold acceptance plus offline delivery
+uses the same 5/10 binding requests and 142/174 SQL writes for local/shared
+owners as acceptance plus a separate alarm-driven drain. Immediate delivery
+records no alarm invocation, with 4 alarm sets and 8 reads; its warm pass records
+76/89 SQL writes, 5/10 requests, 4 alarm sets and 7 reads. These profiles stop at
+confirmed append and exclude ACK cleanup, so they are not comparable to the
+complete online-cycle totals above. Activation adds no self-RPC, persistent
+phase or polling loop. Cloudflare object duration and the full billing refresh
+remain step 10 work; these counts establish no production billing claim.
+
 The design has finite offline maintenance and a measurable write premium for
 atomicity/recovery. The installed health command uses 117 native SQL row writes
 for a warmed online cycle. Including alarm calls and a conservative allowance

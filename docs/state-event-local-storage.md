@@ -86,8 +86,10 @@ state/event outbox. The existing notification schedulers use that same decision,
 so neither can delete an event wakeup or overwrite earlier work. `GroupConfig`
 constructor recovery rediscovers outbox work after eviction.
 
-The first durable wakeup runs the [step-7 bounded relay](state-event-relay.md)
-one second after commit. Successful append parks a compact outcome until useful
+The first durable wakeup selects the [bounded relay](state-event-relay.md)
+one second after commit as a recovery fallback. An
+[immediate background activation](state-event-immediate-delivery.md) can start
+the first publication before that deadline. Successful append parks a compact outcome until useful
 ACK/reconnect evidence or original expiry. Deadline maintenance persists
 `gap_pending` before releasing an unappended payload; unresolved authority stays
 charged to the 100-record/512-KiB ceiling. Only proven terminal outcomes retire

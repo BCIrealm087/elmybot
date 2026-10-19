@@ -33,7 +33,7 @@ export function nextProducerWakeup(state) {
 }
 export async function queueProducerWakeup(state, schedule, nowMs = Date.now()) {
   if (!producerInterestExists(state)) return;
-  await state.storage.transaction(async () => {
+  return state.storage.transaction(async () => {
     const interest = one(state, "SELECT * FROM state_event_producer_interest");
     if (!interest?.active) {
       traceStateEventForOwner(state, "wake.skipped", { reason: "inactive_interest" });
@@ -47,6 +47,7 @@ export async function queueProducerWakeup(state, schedule, nowMs = Date.now()) {
       nextWakeupAtMs: interest.lease_until_ms > nowMs ? interest.lease_until_ms : Math.min(interest.due_ms ?? due, due),
       leaseUntilMs: interest.lease_until_ms });
     await schedule();
+    return due <= nowMs && !(interest.lease_until_ms > nowMs);
   });
 }
 export async function drainProducerWakeup(state, env, schedule, nowMs = Date.now()) {

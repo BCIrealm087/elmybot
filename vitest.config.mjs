@@ -8,6 +8,9 @@ export default defineConfig({
         bindings: {
           STATE_QUERY_STREAMS_ENABLED: "true",
           STATE_EVENT_OPERATIONS_ENABLED: "true",
+          // Existing recovery/cost fixtures explicitly drive alarms. Activation
+          // tests opt into the production default to exercise both paths.
+          STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED: "false",
           TWITCH_CLIENT_ID: "client-id",
           TWITCH_CLIENT_SECRET: "test-client-secret",
           TWITCH_BOT_USER_ID: "bot-user-id",

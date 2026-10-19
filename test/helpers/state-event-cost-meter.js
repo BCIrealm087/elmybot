@@ -176,6 +176,7 @@ export async function measuredDeliveryFixture(options = {}) {
   }
   let interception = null;
   const testEnv = { ...f.testEnv };
+  if (options.immediate) delete testEnv.STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED;
   for (const role of ["CONFIG", "SHAREABLE_STATE_REALM", "DURABLE_EVENT_STREAM", "INTEGRATION_REGISTRY", "STATE_QUERY_OBSERVER"]) {
     const names = f.testEnv[role];
     testEnv[role] = { idFromName: (key) => names.idFromName(key), get: (id) => ({ fetch: async (url, init) => {

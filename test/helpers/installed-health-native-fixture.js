@@ -16,12 +16,13 @@ export async function cleanupNativeHealthFixtures() {
   fixtures.clear();
 }
 
-// Installed declarations and unchanged native env, including the real registry
-// singleton. No forwarding binding, per-hop runInDurableObject, env injection,
+// Installed declarations and native bindings, including the real registry
+// singleton. Apart from an optional activation-flag override, no forwarding
+// binding, per-hop runInDurableObject, env injection,
 // declaration replacement, forced due date or manual drain in the measured path.
 // Permission authorization is supplied at the action boundary, not simulated as
 // a Discord/Twitch HTTP signature. Control operations are counted separately.
-export async function nativeHealthFixture({ linked = false } = {}) {
+export async function nativeHealthFixture({ linked = false, immediate = false } = {}) {
   const suffix = `${Date.now()}${++serial}`;
   const discord = createPlatformGroupRef({ platform: "discord", kind: "guild", id: `${suffix}1` });
   const twitch = createPlatformGroupRef({ platform: "twitch", kind: "channel", id: `${suffix}2` });
@@ -58,6 +59,13 @@ export async function nativeHealthFixture({ linked = false } = {}) {
   const otherOwner = env.SHAREABLE_STATE_REALM.get(env.SHAREABLE_STATE_REALM.idFromName(otherRoute.key));
   owners.add(otherOwner);
   const streamStub = env.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(route.streamRouteId));
+  // Activation coverage changes only this optional operational flag. Every
+  // service binding remains the native binding; no forwarding or per-hop setup.
+  if (immediate) for (const stub of [...owners, streamStub]) {
+    await control(stub, (instance) => {
+      instance.env = { ...instance.env, STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED: "true" };
+    });
+  }
   const actionRegistry = createActionRegistry(featureRegistry.actions);
   function invocation(group = discord, args = { operation: "damage", amount: 1 }) {
     return createCommandInvocation({ kind: "fun.health.impact.v2", args, sourceCreatedAtMs: Date.now(),
