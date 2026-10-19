@@ -20,7 +20,7 @@ export function nextStorageWakeup(state, candidate = null) {
   }
   return candidates.length ? Math.min(...candidates) : null;
 }
-export async function scheduleStorageAlarmInTransaction(state, { candidate = null, nowMs = Date.now() } = {}) {
+export async function scheduleStorageAlarmInTransaction(state, { candidate = null, nowMs = Date.now(), recompute = false } = {}) {
   const current = await state.storage.getAlarm();
   const due = nextStorageWakeup(state, candidate);
   if (due === null) {
@@ -30,13 +30,31 @@ export async function scheduleStorageAlarmInTransaction(state, { candidate = nul
     }
   } else {
     const next = Math.max(nowMs, due);
-    if (current === null || current > next) await state.storage.setAlarm(next);
+    // An expired selection is not coverage for new work. During a handler,
+    // getAlarm() can also expose an alarm rearmed before a claim advanced its
+    // durable deadline. Completion recomputes from every durable source, so a
+    // provisional alarm cannot strand work or spin a leased-only owner.
+    const replace = current === null || current > next || ((current <= nowMs || recompute) && current !== next);
+    if (replace) await state.storage.setAlarm(next);
     traceStateEventForOwner(state, "alarm.schedule", {
-      scheduledAtMs: current === null || current > next ? next : current,
+      scheduledAtMs: replace ? next : current,
       previousAlarmMs: current, durableDueMs: due
     });
   }
 }
 export async function recoverStorageAlarm(state, options) {
   return state.storage.transaction(async () => scheduleStorageAlarmInTransaction(state, options));
+}
+
+// Entry consumes the delivered alarm in native storage. Claims/admissions must
+// still save their own SQL + alarm transaction while remote work is in flight.
+// Reconcile again on either normal or exceptional completion; a thrown handler
+// remains thrown so the runtime retains its retry semantics. Abrupt termination
+// instead relies on those durable transitions and constructor recovery.
+export async function runStorageAlarm(state, handler) {
+  try {
+    return await handler();
+  } finally {
+    await recoverStorageAlarm(state, { recompute: true });
+  }
 }

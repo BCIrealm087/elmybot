@@ -39,7 +39,9 @@ describe("state-event scheduling at ordinary command spacing", () => {
         expect(frames[index].receivedAtMs - next.receipt.committedAtMs).toBeLessThan(4500);
       }
       await expect.poll(() => logs.filter((row) => row.stage === "socket.ack").length).toBe(3);
-      await expect.poll(() => f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+      // ACK cleanup can use the one-second coalesced wake after publication.
+      // Vitest's default one-second poll races that valid future deadline.
+      await expect.poll(() => f.rows(f.ownerStub, "state_event_outbox"), { timeout: 4500 }).toEqual([]);
       expect(frames.map((row) => row.sequence)).toEqual([1, 2, 3]);
       for (const next of accepted) {
         expect(logs.some((row) => row.stage === "commit" && row.operationId === next.operationId)).toBe(true);

@@ -4,7 +4,7 @@ import { drainStateEventRelay, handleStateEventDeliverySource, handleStateEventO
 import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
 import { commitLocalStateEvent } from "./state-events/local-commit.js";
 import { stateEventOutboxExists } from "./state-events/outbox.js";
-import { recoverStorageAlarm } from "./storage-alarm.js";
+import { recoverStorageAlarm, runStorageAlarm } from "./storage-alarm.js";
 import { StateEventRecoveryError } from "./state-events/identity.js";
 import { handleLocalStateEventOwnerRequest } from "./state-events/owner-handler.js";
 import { jsonResponse, logError } from "./common.js";
@@ -408,10 +408,12 @@ export class GroupConfig {
   async alarm() {
     configureStateEventDiagnostics(this.state, this.env);
     traceStateEventForOwner(this.state, "alarm.start");
-    await drainStateEventRelay(this.state, this.env);
-    await drainStateQueryGrantInvalidations(this.state, this.env);
-    if (stateQueryNotificationTablesExist(this.state)) {
-      await drainStateQueryNotifications(this.state, this.env);
-    }
+    await runStorageAlarm(this.state, async () => {
+      await drainStateEventRelay(this.state, this.env);
+      await drainStateQueryGrantInvalidations(this.state, this.env);
+      if (stateQueryNotificationTablesExist(this.state)) {
+        await drainStateQueryNotifications(this.state, this.env);
+      }
+    });
   }
 }

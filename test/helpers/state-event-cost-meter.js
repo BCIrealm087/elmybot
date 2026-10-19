@@ -6,6 +6,7 @@ import { createFeatureServiceRuntime } from "../../src/framework/service-runtime
 import { createCommandInvocation } from "../../src/integrations/contracts.js";
 import { prepareStateEventOperation } from "../../src/framework/state-event-operation.js";
 import { drainStateEventRelay } from "../../src/state-events/delivery-source.js";
+import { runStorageAlarm } from "../../src/storage-alarm.js";
 import { createFeatureRegistry } from "../../src/framework/feature-registry.js";
 import { durableEventRouteId } from "../../src/durable-events/contract.js";
 
@@ -205,7 +206,9 @@ export async function measuredDeliveryFixture(options = {}) {
   const ownerRole = f.owner.kind === "group_local" ? "CONFIG" : "SHAREABLE_STATE_REALM";
   const drain = (due = true) => meter.handler(f.ownerStub, ownerRole, "alarm", () => runInDurableObject(f.ownerStub, async (instance, state) => {
     if (due) state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0 WHERE lease_token IS NULL AND state <> 'appended'");
-    return drainStateEventRelay(instance.state, testEnv);
+    // Include source-handler completion scheduling while keeping independent
+    // notification delivery costs in their dedicated measurement profile.
+    return runStorageAlarm(instance.state, () => drainStateEventRelay(instance.state, testEnv));
   }));
   const streamCall = async (operation, body = {}) => {
     const response = await testEnv.DURABLE_EVENT_STREAM.get(testEnv.DURABLE_EVENT_STREAM.idFromName(f.route.streamRouteId)).fetch(`https://stream/internal/events/${operation}`, {

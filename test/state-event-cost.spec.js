@@ -113,11 +113,14 @@ describe("measured state/event operation budgets", () => {
     expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
     tick(clock);
     const warmOnline = await f.meter.phase(async () => { await f.commit(); await f.drain(); await f.ack(); tick(clock); await f.streamAlarm(); await f.drain(false); });
+    task.meta.stateEventCost = { shared, stateOnly, eventOnly, coldAccept, append, ackAndCleanup, warmOnline };
     expect(warmOnline.rowsWritten).toBeLessThanOrEqual(shared ? 135 : 120);
     expect(warmOnline.requests).toBeLessThanOrEqual(shared ? 20 : 12);
-    expect(warmOnline.rowsRead).toBeLessThanOrEqual(5000); expect(warmOnline.alarms.writes).toBeLessThanOrEqual(14);
+    expect(warmOnline.rowsRead).toBeLessThanOrEqual(5000);
+    // Step 2 writes repaired overdue/claim deadlines and reconciles completion;
+    // account for those finite writes instead of preserving stale alarms.
+    expect(warmOnline.alarms.writes).toBeLessThanOrEqual(16);
     expect(stateOnly.requests).toBe(1); expect(eventOnly.incomingMessages).toBe(1);
-    task.meta.stateEventCost = { shared, stateOnly, eventOnly, coldAccept, append, ackAndCleanup, warmOnline };
   });
   it.for([false, true])("bounds a real six-stream admission burst and relay batch (shared=%s)", async (shared, { task }) => {
     const f = await measuredDeliveryFixture({ shared, streams: 6 });

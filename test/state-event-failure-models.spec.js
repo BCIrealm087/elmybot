@@ -41,19 +41,17 @@ describe("explicit state-event latency failure models", () => {
       expect(model.dispatches).toEqual([{ scheduledAtMs: observed.selectedOffsetMs, startedAtMs: observed.startedOffsetMs, lagMs: observed.lagMs }]);
     });
   });
-  it("characterizes the currently retained overdue alarm across a new admission", async () => {
+  it("repairs an overdue alarm across a new admission", async () => {
     await withAlarmModel(async ({ model, insert, schedule }) => {
       insert("1", 2000); await schedule(); model.advanceTo(8000);
       insert("2", 9000); await schedule();
-      // Baseline observation for step 2, not the desired scheduler contract.
-      // That step must replace this observation with its repair regression.
-      expect(model.scheduledAtMs).toBe(2000);
-      expect(model.writes).toHaveLength(1);
-      model.advanceTo(32_000); await model.dispatch(() => {});
-      expect(model.dispatches[0].lagMs).toBe(30_000);
+      expect(model.scheduledAtMs).toBe(8000);
+      expect(model.writes).toHaveLength(2);
+      await model.dispatch(() => {});
+      expect(model.dispatches[0].lagMs).toBe(0);
     });
   });
-  it("characterizes due-work rearming before a claim retaining a past alarm afterward", async () => {
+  it("replaces a due-work alarm with the future claim deadline", async () => {
     await withAlarmModel(async ({ native, model, insert, schedule }) => {
       insert("1", 2000); await schedule(); model.advanceTo(2000);
       await model.dispatch(async () => {
@@ -62,10 +60,10 @@ describe("explicit state-event latency failure models", () => {
         await schedule();
         native.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 32_000");
         await schedule();
-        expect(model.scheduledAtMs).toBe(2000); // baseline, repaired in step 2
+        expect(model.scheduledAtMs).toBe(32_000);
         expect(native.storage.sql.exec("SELECT MIN(next_wakeup_at_ms) AS due FROM state_event_outbox").one().due).toBe(32_000);
       });
-      expect(model.writes.map((r) => r.scheduledAtMs)).toEqual([2000, 2000]);
+      expect(model.writes.map((r) => r.scheduledAtMs)).toEqual([2000, 2000, 32_000]);
     });
   });
   it("models running-handler rearming and admission while interruption retains SQL work", async () => {
@@ -103,12 +101,13 @@ describe("explicit state-event latency failure models", () => {
       const model = alarmDispatchModel(state, { nowMs: Date.now() });
       state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = 0 WHERE lease_token IS NULL");
       const result = await drainStateEventRelay(model.state, f.testEnv);
-      await state.storage.deleteAlarm(); return result;
+      await state.storage.deleteAlarm(); return { ...result, scheduledAtMs: model.scheduledAtMs };
     });
-    await pass();
+    const firstPass = await pass();
     const row = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
     expect(row).toMatchObject({ state: "pending", uncertain: 1, attempts: 1, last_error: "state_event_outcome_unknown" });
     expect(row.lease_token).not.toBeNull(); expect(row.next_wakeup_at_ms).toBe(row.lease_until_ms);
+    expect(firstPass.scheduledAtMs).toBeGreaterThanOrEqual(row.lease_until_ms);
     const receipts = await f.rows(f.streamStub, "state_event_destination_records");
     expect(receipts).toHaveLength(afterAppend ? 1 : 0);
     f.intercept(null);

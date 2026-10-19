@@ -36,6 +36,7 @@ describe("installed health with raw native request boundaries", () => {
     expect((await f.command(first)).output.message).toBe("Health saved and impact queued.");
     expect((await f.read()).value).toBe(96);
     expect((await f.read()).stateEvent.operationSequence).toBe(4);
-    await expect.poll(() => f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+    // Include the existing one-second ACK wake coalescing interval.
+    await expect.poll(() => f.rows(f.ownerStub, "state_event_outbox"), { timeout: 4500 }).toEqual([]);
   }, 30_000);
 });

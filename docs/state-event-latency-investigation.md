@@ -1,9 +1,10 @@
 # State/event latency investigation: step 1
 
-Step 1 of the latency repair roadmap establishes reproducible failure models and
-an installed-feature harness. It changes verification only; the scheduler,
-request topology, leases, relay bounds and widget ACK policy remain unchanged.
-The production baseline is `45c8ed9be7c37299868c06d215e90b382cf7d19d`.
+Step 1 of the latency repair roadmap established reproducible failure models and
+an installed-feature harness, without production changes. Step 2 repairs shared
+source alarm scheduling as described below. Request topology, leases, relay
+bounds and widget ACK policy remain unchanged. The captured production baseline
+is `45c8ed9be7c37299868c06d215e90b382cf7d19d`.
 
 ## Captured evidence
 
@@ -83,26 +84,52 @@ dates or manual relay drains in that measured path. Existing injected pacing
 tests remain useful scheduling regressions but cannot establish native depth
 behavior.
 
-## Concrete scheduler baseline for step 2
+## Scheduler repair in step 2
 
 The source relay observes mode and maintains the outbox before claiming work.
 Those operations can schedule work that is already due. Claim then advances the
-durable wakeup to the lease deadline. The current shared alarm helper only
-replaces an alarm if the new selection is earlier, so it can retain the old past
-timestamp despite a future durable deadline. A new admission can likewise leave
-an overdue alarm untouched.
+durable wakeup to the lease deadline. Before step 2, the shared alarm helper only
+replaced an alarm if the new selection was earlier, retaining the old past
+timestamp despite a future durable deadline. A new admission could likewise
+leave an overdue alarm untouched.
 
-The controlled dispatcher reproduces both transitions using the actual helper.
-It also permits admission/rearming while a handler is running, and keeps SQL work
-after an injected handler interruption. No production minute-spaced dispatch
-behavior is attributed to this model. Step 2 must replace the two overdue-alarm
-baseline assertions with repair regressions, preserving serialization with
-admission and considering **all** durable work sources sharing an alarm.
+The shared helper now replaces an expired selection with the earliest remaining
+durable deadline, clamped to the current time. Ordinary admission still preserves
+an earlier future alarm. GroupConfig and ShareableStateRealm also recompute their
+alarm in a `finally` block after draining, using all four durable sources:
+state-event outbox, grant invalidation, readable notification and watcher expiry.
+That final transaction can replace a provisional future selection if its work
+has completed or moved; a valid earlier deadline remains included in the minimum.
+Empty queues clear stale alarms. Lease-only queues sleep until their durable
+deadline; the repair never clears a lease or starts a new relay inline.
+
+The two step-1 scheduler characterizations are now repair regressions.
+`test/storage-alarm.spec.js` adds controlled dispatch/admission/interruption cases
+over native SQL, all-source deadline preservation, idle behavior and native
+SQL/alarm rollback before and after a failed alarm write. Native owner eviction
+tests cover constructor repair for both owner types while retaining an uncertain
+lease. The existing pre-append rejection/post-append reply-loss cases also check
+that the selected alarm respects the retained lease. No production minute-spaced
+dispatch behavior is attributed to these controlled models.
+
+Acceptance/claim transitions still save SQL and alarms together. Final scheduling
+also runs when a handler throws, and the failure continues to the runtime. Abrupt
+termination cannot run JavaScript cleanup; existing durable transitions,
+constructor recovery and platform retries remain necessary. There is one extra
+bounded all-source scheduling read/transaction at handler completion, and expired
+selections now cause actual alarm writes. No RPC, durable table, polling loop or
+new timer is added. Cost profiles must account for those scheduling changes.
+The focused 20-profile run keeps installed-health warm SQL writes and binding
+requests unchanged, with four additional alarm sets and two additional alarm
+reads per measured online cycle. See the dated note in
+[the cost report](state-event-costs.md); the new 16-set bound includes the final
+source scheduling pass, and the long-offline tests still require finite work
+with no polling.
 
 The browser ACK-after-effect assertion is another baseline, to be replaced by
-step 8's bounded visual queue regression. Neither characterization is the
-desired final behavior. Fault-recovery assertions remain safety requirements:
-no second state mutation, no duplicate event, and no premature lease release.
+step 8's bounded visual queue regression. Fault-recovery assertions remain safety
+requirements: no second state mutation, no duplicate event, and no premature
+lease release.
 
 ## Remaining uncertainty
 

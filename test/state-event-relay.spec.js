@@ -468,6 +468,23 @@ describe("bounded state/event relay and producer wakeups", () => {
     await drain(f);
     await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))[0].control_attempts).toBe(13);
   });
+  it.each([false, true])("repairs an overdue alarm after eviction without releasing an uncertain lease (shared=%s)", async (shared) => {
+    const f = await fixture({ shared }), accepted = await f.commit(); await stop(f);
+    const now = Date.now() + 120_000, until = now + 30_000, token = crypto.randomUUID();
+    await runInDurableObject(f.ownerStub, async (_instance, state) => {
+      state.storage.sql.exec(`UPDATE state_event_outbox SET uncertain = 1, lease_token = ?, lease_until_ms = ?,
+        next_wakeup_at_ms = ? WHERE operation_id = ?`, token, until, until, accepted.operationId);
+      // Future in the native clock, overdue in the controlled application clock.
+      await state.storage.setAlarm(now - 1000);
+    });
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    await evictDurableObject(f.ownerStub);
+    expect(await runInDurableObject(f.ownerStub, (_instance, state) => state.storage.getAlarm())).toBe(until);
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({
+      operation_id: accepted.operationId, uncertain: 1, lease_token: token, lease_until_ms: until,
+      next_wakeup_at_ms: until, attempts: 0
+    });
+  });
   it("parks a busy owner's due work until a lease can recover instead of spinning alarms", async () => {
     const f = await fixture({ streams: 5 }); for (let i = 0; i < 5; i++) await f.commit(i);
     const until = Date.now() + 30_000;

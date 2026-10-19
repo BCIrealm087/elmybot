@@ -1,8 +1,19 @@
 # State/event cost measurements and operation budgets
 
-Roadmap step 11, measured on 2026-10-18. New combined acceptance remains false
+Original combined-operation roadmap step 11, measured on 2026-10-18. New combined acceptance remains false
 in checked-in environments. No deployment or live billing experiment is part of
 this work.
+
+The tables and checked-in JSON below are the historical baseline, before the
+latency repair roadmap. Step 2 adds overdue-alarm repair and handler-completion
+recomputation. Its focused installed-health warm-cycle measurement retains 117
+SQL row writes and 19 binding requests, with alarm sets increasing from 12 to 16,
+alarm reads from 12 to 14 and SQL rows read from 3,938 to 4,189. The meter now
+includes completion recomputation around its isolated relay drain; notification
+delivery remains a separate profile. Current CI artifacts carry these counters.
+The latency roadmap's step 10 will refresh the complete report and billing model
+after the remaining repairs; the historical prices below are not a measurement
+of the repaired implementation.
 
 The design has finite offline maintenance and a measurable write premium for
 atomicity/recovery. The installed health command uses 117 native SQL row writes

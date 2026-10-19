@@ -94,6 +94,11 @@ production latency guarantee.
 See [the step-1 latency investigation](state-event-latency-investigation.md) for
 the sanitized production timing fixture, request/reentry map, installed-health
 raw-binding tests, controlled failure models and remaining production unknowns.
+Step 2 repairs expired shared-source alarms and recomputes all durable work after
+each source handler, including exceptional completion. Its tests cover earlier
+notification/watcher/invalidation deadlines, concurrent admission, native alarm
+rollback, owner eviction and retained uncertainty. This does not guarantee
+production alarm dispatch timing or repair the separate request-depth failure.
 
 `test/state-event-latency.spec.js` uses real clocks, native SQLite/alarm/RPC and
 WebSocket registration/ACK, with three commands at five-second local/shared and
