@@ -30,8 +30,13 @@ owner limit. Independent streams use a persisted last-served marker for fair
 selection. A busy owner defers waiting work until a lease can recover; finishing
 work releases those deferred rows promptly instead of spinning immediate alarms.
 
-Each handler processes at most twenty expiry markers/claimed records and starts
-new attempts for at most five seconds. Already started calls have a five-second
+Each invocation reserves at most twenty complete-path binding calls, claims at
+most two records and starts at most one publication. Remaining already-due work
+gets a durable 25-ms continuation selection. The existing combined ceiling of
+twenty expiry markers/claimed records also remains. See the
+[remote-work budget](state-event-relay-work-budget.md) for nested-call weights,
+scope and verification. The relay starts new attempts for at most five seconds.
+Already started calls have a five-second
 request deadline. A lost/unknown response retains the lease until recovery; a
 retry recovers the original destination receipt rather than replaying a mutation.
 A timeout is never proof of non-append. An uncertain `pending`, `parked` or

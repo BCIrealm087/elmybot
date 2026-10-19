@@ -25,6 +25,14 @@ async function drain(f, force = true) {
   });
 }
 async function stop(f) { await runInDurableObject(f.ownerStub, (_i, state) => state.storage.deleteAlarm()); }
+async function drainPublications(f, passes) {
+  let attempted = 0;
+  for (let index = 0; index < passes; index++) {
+    await edit(f, "UPDATE state_event_outbox SET next_wakeup_at_ms = 0 WHERE state IN ('pending', 'parked', 'gap_pending') AND (lease_until_ms IS NULL OR lease_until_ms <= ?)", Date.now());
+    attempted += (await drain(f, false)).attempted;
+  }
+  return attempted;
+}
 function nextMessage(socket) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(Error("socket message timed out")), 3000);
@@ -209,7 +217,7 @@ describe("bounded state/event relay and producer wakeups", () => {
     expect(rows.filter((row) => row.lease_token !== null)).toHaveLength(1);
     expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0].rows).toBe(7);
     f.intercept(null); clock.mockReturnValue(retiring.lease_until_ms + 1);
-    await drain(f);
+    for (let index = 0; index < 7; index++) await drain(f);
     expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
     const receipts = await f.rows(f.streamStub, "durable_event_stream_receipts");
     expect(receipts).toHaveLength(7);
@@ -242,7 +250,7 @@ describe("bounded state/event relay and producer wakeups", () => {
     log.mockRestore();
     f.testEnv.STATE_EVENT_DIAGNOSTICS = "false";
     f.intercept(null); clock.mockReturnValue(head.lease_until_ms + 1);
-    await drain(f);
+    await drainPublications(f, 2);
     const delivered = (await f.rows(f.streamStub, "durable_event_stream_events")).sort((a, b) => a.sequence - b.sequence);
     expect(delivered.map((row) => row.event_id)).toEqual([first.receipt.eventId, second.receipt.eventId]);
     expect(delivered.map((row) => row.sequence)).toEqual([1, 2]);
@@ -277,22 +285,23 @@ describe("bounded state/event relay and producer wakeups", () => {
   it("lets one blocked stream coexist with fair draining of independent streams", async () => {
     const f = await fixture({ streams: 6 }); for (let i = 0; i < 6; i++) { await f.commit(i); await stop(f); }
     await runInDurableObject(f.streamStubs[0], (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 1000"));
-    const result = await drain(f);
-    expect({ attempted: result.attempted, rows: (await f.rows(f.ownerStub, "state_event_outbox")).map((r) => ({ state: r.state, error: r.last_error, attempts: r.attempts })) }).toEqual({ attempted: 6, rows: [
+    const attempted = await drainPublications(f, 6);
+    expect({ attempted, rows: (await f.rows(f.ownerStub, "state_event_outbox")).map((r) => ({ state: r.state, error: r.last_error, attempts: r.attempts })) }).toEqual({ attempted: 6, rows: [
       { state: "pending", error: "durable_event_stream_full", attempts: 1 }, ...Array.from({ length: 5 }, () => ({ state: "appended", error: null, attempts: 1 }))
     ] });
     expect(await f.rows(f.streamStubs[0], "durable_event_stream_events")).toEqual([]);
     for (const stub of f.streamStubs.slice(1)) expect(await f.rows(stub, "durable_event_stream_events")).toHaveLength(1);
   });
-  it("processes at most twenty queued records per owner handler", async () => {
+  it("leaves a large backlog unclaimed after one publication quantum", async () => {
     const f = await fixture({ streams: 6 });
     for (let i = 0; i < 25; i++) {
       if (i) await edit(f, "UPDATE state_event_outbox_budget SET rate_json = '[]'");
       await f.commit(i % 6); await stop(f);
     }
-    expect((await drain(f)).attempted).toBe(20);
+    expect((await drain(f)).attempted).toBe(1);
     let retained = 0; for (const stub of f.streamStubs) retained += (await f.rows(stub, "durable_event_stream_events")).length;
-    expect(retained).toBe(20);
+    expect(retained).toBe(1);
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).filter((row) => row.attempts === 0 && row.lease_token === null)).toHaveLength(24);
   });
   it("persists producer interest before capacity rejection and wakes on reconnect", async () => {
     const f = await fixture(); await f.commit();
@@ -389,10 +398,13 @@ describe("bounded state/event relay and producer wakeups", () => {
         }
         await gate; active--; throw Object.assign(Error("temporary service rejection"), { code: "durable_event_service_unavailable", status: 503 });
       };
-      const result = await runStateEventRelay(controlled, f.testEnv, request);
-      await state.storage.deleteAlarm(); return { peak, rejected, attempted: result.attempted };
+      const outcomes = await Promise.allSettled(accepted.slice(0, 4).map((entry) =>
+        runStateEventRelay(controlled, f.testEnv, request, { onlyOperationId: entry.operationId })));
+      expect(outcomes.every((entry) => entry.status === "rejected")).toBe(true);
+      const attempted = state.storage.sql.exec("SELECT SUM(attempts) AS total FROM state_event_outbox").one().total;
+      await state.storage.deleteAlarm(); return { peak, rejected, attempted };
     });
-    expect(report).toEqual({ peak: 4, rejected: true, attempted: 8 });
+    expect(report).toEqual({ peak: 4, rejected: true, attempted: 4 });
   });
   it("stops starting work after five seconds and retains the timed-out attempt leases", async () => {
     const f = await fixture({ streams: 8 }); for (let i = 0; i < 8; i++) { await f.commit(i); await stop(f); }
@@ -407,7 +419,7 @@ describe("bounded state/event relay and producer wakeups", () => {
         return { attempted: result.attempted, ...counts };
       } finally { release(); await state.storage.deleteAlarm(); }
     });
-    expect(report).toEqual({ attempted: 4, untouched: 4, leased: 4 });
+    expect(report).toEqual({ attempted: 1, untouched: 7, leased: 1 });
   }, 15000);
   it("retires shared owner and origin receipts after expiry without changing feature state", async () => {
     const f = await fixture({ shared: true }), accepted = await f.commit(); await drain(f);
@@ -495,7 +507,7 @@ describe("bounded state/event relay and producer wakeups", () => {
     expect((await f.rows(f.ownerStub, "state_event_outbox")).find((row) => row.lease_token === null).next_wakeup_at_ms).toBe(until);
     expect(await runInDurableObject(f.ownerStub, (_i, state) => state.storage.getAlarm())).toBe(until);
     await edit(f, "UPDATE state_event_outbox SET lease_until_ms = 0, next_wakeup_at_ms = 0");
-    expect((await drain(f, false)).attempted).toBe(5);
+    expect(await drainPublications(f, 5)).toBe(5);
     expect((await f.rows(f.ownerStub, "state_event_outbox")).every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
   });
   it("bounds destination notification retries when a producer is unreachable", async () => {

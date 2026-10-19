@@ -4,6 +4,7 @@ import { canonicalJson, recoveryError } from "./identity.js";
 import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
 import { relayStreamRequest, boundedStateEventRequest, stateEventRetryDelay } from "./relay-client.js";
 import { retireStoredStateEventOwner } from "./storage.js";
+import { createStateEventWorkBudget, STATE_EVENT_WORK_LIMITS } from "./relay-work-budget.js";
 
 export const STATE_EVENT_RELAY_LIMITS = Object.freeze({ batch: 20, concurrency: 4, workMs: 5000, leaseMs: 30_000,
   scheduledAttempts: 12, totalAttempts: 20, wakeCoalesceMs: 1000 });
@@ -29,22 +30,22 @@ function resumeBusyStreams(state, nowMs) {
   const live = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).total);
   if (live < 4) state.storage.sql.exec("UPDATE state_event_outbox SET owner_busy = 0, next_wakeup_at_ms = ? WHERE owner_busy = 1 AND (lease_until_ms IS NULL OR lease_until_ms <= ?)", nowMs, nowMs);
 }
-async function interest(state, env, row, intent, deadline) {
+async function interest(state, env, row, intent, deadline, work) {
   const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", row.stream_route_id);
   if (stream.registered_epoch === stream.interest_epoch) return;
   await relayStreamRequest(env, row.stream_route_id, "interest", {
     owner: selectedOwner(intent), operationId: row.operation_id, epoch: stream.interest_epoch
-  }, deadline);
+  }, deadline, work);
   state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = ? WHERE route_id = ? AND interest_epoch = ?", stream.interest_epoch, row.stream_route_id, stream.interest_epoch);
 }
-async function cleanup(state, env, row, intent, deadline) {
+async function cleanup(state, env, row, intent, deadline, work) {
   traceStateEventRow(env, "cleanup.start", row);
   // A gap is cached before confirmation. A crash at that boundary must not
   // retire its proof while the destination still holds an unprunable receipt.
   if (row.state === "gap_recorded" && !row.destination_confirmed) {
     const outcome = await relayStreamRequest(env, row.stream_route_id, "confirm", {
       owner: selectedOwner(intent), operationId: row.operation_id
-    }, deadline);
+    }, deadline, work);
     if (outcome?.confirmed !== true) throw recoveryError("outcome_unknown", 503);
     state.storage.sql.exec("UPDATE state_event_outbox SET destination_confirmed = 1 WHERE operation_id = ? AND lease_token = ?", row.operation_id, row.lease_token);
   }
@@ -61,6 +62,7 @@ async function cleanup(state, env, row, intent, deadline) {
     });
   }
   if (intent.route.kind === "effective_shareable") {
+    work.take("origin.retire");
     const acknowledged = await boundedStateEventRequest(() => env.CONFIG.get(env.CONFIG.idFromName(intent.originGroupKey)).fetch("https://origin/internal/state-events/origin/retire", {
       method: "POST", headers: { "x-elmybot-state-event-delivery": "v1" }, body: JSON.stringify({ sourceKey: intent.retirementSourceKey, operationId: row.operation_id, ownerKey: intent.route.key })
     }), deadline, { env, operationId: row.operation_id, routeId: row.stream_route_id, rpc: "origin.retire" });
@@ -70,7 +72,7 @@ async function cleanup(state, env, row, intent, deadline) {
   const count = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE stream_route_id = ?", row.stream_route_id).total);
   if (count === 1 && stream.registered_epoch) await relayStreamRequest(env, row.stream_route_id, "interest-release", {
     owner: selectedOwner(intent), epoch: stream.registered_epoch
-  }, deadline);
+  }, deadline, work);
   await state.storage.transaction(async () => {
     const active = current(state, row.operation_id);
     if (active?.lease_token !== row.lease_token) return;
@@ -82,7 +84,7 @@ async function cleanup(state, env, row, intent, deadline) {
   });
   traceStateEventRow(env, "cleanup.finish", row);
 }
-async function claim(state, env, { onlyOperationId = null, manual = false, nowMs = Date.now(), remaining = 20 } = {}) {
+async function claim(state, env, budget, { onlyOperationId = null, manual = false, nowMs = Date.now() } = {}) {
   return state.storage.transaction(async () => {
     const active = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).total);
     if (active >= STATE_EVENT_RELAY_LIMITS.concurrency) {
@@ -149,6 +151,15 @@ async function claim(state, env, { onlyOperationId = null, manual = false, nowMs
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", isControl ? null : row.deadline_ms, row.operation_id);
         continue;
       }
+      // Reserve a complete record before creating a lease or charging an
+      // attempt. No mutation of the invocation budget inside a retryable SQL
+      // transaction. Work executes serially; competing invocations still share
+      // the four-live-lease owner gate above.
+      const reason = budget.reason(row);
+      if (reason) {
+        traceStateEventRow(env, "relay.yield", row, { reason, reservedCalls: budget.reserved, remoteCallLimit: STATE_EVENT_WORK_LIMITS.remoteCalls });
+        continue;
+      }
       state.storage.sql.exec("UPDATE state_event_source_streams SET last_served_ms = ? WHERE route_id = ?", nowMs, row.stream_route_id);
       if (row.last_error === "useful_wakeup") state.storage.sql.exec("UPDATE state_event_source_streams SET last_wake_ms = ? WHERE route_id = ?", nowMs, row.stream_route_id);
       const token = crypto.randomUUID();
@@ -158,7 +169,7 @@ async function claim(state, env, { onlyOperationId = null, manual = false, nowMs
       const claimed = { ...current(state, row.operation_id), wake_generation: row.wake_generation };
       result.push(claimed); streams.add(lane);
       traceStateEventRow(env, "relay.claim", claimed, { ownerId: state.id.toString(), activeLeases: active + result.length });
-      if (result.length >= Math.min(remaining, 4 - active)) break;
+      break;
     }
     await scheduleStorageAlarmInTransaction(state, { nowMs });
     return result;
@@ -173,9 +184,11 @@ async function finish(state, env, row, error = null, terminalDelivery = false) {
     const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", row.stream_route_id);
     const useful = stream.wake_generation !== row.wake_generation;
     const uncertain = Boolean(error) && (!error.code || error.code === "state_event_outcome_unknown");
+    const yielded = error?.code === "state_event_relay_budget";
     const parked = ["durable_event_stream_full", "durable_event_gap_requires_reset", "durable_event_consumer_unavailable", "state_event_attempt_limit", "state_event_stream_blocked", "state_event_service_unavailable"].includes(error?.code) && !error?.retryAfterMs;
     let due;
     if (used >= 20) due = null;
+    else if (yielded) due = now + STATE_EVENT_WORK_LIMITS.continuationMs;
     else if (terminalDelivery) due = now;
     else if (!error && active.state === "appended") due = Math.max(now, active.deadline_ms);
     else if (parked || scheduled >= 12) due = isControl ? null : Math.max(now, active.deadline_ms);
@@ -211,23 +224,25 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
   const started = Date.now();
   const expired = await maintainStateEventOutbox(state, Date.now(), options.onlyOperationId ?? null);
   const batch = 20 - expired.examined;
+  const budget = createStateEventWorkBudget();
   let attempted = 0, lastResult;
   const work = async (row) => {
+    const recordWork = budget.start(row);
     const intent = JSON.parse(row.intent_json), owner = selectedOwner(intent), deadline = Date.now() + 5000;
     try {
       if (env.DURABLE_EVENT_STREAMS_ENABLED !== "true" && row.deadline_ms > Date.now() && !control(row)) throw recoveryError("service_unavailable", 503);
       let result;
       if (control(row)) {
-        await cleanup(state, env, row, intent, deadline);
+        await cleanup(state, env, row, intent, deadline, recordWork);
         return row.state === "reset_discarded" ? { state: "reset_discarded", terminal: "reset", operationId: row.operation_id }
           : intent.delivery ?? { state: "retired" };
       }
       if (row.deadline_ms <= Date.now()) await maintainStateEventOutbox(state, Date.now(), row.operation_id);
-      await interest(state, env, row, intent, deadline);
-      result = await reconcile(state, env, owner, row.operation_id, row.stream_route_id, { leaseToken: row.lease_token, deadline });
+      await interest(state, env, row, intent, deadline, recordWork);
+      result = await reconcile(state, env, owner, row.operation_id, row.stream_route_id, { leaseToken: row.lease_token, deadline, work: recordWork });
       const active = current(state, row.operation_id);
       if (active && result.terminal) {
-        await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline);
+        await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork);
       } else await finish(state, env, row);
       return result;
     } catch (error) {
@@ -237,7 +252,7 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
     }
   };
   while (attempted < batch && Date.now() - started < 5000) {
-    const rows = await claim(state, env, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now(), remaining: batch - attempted });
+    const rows = await claim(state, env, budget, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now() });
     if (!rows.length) break;
     const outcomes = await Promise.allSettled(rows.slice(0, batch - attempted).map(work));
     attempted += outcomes.length;
@@ -247,6 +262,16 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
     }
     if (options.onlyOperationId) break;
   }
+  // Only work already due is deferred. Live leases, parked/null deadlines and
+  // earlier future work from any other alarm source retain their authority.
+  // A later alarm/request receives a fresh budget; promises and waitUntil do not.
+  await state.storage.transaction(async () => {
+    const now = Date.now();
+    state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = ?
+      WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`,
+    now + STATE_EVENT_WORK_LIMITS.continuationMs, now, now);
+    await scheduleStorageAlarmInTransaction(state, { recompute: true });
+  });
   if (options.onlyOperationId && !attempted) throw recoveryError("attempt_in_progress", 409);
   return options.onlyOperationId ? lastResult : { attempted };
 }

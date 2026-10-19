@@ -32,7 +32,8 @@ export async function boundedStateEventRequest(call, deadline = Date.now() + 500
     traceStateEvent(env, "rpc.finish", { ...context, code: resultCode, durationMs: Math.max(0, Date.now() - started) });
   }
 }
-export function relayStreamRequest(env, routeId, operation, input, deadline) {
+export function relayStreamRequest(env, routeId, operation, input, deadline, work) {
+  work?.take(operation);
   return boundedStateEventRequest(() => env.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(routeId)).fetch(
     `https://stream/internal/events/combined/${operation}`, {
       method: "POST", headers: { "x-elmybot-durable-event-internal": "v1", "x-elmybot-state-event-delivery": "v1" },

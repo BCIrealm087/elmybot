@@ -10,10 +10,19 @@ recomputation. Its focused installed-health warm-cycle measurement retains 117
 SQL row writes and 19 binding requests, with alarm sets increasing from 12 to 16,
 alarm reads from 12 to 14 and SQL rows read from 3,938 to 4,189. The meter now
 includes completion recomputation around its isolated relay drain; notification
-delivery remains a separate profile. Current CI artifacts carry these counters.
+delivery remains a separate profile. That step's CI artifacts record those counters.
 The latency roadmap's step 10 will refresh the complete report and billing model
 after the remaining repairs; the historical prices below are not a measurement
 of the repaired implementation.
+Step 3's [remote-work limit](state-event-relay-work-budget.md) further splits
+backlog across invocations; the six-stream profile now includes six relay
+handlers and their scheduling work rather than one batch.
+The step-3 installed-health warm cycle still uses 117 SQL writes, 19 binding
+requests and 16 alarm sets; it records 16 alarm reads and 4,444 SQL rows read.
+The six-stream local/shared drain records 363/417 SQL writes (30 more in each
+case than step 2), 42 alarm sets and six handlers, with the same 36/48 binding
+requests. These controlled scheduling counters quantify the backlog tradeoff;
+they are not production duration or billing measurements.
 
 The design has finite offline maintenance and a measurable write premium for
 atomicity/recovery. The installed health command uses 117 native SQL row writes
@@ -152,13 +161,13 @@ than silently widening an allowance.
 | --- | --- |
 | First local/shared acceptance | 95 / 120 SQL writes. |
 | First local/shared deferred append | 70 / 80 SQL writes. |
-| Warm local/shared complete cycle | 120 / 135 SQL writes, 12 / 20 RPCs, 5,000 SQL reads, at most fourteen set-alarm calls. Installed bounded health allows 140 writes. |
+| Warm local/shared complete cycle | 120 / 135 SQL writes, 12 / 20 RPCs, 5,000 SQL reads, at most sixteen set-alarm calls. Installed bounded health allows 140 writes. |
 | Duplicate recovery | Zero writes or alarm scheduling, one RPC, at most 64 read rows. |
-| Six-stream burst acceptance and relay | Each phase at most 380 local / 440 shared writes; relay at most 36 / 48 RPCs and four live physical append calls. |
+| Six-stream burst acceptance and relay | Each phase at most 380 local / 440 shared writes; six relay invocations total at most 36 / 48 RPCs, with one physical append call at a time in this profile. |
 | Receipt pruning | Twenty rows per physical combined destination ledger per pass; 1,000-pair cleanup at most eighty SQL writes. Source pruning remains twenty terminal rows per pass. |
 | History growth | Adding 10,000 synthetic terminal receipts changes duplicate reads by zero; new admission permits at most 100 additional read rows and twenty writes. It does not scan the receipt history. |
 | Idle/offline | No work after finite lease/deadline cleanup; thirty-day simulation capped at four expiry-phase handlers. |
-| Retry outage | Twelve scheduled attempts, one reserved expiry attempt in the measured case, then charged gap-pending metadata with no payload or scheduled loop. Existing relay tests enforce twenty total attempts and twenty records per handler. |
+| Retry outage | Twelve scheduled attempts, one reserved expiry attempt in the measured case, then charged gap-pending metadata with no payload or scheduled loop. Relay tests enforce twenty total attempts plus the tighter per-invocation remote-work/claim/publication limits. |
 
 These bounds protect the combined path. They do not establish a new bound for
 all pre-existing event-only source-ledger queries or unrelated registry work.

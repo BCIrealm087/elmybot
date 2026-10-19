@@ -175,7 +175,8 @@ not cancel all losing fetches or cap billed object-active time. Reprice and
 supply realistic aggregate duration/storage before projecting production volume.
 
 The tests enforce finite retries/leases/batches and no periodic idle consumer
-polling. They cover twenty-record cleanup, four independent relay streams,
+polling. They cover twenty-row receipt pruning, four shared live relay leases,
+the [per-invocation remote-work limits](state-event-relay-work-budget.md),
 large receipt history and long virtual outages. Source capacity remains 100
 pending rows / 512 KiB per owner, with independent receipt/authority budgets;
 SQL/index/platform storage overhead is additional. Full numeric limits are in

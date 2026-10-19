@@ -29,6 +29,7 @@ placement, alarm dispatch, or transport failures.
 | `relay.start` | Earliest durable outbox wakeup, live lease total and cleanup lease count, before maintenance/claim. |
 | `relay.blocked` | Ordered head, same-lane lease, owner capacity, or attempt budget. Includes the waiting operation and available blocking operation/state/expiry. |
 | `relay.claim`, `relay.finish` | Attempt, lane, lease expiry, result/error code, and next wakeup. `reason: "uncertain"` identifies retained uncertainty fencing. |
+| `relay.yield` | Invocation publication/record/remote budget prevents claiming another row; includes `reservedCalls` and `remoteCallLimit`. Continuation does not clear an uncertain lease. |
 | `rpc.start`, `rpc.finish` | Interest registration/release, authority append, destination append/confirm/outcome, origin retirement, and producer wake. `rpc` identifies the call; finish includes elapsed milliseconds and a sanitized code. |
 | `destination.append`, `source.cached` | Actual destination acceptance and subsequent source caching. A destination append without source caching can indicate a lost/failed append response. |
 | `socket.send`, `socket.ack` | Destination socket send and successful ACK processing. Event ID joins these to the operation; send is not proof of browser receipt. |

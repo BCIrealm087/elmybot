@@ -125,15 +125,16 @@ describe("measured state/event operation budgets", () => {
   it.for([false, true])("bounds a real six-stream admission burst and relay batch (shared=%s)", async (shared, { task }) => {
     const f = await measuredDeliveryFixture({ shared, streams: 6 });
     const accepted = await f.meter.phase(() => Promise.all(Array.from({ length: 6 }, (_, index) => f.commit(f.invocation(index)))));
-    const drain = await f.meter.phase(() => f.drain());
-    expect(drain.peakAppends).toBeLessThanOrEqual(4);
+    const drain = await f.meter.phase(async () => { for (let index = 0; index < 6; index++) await f.drain(); });
+    task.meta.stateEventCost = { shared, burstSize: 6, accepted, drain };
+    expect(drain.alarms.invocations).toBe(6);
+    expect(drain.peakAppends).toBeLessThanOrEqual(1);
     expect(drain.peakAppends).toBeGreaterThan(0);
     const rows = await f.rows(f.ownerStub, "state_event_outbox");
     expect(rows).toHaveLength(6); expect(rows.every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
     expect(accepted.rowsWritten).toBeLessThanOrEqual(shared ? 440 : 380);
     expect(drain.rowsWritten).toBeLessThanOrEqual(shared ? 440 : 380);
     expect(drain.requests).toBeLessThanOrEqual(shared ? 48 : 36);
-    task.meta.stateEventCost = { shared, burstSize: 6, accepted, drain };
   });
   it("measures installed health v2, legacy v1 delivery and clamped no-ops", async ({ task }) => {
     const f = await measuredDeliveryFixture({ shared: true, extraFeatures: [healthFeature],

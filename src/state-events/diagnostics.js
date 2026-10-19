@@ -8,7 +8,7 @@ const opaque = /^(?:(?:seo1|des1|dev1)\.[\w-]{43}|ses1\.[\w-]{22}|[a-f0-9]{32}|[
 const identifiers = new Set(["operationId", "routeId", "eventId", "ownerId", "scopeToken", "blockerOperationId", "notificationId"]);
 const numbers = new Set(["committedAtMs", "scheduledAtMs", "previousAlarmMs", "durableDueMs", "startedAtMs", "durationMs",
   "dueAtMs", "leaseUntilMs", "sequence", "stateRevision", "attempts", "controlAttempts", "activeLeases", "cleanupLeases",
-  "version", "acceptedAtMs", "nextWakeupAtMs", "lagMs"]);
+  "version", "acceptedAtMs", "nextWakeupAtMs", "lagMs", "reservedCalls", "remoteCallLimit"]);
 const labels = new Set(["state", "lane", "reason", "code", "rpc", "blockerState", "result"]);
 
 export function traceStateEvent(env, stage, fields = {}) {

@@ -61,7 +61,7 @@ function streamStatus(state, routeId) {
 async function confirmDestination(state, env, owner, operationId, routeId, options) {
   const row = one(state, "SELECT destination_confirmed FROM state_event_outbox WHERE operation_id = ?", operationId);
   if (row?.destination_confirmed) return;
-  const outcome = await relayStreamRequest(env, routeId, "confirm", { owner, operationId }, options.deadline);
+  const outcome = await relayStreamRequest(env, routeId, "confirm", { owner, operationId }, options.deadline, options.work);
   if (outcome.confirmed !== true) throw recoveryError("outcome_unknown", 503);
   state.storage.sql.exec("UPDATE state_event_outbox SET destination_confirmed = 1 WHERE operation_id = ?", operationId);
 }
@@ -71,18 +71,19 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
   if (terminal.has(proof.state)) {
     await confirmDestination(state, env, owner, operationId, routeId, options);
     if (proof.state === "appended") {
-      return relayStreamRequest(env, routeId, "outcome", { owner, operationId }, options.deadline);
+      return relayStreamRequest(env, routeId, "outcome", { owner, operationId }, options.deadline, options.work);
     }
     return { ...proof.intent.delivery, terminal: proof.intent.delivery.reason };
   }
   const input = { owner, operationId, routeId };
   let outcome;
   try {
+    if (owner.kind === "effective_shareable") options.work?.take("authority.append");
     outcome = owner.kind === "effective_shareable"
       ? await boundedStateEventRequest(() => integrationRegistryStub(env).fetch("https://registry/state-events/append", {
         method: "POST", headers: STATE_EVENT_DELIVERY_HEADERS, body: JSON.stringify(input)
       }), options.deadline, { env, operationId, routeId, rpc: "authority.append" })
-      : await relayStreamRequest(env, routeId, "append", input, options.deadline);
+      : await relayStreamRequest(env, routeId, "append", input, options.deadline, options.work);
   } catch (error) {
     if (error.code === "durable_event_gap_requires_reset") state.storage.sql.exec("UPDATE state_event_source_streams SET blocked = 1 WHERE route_id = ?", routeId);
     throw error;
