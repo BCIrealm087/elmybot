@@ -125,3 +125,12 @@ and the same alarm counts as step 5; reads rise from 2,257/2,050 to 2,317/2,102.
 Cold initialization adds one SQL write for the new partial index. These profiles
 exclude ACK cleanup and object-duration billing; the CI artifact retains all 26
 profiles, including finite outage and history-growth checks.
+
+CI also exposed an immediate-activation interaction: eligible ACK cleanup could
+consume the reservation before a fresh shared publication, or a running cleanup
+activation could suppress the independent commit's runner. Commit activations
+now prioritize first publication and use a separate local gate from useful
+wakeups. Two regressions retain the withheld-alarm check and hold origin
+retirement while accepting/delivering another command. Alarm/manual scheduling,
+all four owner-wide leases and per-invocation budgets still apply. This scoped
+correction does not claim the universal reservation/fairness work of step 7.

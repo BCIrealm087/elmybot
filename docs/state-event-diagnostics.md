@@ -4,7 +4,7 @@ Private diagnostics distinguish source scheduling, ordered publication,
 destination delivery/ACK, and readable-state updates. They do not change leases,
 retry budgets, ordering, the one-second initial recovery wakeup, or command success.
 No schema migration is required. Step 5 also emits sanitized `activation.start`,
-`activation.skipped` and `activation.failed` stages for the relay/producer lanes;
+`activation.skipped` and `activation.failed` stages for the publication/relay/producer lanes;
 see [immediate activation](state-event-immediate-delivery.md). Step 6 adds
 `probe.start` and `probe.finish` with positive/absent/inconclusive reasons; the
 original operation ID links them to append and lease traces.

@@ -24,7 +24,12 @@ registry removes its commit barrier and releases its queue, and a queued append
 can then acquire it. No sleep, timer, self-request, coordinator or storage phase
 is added. The existing durable alarm is installed before activation is requested.
 
-A per-owner in-memory gate suppresses redundant relay runners. The gate is only
+Per-owner in-memory gates suppress redundant publication and useful-wakeup
+runners separately. An ACK cleanup runner cannot suppress an independent new
+commit activation. A commit pass prioritizes its never-attempted publication
+before eligible cleanup can consume its reservation; ordered-head and lease
+checks still apply. This is not a universal publication-slot reservation or a
+sustained cleanup-fairness guarantee (latency roadmap step 7). The gate is only
 an optimization; durable claims and lease tokens arbitrate concurrent alarms,
 explicit reconciliation, other requests and eviction. A suppressed activation
 does not cancel a persisted deadline. A pass runs once, with at most 20 reserved

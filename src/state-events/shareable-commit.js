@@ -79,6 +79,6 @@ export async function commitShareableStateEvent(state, env, registry, input, ada
     routeId: attempt.route.streamRouteId, eventId: committed.receipt.eventId,
     committedAtMs: committed.receipt.committedAtMs, sequence: committed.receipt.stateEvent.operationSequence,
     stateRevision: committed.receipt.stateEvent.stateRevision });
-  requestStateEventActivation(state, env, "relay", () => drainStateEventRelay(state, env, { activation: true }));
+  requestStateEventActivation(state, env, "publication", () => drainStateEventRelay(state, env, { activation: true }));
   return committed;
 }

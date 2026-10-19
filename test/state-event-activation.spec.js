@@ -105,6 +105,52 @@ describe("immediate bounded state/event activation", () => {
     expect(events.map((event) => event.sequence)).toEqual([1, 2]);
   });
 
+  it("prioritizes a new shared commit before eligible cleanup consumes its immediate budget", async () => {
+    const f = await measuredDeliveryFixture({ shared: true });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    await f.commit(); await f.drain(); await f.connect(); await f.ack(); await f.streamAlarm();
+    const cleanup = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
+    expect(cleanup).toMatchObject({ state: "appended", lease_token: null });
+    expect(cleanup.next_wakeup_at_ms).toBeLessThanOrEqual(Date.now());
+    clock.mockReturnValue(Date.now() + 1100);
+    delete f.testEnv.STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED;
+    const next = await f.commit();
+    await expect.poll(async () => (await f.rows(f.streamStub, "durable_event_stream_events"))[0]?.event_id).toBe(next.eventId);
+    await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))
+      .find((row) => row.operation_id === next.operationId)?.lease_token).toBeNull();
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).find((row) => row.operation_id === next.operationId))
+      .toMatchObject({ state: "appended", attempts: 1 });
+    // The old terminal obligation stays charged for its own bounded recovery;
+    // this first-publication preference does not claim a cleanup reservation.
+    expect((await f.rows(f.ownerStub, "state_event_outbox")).some((row) => row.operation_id === cleanup.operation_id)).toBe(true);
+  });
+
+  it("does not suppress a new commit activation while ACK cleanup is awaiting origin retirement", async () => {
+    const f = await measuredDeliveryFixture({ shared: true });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    await f.commit(); await f.drain(); await f.connect(); await f.ack(); await f.streamAlarm();
+    delete f.testEnv.STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED;
+    let retiring = false;
+    f.intercept(async (_kind, url, _init, send) => {
+      if (String(url).endsWith("origin/retire")) {
+        retiring = true; await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      return send();
+    });
+    const wake = await f.testEnv.SHAREABLE_STATE_REALM.get(f.ownerStub.id).fetch("https://owner/internal/state-events/delivery/wake", {
+      method: "POST", headers: { "x-elmybot-state-event-delivery": "v1" },
+      body: JSON.stringify({ owner: f.owner, routeId: f.route.streamRouteId, version: 100 })
+    });
+    expect(wake.ok).toBe(true); await expect.poll(() => retiring).toBe(true);
+    clock.mockReturnValue(Date.now() + 1100);
+    const next = await f.commit();
+    await expect.poll(async () => (await f.rows(f.streamStub, "durable_event_stream_events"))[0]?.event_id).toBe(next.eventId);
+    await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))
+      .find((row) => row.operation_id === next.operationId)?.lease_token).toBeNull();
+    // Let the deliberately delayed RPC finish before fixture teardown.
+    await expect.poll(() => f.rows(f.ownerStub, "state_event_outbox"), { timeout: 3000 }).toHaveLength(1);
+  });
+
   it.each([false, true])("retains a lease after a failed immediate append and recovers through an alarm (replyLost=%s)", async (replyLost) => {
     const f = await measuredDeliveryFixture({ shared: true, immediate: true });
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
@@ -177,7 +223,14 @@ describe("immediate bounded state/event activation", () => {
     for (let index = 0; index < 3; index++) {
       const group = linked && index % 2 ? f.twitch : f.discord;
       const input = f.invocation(group); await f.command(input);
-      await expect.poll(() => frames.length, { timeout: 4000 }).toBe(index + 1);
+      try { await expect.poll(() => frames.length, { timeout: 4000 }).toBe(index + 1); }
+      catch (error) {
+        const snapshot = await runInDurableObject(f.ownerStub, (instance, state) => ({
+          activationMode: instance.env.STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED,
+          rows: state.storage.sql.exec("SELECT operation_sequence, state, attempts, lease_until_ms, next_wakeup_at_ms FROM state_event_outbox ORDER BY operation_sequence").toArray()
+        }));
+        console.error("Native activation scheduling failure", JSON.stringify(snapshot)); throw error;
+      }
       expect(Date.parse(frames[index].acceptedAt)).toBe(Date.now());
       expect(frames[index].sequence).toBe(index + 1);
       await expect.poll(async () => (await f.rows(f.ownerStub, "state_event_outbox"))

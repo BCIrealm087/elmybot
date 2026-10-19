@@ -107,15 +107,17 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
       return [];
     }
     // A commit activation may start a never-attempted publication before its
-    // one-second recovery alarm. It cannot pull retries, coalesced wakeups or
-    // leased rows forward. All ordering/reset/admission checks below still run.
+    // recovery alarm, prioritizing it over cleanup that could consume the whole
+    // reservation. Alarm/manual fairness stays unchanged. It cannot pull retries,
+    // coalesced wakeups or leased rows forward; head/reset checks still run.
     const candidates = state.storage.sql.exec(`SELECT outbox.*, stream.wake_generation, stream.reset_id FROM state_event_outbox outbox
       JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
       WHERE (outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?) AND outbox.probe_state <> 1
         AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?
           OR (? AND outbox.state = 'pending' AND outbox.attempts = 0))
-      ORDER BY stream.last_served_ms, COALESCE(outbox.next_wakeup_at_ms, 0), outbox.operation_sequence LIMIT 100`,
-    nowMs, onlyOperationId, onlyOperationId, manual ? 1 : 0, nowMs, activation ? 1 : 0).toArray();
+      ORDER BY CASE WHEN ? AND outbox.state = 'pending' AND outbox.attempts = 0 THEN 0 ELSE 1 END,
+        stream.last_served_ms, COALESCE(outbox.next_wakeup_at_ms, 0), outbox.operation_sequence LIMIT 100`,
+    nowMs, onlyOperationId, onlyOperationId, manual ? 1 : 0, nowMs, activation ? 1 : 0, activation ? 1 : 0).toArray();
     const result = [], streams = new Set();
     for (const row of candidates) {
       if (row.reset_id) {

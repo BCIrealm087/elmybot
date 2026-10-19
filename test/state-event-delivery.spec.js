@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
 import { sourceSnapshotHeaders } from "../src/state-events/delivery-snapshot.js";
-afterEach(cleanupDeliveryFixtures);
+afterEach(async () => { vi.restoreAllMocks(); await cleanupDeliveryFixtures(); });
 describe("combined deferred admission and gaps", () => {
   it.each([false, true])("appends offline with owner receipt authority and the original deadline (shared=%s)", async (shared) => {
     const f = await deliveryFixture({ shared }); const accepted = await f.commit();
@@ -134,9 +134,13 @@ describe("combined deferred admission and gaps", () => {
     await expect(f.commit()).rejects.toMatchObject({ code: "state_event_stream_blocked" });
   });
   it("can reconcile expiry on a frozen shared owner without reopening feature writes", async () => {
+    // This case controls expiry in SQL and invokes recovery explicitly. Keep
+    // native alarm dispatch in the future so it cannot claim the same record
+    // between the controlled expiry/freeze and the explicit reconciliation.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
     const f = await deliveryFixture({ shared: true }), a = await f.commit(); await expireIntent(f, a.operationId);
     await runInDurableObject(f.ownerStub, (_i, state) => state.storage.sql.exec("UPDATE shareable_state_realm_namespaces SET freeze_id = ?", crypto.randomUUID()));
-    expect((await f.source("reconcile", { operationId: a.operationId })).data.state).toBe("gap");
+    expect(await f.source("reconcile", { operationId: a.operationId })).toMatchObject({ status: 200, data: { state: "gap" } });
     expect((await f.rows(f.ownerStub, "shareable_state_realm_values"))[0].value_json).toBe("1");
   });
   it("does not append while the event master switch is disabled", async () => {
