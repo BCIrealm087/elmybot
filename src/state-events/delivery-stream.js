@@ -1,9 +1,9 @@
 import { registerProducerInterest, releaseProducerInterest } from "./producer-wakeup.js";
-import { durableEventId, durableEventRouteId, serializeDurableEventPayload, sha256Hex, DURABLE_EVENT_CODES, durableEventError, DURABLE_EVENT_LIMITS } from "../durable-events/contract.js";
+import { durableEventId, durableEventRouteId, serializeDurableEventPayload, DURABLE_EVENT_CODES, durableEventError, DURABLE_EVENT_LIMITS } from "../durable-events/contract.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { deliverySourceRequest } from "./delivery-source.js";
 import { storageTableExists } from "../storage-alarm.js";
-import { readSourceSnapshot, STATE_EVENT_DELIVERY_REQUEST_BYTES } from "./delivery-snapshot.js";
+import { readSourceSnapshot, deliveryReceiptFingerprint, STATE_EVENT_DELIVERY_REQUEST_BYTES } from "./delivery-snapshot.js";
 
 export const COMBINED_STREAM_PATH = "/internal/events/combined/";
 const one = (state, sql, ...args) => state.storage.sql.exec(sql, ...args).toArray()[0];
@@ -72,6 +72,27 @@ export function pruneCombinedRecords(state, nowMs) {
   });
   return true;
 }
+// Read-only even on an uninitialized stream: no schema initialization, source
+// callback, prune, fence, publication, interest update or alarm scheduling.
+export function probeCombinedReceipt(state, env, raw) {
+  const input = JSON.parse(canonicalJson(raw, 2048));
+  if (!/^seo1\.[\w-]{43}$/.test(input.operationId ?? "") || !/^des1\.[\w-]{43}$/.test(input.routeId ?? "") ||
+      !/^dev1\.[\w-]{43}$/.test(input.eventId ?? "") || !/^[a-f0-9]{64}$/.test(input.fingerprint ?? "") ||
+      !["group_local", "effective_shareable"].includes(input.owner?.kind) || typeof input.owner.key !== "string" ||
+      input.owner.key.length > 300 || env.DURABLE_EVENT_STREAM.idFromName(input.routeId).toString() !== state.id.toString()) throw recoveryError("invalid_route", 422);
+  const absent = { state: "absent", operationId: input.operationId };
+  if (!storageTableExists(state, "state_event_destination_records")) return absent;
+  const producer = one(state, "SELECT owner_json FROM state_event_destination");
+  if (producer && producer.owner_json !== canonicalJson(input.owner)) throw recoveryError("wrong_owner", 422);
+  const stored = one(state, "SELECT * FROM state_event_destination_records WHERE operation_id = ?", input.operationId);
+  if (!stored) return absent;
+  if (!producer || stored.event_id !== input.eventId || stored.fingerprint !== input.fingerprint) throw recoveryError("source_conflict", 409);
+  const outcome = JSON.parse(stored.outcome_json);
+  if (!["appended", "gap"].includes(outcome.state)) return absent;
+  return { version: 1, eventId: stored.event_id, fingerprint: stored.fingerprint,
+    outcome: terminalDestinationOutcome(state, outcome, stored.operation_sequence) };
+}
+
 export async function combinedAppend(state, env, registry, raw, operation, append, { trustedSnapshot = false } = {}) {
   const input = JSON.parse(canonicalJson(raw, STATE_EVENT_DELIVERY_REQUEST_BYTES));
   if ((operation !== "interest-release" && !/^seo1\.[\w-]{43}$/.test(input.operationId ?? "")) || !/^des1\.[\w-]{43}$/.test(input.routeId ?? "") ||
@@ -117,8 +138,7 @@ export async function combinedAppend(state, env, registry, raw, operation, appen
     if (proof.intent.delivery?.state === "appended") return terminalDestinationOutcome(state, proof.intent.delivery, intent.stateEvent.operationSequence);
     return { state: "absent", operationId: input.operationId };
   }
-  const fingerprint = await sha256Hex(canonicalJson({ operationId: intent.operationId, eventId: intent.eventId,
-    committedAtMs: intent.committedAtMs, expiresAtMs: intent.expiresAtMs, stateEvent: intent.stateEvent, routeId: input.routeId }));
+  const fingerprint = await deliveryReceiptFingerprint(intent);
   if (stored?.fingerprint && stored.fingerprint !== fingerprint) throw recoveryError("source_conflict", 409);
   const prior = stored ? JSON.parse(stored.outcome_json) : null;
   if (operation === "confirm") {

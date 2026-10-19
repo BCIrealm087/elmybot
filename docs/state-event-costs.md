@@ -41,6 +41,18 @@ complete online-cycle totals above. Activation adds no self-RPC, persistent
 phase or polling loop. Cloudflare object duration and the full billing refresh
 remain step 10 work; these counts establish no production billing claim.
 
+Step 6 adds four [receipt-probe cost profiles](state-event-receipt-probes.md).
+An isolated absent/positive destination read records 22/38 SQL rows read, zero
+writes and zero alarm operations. A complete local/shared lost-reply recovery
+adds 1/2 binding requests, 371/385 SQL rows read, seven SQL writes, two alarm
+reads and one alarm set over its matching healthy relay pass. This opportunity
+is capped once per operation. Healthy warm immediate delivery retains its
+requests/writes/alarms, with 60/52 more SQL rows read for marker/index checks;
+cold initialization adds one index-creation SQL write. The old-schema tests
+verify lazy field/index addition separately. Current CI exports 26 profiles;
+these bounded counters do not measure Cloudflare object duration or refresh the
+historical billing model below.
+
 The design has finite offline maintenance and a measurable write premium for
 atomicity/recovery. The installed health command uses 117 native SQL row writes
 for a warmed online cycle. Including alarm calls and a conservative allowance

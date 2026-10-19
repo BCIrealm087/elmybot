@@ -36,6 +36,7 @@ unknown stages or an exhausted allowance are refused before transmission.
 | Direct relay call | Weight | Descendants included |
 | --- | --- | --- |
 | Interest registration | 2 | Destination request and source proof. |
+| Receipt probe | 1 local / 2 shared | Read-only destination lookup; shared registry serialization and positive barrier retirement. |
 | Local append | 2 | Destination request and source proof. |
 | Shared authority append | 8 | Owner → registry, registry proof, up to two old-barrier recovery calls, append plus proof, and rejection fencing plus proof. |
 | Destination confirmation | 2 | Destination request and source proof. |
@@ -43,8 +44,11 @@ unknown stages or an exhausted allowance are refused before transmission.
 | Shared origin retirement | 4 | Origin request and conservative allowance for owner lookup/fencing/confirmation. |
 | Interest release | 1 | Destination epoch check, without source callback. |
 
-A pending local/shared record reserves 7/17 calls, including possible terminal
-cleanup. An appended row reserves 7/11. A recorded-gap cleanup reserves 3/7; a
+A pending local/shared record reserves 8/19 calls, including the one possible
+[early receipt probe](state-event-receipt-probes.md) and terminal cleanup. A
+standalone deferred probe reserves 4/9 and uses a record slot without charging a
+new publication attempt. An appended row reserves 7/11. A recorded-gap cleanup
+reserves 3/7; a
 retiring/reset-discarded row reserves 1/5. These deliberately include stages
 that can already be complete. Changing authority, destination or origin paths
 requires updating both these weights and the enforced-call tests.
@@ -53,9 +57,11 @@ requires updating both these weights and the enforced-call tests.
 
 Budget rejection during selection creates no lease, consumes no attempt and
 changes no state value. The end-of-pass transaction moves only already-due work
-without a live lease to the continuation time and recomputes the shared alarm.
+without a live lease, plus pending one-shot probes, to the continuation time
+and recomputes the shared alarm.
 Future deadlines, parked/null wakeups and live uncertainty leases are preserved;
-earlier notification/watcher/invalidation deadlines still participate in the
+a scheduled one-shot receipt probe may select an earlier read while retaining
+the original lease and saved fallback deadline. Earlier notification/watcher/invalidation deadlines still participate in the
 minimum. No queue-wide timer runs when there is no eligible continuation.
 
 A defensive mid-record allowance rejection occurs before the next call. Known
@@ -63,7 +69,8 @@ completed stages stay durable and the record resumes later. A real transport
 failure/timeout follows ordinary unknown-outcome handling, retaining its lease;
 budget exhaustion is never used to declare a remote append absent. Registry
 barriers, destination deduplication, ordering, original expiry and source replay
-identity are unchanged. No schema migration or feature API change is required.
+identity are unchanged. No Wrangler migration or feature API change is required; step 6 adds its probe
+fields/index through the existing lazy SQL initializer.
 
 Step 5 adds [immediate activation](state-event-immediate-delivery.md): one
 non-awaited bounded pass after commit or an eligible useful wakeup, with no

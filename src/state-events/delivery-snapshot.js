@@ -1,3 +1,4 @@
+import { sha256Hex } from "../durable-events/contract.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { initializeStateEventOutbox, stateEventOutboxExists } from "./outbox.js";
 const one = (state, sql, ...args) => state.storage.sql.exec(sql, ...args).toArray()[0];
@@ -46,4 +47,10 @@ export function sourceDeliverySnapshot(state, env, owner, operationId, routeId) 
   const proof = sourceIntentProof(state, operationId, routeId);
   if (proof.intent.route.kind !== owner.kind || proof.intent.route.key !== owner.key) throw recoveryError("wrong_owner", 422);
   return { version: 1, owner, routeId, proof };
+}
+
+export function deliveryReceiptFingerprint(intent) {
+  return sha256Hex(canonicalJson({ operationId: intent.operationId, eventId: intent.eventId,
+    committedAtMs: intent.committedAtMs, expiresAtMs: intent.expiresAtMs,
+    stateEvent: intent.stateEvent, routeId: intent.route.streamRouteId }));
 }

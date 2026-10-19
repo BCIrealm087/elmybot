@@ -11,7 +11,8 @@ export function initializeStateEventOutbox(state) {
     CREATE TABLE IF NOT EXISTS state_event_outbox (
       operation_id TEXT PRIMARY KEY, partition_key TEXT NOT NULL, operation_sequence INTEGER NOT NULL,
       state TEXT NOT NULL, deadline_ms INTEGER NOT NULL, next_wakeup_at_ms INTEGER,
-      intent_json TEXT NOT NULL, intent_bytes INTEGER NOT NULL, stream_route_id TEXT);
+      intent_json TEXT NOT NULL, intent_bytes INTEGER NOT NULL, stream_route_id TEXT,
+      probe_state INTEGER NOT NULL DEFAULT 0, probe_fallback_ms INTEGER);
     CREATE INDEX IF NOT EXISTS state_event_outbox_due ON state_event_outbox(next_wakeup_at_ms);
     CREATE INDEX IF NOT EXISTS state_event_outbox_order ON state_event_outbox(partition_key, operation_sequence);
     CREATE TABLE IF NOT EXISTS state_event_outbox_budget (
@@ -29,6 +30,7 @@ export function initializeStateEventOutbox(state) {
     ["attempts", "INTEGER NOT NULL DEFAULT 0"], ["scheduled_attempts", "INTEGER NOT NULL DEFAULT 0"],
     ["control_attempts", "INTEGER NOT NULL DEFAULT 0"], ["control_scheduled", "INTEGER NOT NULL DEFAULT 0"],
     ["lease_token", "TEXT"], ["lease_until_ms", "INTEGER"], ["destination_confirmed", "INTEGER NOT NULL DEFAULT 0"],
+    ["probe_state", "INTEGER NOT NULL DEFAULT 0"], ["probe_fallback_ms", "INTEGER"],
     ["last_error", "TEXT"], ["uncertain", "INTEGER NOT NULL DEFAULT 0"], ["owner_busy", "INTEGER NOT NULL DEFAULT 0"]
   ]) if (!columns.has(name)) state.storage.sql.exec(`ALTER TABLE state_event_outbox ADD COLUMN ${name} ${definition}`);
   const streamColumns = new Set(state.storage.sql.exec("PRAGMA table_info(state_event_source_streams)").toArray().map((column) => column.name));
@@ -42,6 +44,7 @@ export function initializeStateEventOutbox(state) {
   for (const row of state.storage.sql.exec("SELECT operation_id, intent_json FROM state_event_outbox WHERE stream_route_id IS NULL LIMIT 100").toArray()) {
     state.storage.sql.exec("UPDATE state_event_outbox SET stream_route_id = ? WHERE operation_id = ?", JSON.parse(row.intent_json).route.streamRouteId, row.operation_id);
   }
+  state.storage.sql.exec("CREATE INDEX IF NOT EXISTS state_event_outbox_probe ON state_event_outbox(next_wakeup_at_ms) WHERE probe_state = 1");
   state.storage.sql.exec("CREATE INDEX IF NOT EXISTS state_event_outbox_expiry ON state_event_outbox(state, deadline_ms)");
   state.storage.sql.exec("CREATE INDEX IF NOT EXISTS state_event_outbox_stream ON state_event_outbox(stream_route_id, operation_sequence)");
 }
@@ -107,7 +110,7 @@ export async function maintainStateEventOutbox(state, nowMs = Date.now(), operat
       const intent = JSON.parse(row.intent_json); delete intent.payload;
       const json = canonicalJson({ ...intent, gapPending: true }), bytes = jsonBytes(json);
       state.storage.sql.exec(`UPDATE state_event_outbox SET state = 'gap_pending', intent_json = ?, intent_bytes = ?,
-        next_wakeup_at_ms = CASE WHEN attempts >= 20 THEN NULL WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END WHERE operation_id = ?`,
+        next_wakeup_at_ms = CASE WHEN probe_state = 1 THEN next_wakeup_at_ms WHEN attempts >= 20 THEN NULL WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END WHERE operation_id = ?`,
       json, bytes, nowMs, nowMs, row.operation_id);
       state.storage.sql.exec("UPDATE state_event_outbox_budget SET bytes = bytes + ?", bytes - row.intent_bytes);
     }

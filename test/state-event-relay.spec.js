@@ -129,7 +129,9 @@ describe("bounded state/event relay and producer wakeups", () => {
   });
   it("recovers an in-flight lease after owner eviction without a duplicate append", async () => {
     const f = await fixture(), accepted = await f.commit(); let lost = false;
-    f.intercept(async (kind, input, _init, send) => { const result = await send();
+    f.intercept(async (kind, input, _init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(input).endsWith("/probe")) throw Error("receipt probe unavailable"); const result = await send();
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("reply lost"); } return result; });
     await drain(f);
     const leased = (await f.rows(f.ownerStub, "state_event_outbox"))[0]; expect(leased.lease_token).not.toBeNull();
@@ -231,6 +233,8 @@ describe("bounded state/event relay and producer wakeups", () => {
     });
     const first = await f.commit(); let lost = false;
     f.intercept(async (kind, input, _init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(input).endsWith("/probe")) throw Error("receipt probe unavailable");
       const result = await send();
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("append reply lost"); }
       return result;

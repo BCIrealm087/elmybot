@@ -40,7 +40,9 @@ twenty expiry markers/claimed records also remains. See the
 [remote-work budget](state-event-relay-work-budget.md) for nested-call weights,
 scope and verification. The relay starts new attempts for at most five seconds.
 Already started calls have a five-second
-request deadline. A lost/unknown response retains the lease until recovery; a
+request deadline. A lost/unknown response retains the lease until recovery;
+[one bounded receipt probe](state-event-receipt-probes.md) can reconcile positive
+durable evidence early, while absent/failed probes preserve the original lease; a
 retry recovers the original destination receipt rather than replaying a mutation.
 A timeout is never proof of non-append. An uncertain `pending`, `parked` or
 `gap_pending` head still blocks later appends until its lease/outcome recovers;

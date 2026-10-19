@@ -144,6 +144,18 @@ await publication through the registry's still-held commit queue. No self-RPC,
 polling timer, new schema or coordinator is needed. `waitUntil` retains request
 context and does not enlarge the relay budget or prove production depth safety.
 
+## Finite receipt reconciliation in step 6
+
+[One read-only destination probe](state-event-receipt-probes.md) can recover a
+matching append or terminal receipt before the source lease expires. Unknown
+absence/failure leaves the original lease and fencing recovery in force. A
+persisted one-opportunity marker coalesces requests and survives eviction;
+exhausted invocation time uses a durable continuation rather than another local
+runner. Shared probes serialize through the existing authority and clear only a
+matching positive append barrier. There is no consumer polling or automatic
+blanket lease shortening. The source adds two bounded SQL fields and a partial
+index; no new coordinator or provider migration is needed.
+
 ## Remaining uncertainty
 
 This work does not establish a numeric production request-depth budget, the

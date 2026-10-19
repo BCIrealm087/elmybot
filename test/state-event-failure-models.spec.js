@@ -91,6 +91,8 @@ describe("explicit state-event latency failure models", () => {
     await runInDurableObject(f.ownerStub, (_i, state) => state.storage.deleteAlarm());
     let rejected = 0;
     f.intercept(async (kind, input, _init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(input).endsWith("/probe")) throw Error("receipt probe unavailable");
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && rejected++ === 0) {
         if (afterAppend) await send();
         throw Error(afterAppend ? "Synthetic reply lost after append" : "Subrequest depth limit exceeded. Synthetic fault.");

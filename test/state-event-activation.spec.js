@@ -109,6 +109,7 @@ describe("immediate bounded state/event activation", () => {
     const f = await measuredDeliveryFixture({ shared: true, immediate: true });
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     f.intercept(async (_kind, url, _init, send) => {
+      if (new URL(url).pathname.endsWith("/probe")) throw Error("receipt probe unavailable");
       if (new URL(url).pathname.endsWith("/combined/append")) {
         if (replyLost) await send();
         throw Error("private transport details");

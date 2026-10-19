@@ -65,6 +65,7 @@ describe("state/event invocation work budgets", () => {
     const f = await guardedFixture({ shared: true });
     const accepted = await f.commit();
     const first = await f.alarm({ inject: async (kind, path, _init, send) => {
+      if (path.endsWith("/probe")) throw Error("Synthetic probe outage");
       if (kind === "DURABLE_EVENT_STREAM" && path.endsWith("combined/append")) {
         if (replyLost) await send();
         throw Error("Synthetic transport failure");
@@ -158,8 +159,8 @@ describe("state/event invocation work budgets", () => {
     const budget = createStateEventWorkBudget();
     const row = { state: "pending", intent_json: JSON.stringify({ route: { kind: "effective_shareable" } }) };
     const record = budget.start(row);
-    for (const stage of ["interest", "authority.append", "confirm", "origin.retire", "interest-release"]) record.take(stage);
-    expect(budget.reserved).toBe(17); expect(budget.reason(row)).toBe("publication_quantum");
+    for (const stage of ["interest", "authority.append", "authority.probe", "confirm", "origin.retire", "interest-release"]) record.take(stage);
+    expect(budget.reserved).toBe(19); expect(budget.reason(row)).toBe("publication_quantum");
     const send = vi.fn(), environment = { DURABLE_EVENT_STREAM: { idFromName: (id) => id, get: () => ({ fetch: send }) } };
     expect(() => relayStreamRequest(environment, "route", "append", {}, Date.now() + 5000, record)).toThrow();
     expect(send).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+import { probeStateEventReceipt } from "./receipt-probe.js";
 import { configureStateEventDiagnostics, stateEventDiagnosticsEnabled, traceStateEvent, traceStateEventRow } from "./diagnostics.js";
 import { initializeStateEventOutbox, maintainStateEventOutbox, stateEventOutboxExists } from "./outbox.js";
 import { canonicalJson, recoveryError } from "./identity.js";
@@ -110,7 +111,7 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
     // leased rows forward. All ordering/reset/admission checks below still run.
     const candidates = state.storage.sql.exec(`SELECT outbox.*, stream.wake_generation, stream.reset_id FROM state_event_outbox outbox
       JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
-      WHERE (outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?)
+      WHERE (outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?) AND outbox.probe_state <> 1
         AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?
           OR (? AND outbox.state = 'pending' AND outbox.attempts = 0))
       ORDER BY stream.last_served_ms, COALESCE(outbox.next_wakeup_at_ms, 0), outbox.operation_sequence LIMIT 100`,
@@ -182,7 +183,7 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
     return result;
   });
 }
-async function finish(state, env, row, error = null, terminalDelivery = false) {
+async function finish(state, env, row, error = null, terminalDelivery = false, probe = false) {
   await state.storage.transaction(async () => {
     const active = current(state, row.operation_id);
     if (!active || active.lease_token !== row.lease_token) return;
@@ -205,6 +206,13 @@ async function finish(state, env, row, error = null, terminalDelivery = false) {
     if (useful && used < (isControl || active.deadline_ms <= now ? 20 : 19)) due = Math.min(due ?? Infinity, now + 1000);
     if (!isControl && active.deadline_ms > now && due !== null) due = Math.min(due, active.deadline_ms);
     if (uncertain && due !== null) due = Math.max(due, Number(active.lease_until_ms));
+    // One durable opportunity per operation. Keep the original retry/lease
+    // deadline separately while a one-shot read is selected before that lease.
+    if (probe && uncertain && active.probe_state === 0 && !stream.reset_id &&
+        ["pending", "parked", "gap_pending"].includes(active.state)) {
+      state.storage.sql.exec("UPDATE state_event_outbox SET probe_state = 1, probe_fallback_ms = ? WHERE operation_id = ?", due, row.operation_id);
+      due = now + STATE_EVENT_WORK_LIMITS.continuationMs;
+    }
     state.storage.sql.exec(`UPDATE state_event_outbox SET lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ?,
       last_error = ?, uncertain = ? WHERE operation_id = ?`, uncertain ? row.lease_token : null,
     uncertain ? active.lease_until_ms : null, due, useful ? "useful_wakeup" : error?.code ?? (error ? "state_event_outcome_unknown" : null), uncertain ? 1 : 0, row.operation_id);
@@ -217,6 +225,30 @@ async function finish(state, env, row, error = null, terminalDelivery = false) {
     await scheduleStorageAlarmInTransaction(state);
   });
 }
+async function claimReceiptProbe(state, budget, options = {}, inline = null) {
+  return state.storage.transaction(async () => {
+    const now = Date.now();
+    state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = NULL WHERE probe_state = 1 AND next_wakeup_at_ms IS NOT NULL
+      AND EXISTS (SELECT 1 FROM state_event_source_streams WHERE route_id = stream_route_id AND reset_id IS NOT NULL)`);
+    const row = one(state, `SELECT outbox.*, stream.wake_generation FROM state_event_outbox outbox
+      JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
+      WHERE outbox.probe_state = 1 AND outbox.uncertain = 1 AND stream.reset_id IS NULL
+        AND outbox.state IN ('pending', 'parked', 'gap_pending')
+        AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?)
+      ORDER BY outbox.next_wakeup_at_ms, outbox.operation_sequence LIMIT 1`,
+    inline?.operation_id ?? options.onlyOperationId ?? null, inline?.operation_id ?? options.onlyOperationId ?? null, inline || options.onlyOperationId ? 1 : 0, now);
+    if (!row || inline && row.lease_token !== inline.lease_token) return null;
+    const claimed = { ...row, probeOnly: true };
+    if (!inline && budget.reason(claimed)) return null;
+    // Spend the marker before I/O, restoring the exact original fallback. A
+    // crash/failure/absent read cannot start another probe or shorten the lease.
+    state.storage.sql.exec(`UPDATE state_event_outbox SET probe_state = 2,
+      next_wakeup_at_ms = probe_fallback_ms, probe_fallback_ms = NULL WHERE operation_id = ?`, row.operation_id);
+    await scheduleStorageAlarmInTransaction(state, { recompute: true });
+    return claimed;
+  });
+}
+
 export async function runStateEventRelay(state, env, reconcile, options = {}) {
   configureStateEventDiagnostics(state, env);
   if (!stateEventOutboxExists(state)) return { attempted: 0 };
@@ -233,6 +265,33 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
   const batch = 20 - expired.examined;
   const budget = createStateEventWorkBudget();
   let attempted = 0, lastResult;
+  const probe = async (row, recordWork, deadline) => {
+    traceStateEventRow(env, "probe.start", row);
+    let cached = false;
+    try {
+      const intent = JSON.parse(row.intent_json), owner = selectedOwner(intent);
+      const outcome = await probeStateEventReceipt(env, intent, deadline, recordWork);
+      if (!outcome) { traceStateEventRow(env, "probe.finish", row, { reason: "absent" }); return null; }
+      const result = await options.acceptOutcome(state, env, owner, row.operation_id, row.stream_route_id, outcome,
+        { leaseToken: row.lease_token, deadline, work: recordWork, fromProbe: true });
+      cached = true;
+      const active = current(state, row.operation_id);
+      if (active && result.terminal) await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork);
+      else await finish(state, env, row);
+      traceStateEventRow(env, "probe.finish", row, { reason: "positive" });
+      return result;
+    } catch {
+      const active = current(state, row.operation_id);
+      // Confirm/cleanup can fail after the receipt was safely cached. Preserve
+      // its normal uncertainty handling; stale/reset/untrusted reads touch no
+      // source state beyond the already-spent probe marker.
+      if (active?.lease_token === row.lease_token && (cached || ["appended", "gap_recorded", "retiring"].includes(active.state))) {
+        await finish(state, env, row, recoveryError("outcome_unknown", 503));
+      }
+      traceStateEventRow(env, "probe.finish", row, { reason: "inconclusive" });
+      return null;
+    }
+  };
   const work = async (row) => {
     const recordWork = budget.start(row);
     const intent = JSON.parse(row.intent_json), owner = selectedOwner(intent), deadline = Date.now() + 5000;
@@ -253,12 +312,27 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
       } else await finish(state, env, row);
       return result;
     } catch (error) {
-      await finish(state, env, row, error);
+      await finish(state, env, row, error, false, recordWork.appendStarted && Boolean(options.acceptOutcome));
+      if (options.acceptOutcome && Date.now() < Math.min(deadline, started + 5000)) {
+        const candidate = await claimReceiptProbe(state, budget, options, row);
+        if (candidate) {
+          const result = await probe(candidate, recordWork, Math.min(deadline, started + 5000));
+          if (result) return result;
+        }
+      }
       if (options.onlyOperationId) throw error;
       return { state: "pending", code: error.code ?? "state_event_outcome_unknown" };
     }
   };
   while (attempted < batch && Date.now() - started < 5000) {
+    const candidate = options.acceptOutcome ? await claimReceiptProbe(state, budget, options) : null;
+    if (candidate) {
+      const result = await probe(candidate, budget.start(candidate), Math.min(Date.now() + 5000, started + 5000));
+      attempted++; lastResult = result;
+      if (options.onlyOperationId && result) return result;
+      if (options.onlyOperationId && !result && Number(candidate.lease_until_ms) > Date.now()) throw recoveryError("attempt_in_progress", 409);
+      continue;
+    }
     const rows = await claim(state, env, budget, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now() });
     if (!rows.length) break;
     const outcomes = await Promise.allSettled(rows.slice(0, batch - attempted).map(work));
@@ -275,7 +349,7 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
   await state.storage.transaction(async () => {
     const now = Date.now();
     state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = ?
-      WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`,
+      WHERE next_wakeup_at_ms <= ? AND (probe_state = 1 OR lease_until_ms IS NULL OR lease_until_ms <= ?)`,
     now + STATE_EVENT_WORK_LIMITS.continuationMs, now, now);
     await scheduleStorageAlarmInTransaction(state, { recompute: true });
   });
@@ -295,7 +369,7 @@ export async function wakeStateEventRelay(state, routeId, version, nowMs = Date.
       activate = due <= nowMs;
       state.storage.sql.exec(`UPDATE state_event_source_streams SET last_wake_version = MAX(last_wake_version, ?),
         wake_generation = wake_generation + 1 WHERE route_id = ?`, version ?? 0, routeId);
-      state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = CASE WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END,
+      state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = CASE WHEN probe_state = 1 THEN next_wakeup_at_ms WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END,
         last_error = 'useful_wakeup' WHERE stream_route_id = ? AND
         ((state IN ('retiring', 'gap_recorded', 'reset_discarded') AND control_attempts < 20) OR
         (state NOT IN ('retiring', 'gap_recorded', 'reset_discarded') AND attempts < CASE WHEN deadline_ms <= ? THEN 20 ELSE 19 END))`, nowMs, due, routeId, nowMs);
@@ -319,7 +393,7 @@ export async function observeStateEventRelayMode(state, env) {
     if (old?.enabled === 0 && enabled) {
       const now = Date.now();
       state.storage.sql.exec("UPDATE state_event_source_streams SET wake_generation = wake_generation + 1");
-      state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = CASE WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END,
+      state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = CASE WHEN probe_state = 1 THEN next_wakeup_at_ms WHEN lease_until_ms > ? THEN lease_until_ms ELSE ? END,
         last_error = 'useful_wakeup' WHERE attempts < 20`, now, now);
     }
     await scheduleStorageAlarmInTransaction(state);

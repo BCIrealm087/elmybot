@@ -44,6 +44,8 @@ describe("private owner-validated delivery snapshots", () => {
     const padding = "x".repeat(3900), f = await deliveryFixture({ shared: true, payloadPadding: padding }), accepted = await f.commit();
     let bodyBytes = 0;
     f.intercept(async (kind, url, init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(url).endsWith("/probe")) throw Error("receipt probe unavailable");
       if (kind === "DURABLE_EVENT_STREAM" && String(url).endsWith("combined/append")) {
         bodyBytes = new TextEncoder().encode(init.body).byteLength;
         await send(); throw Error("Synthetic reply loss for near-limit append");

@@ -80,12 +80,19 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
     if (error.code === "durable_event_gap_requires_reset") state.storage.sql.exec("UPDATE state_event_source_streams SET blocked = 1 WHERE route_id = ?", routeId);
     throw error;
   }
+  return acceptStateEventDeliveryOutcome(state, env, owner, operationId, routeId, outcome, options);
+}
+export async function acceptStateEventDeliveryOutcome(state, env, owner, operationId, routeId, outcome, options = {}) {
   if (!["appended", "gap"].includes(outcome.state) || outcome.operationId !== operationId) throw recoveryError("outcome_unknown", 503);
-  outcome = { ...outcome, terminal: outcome.state === "gap" ? outcome.reason : null };
+  outcome = { ...outcome, terminal: outcome.state === "gap" ? outcome.reason : outcome.terminal ?? null };
   await state.storage.transaction(async () => {
     const active = one(state, "SELECT * FROM state_event_outbox WHERE operation_id = ?", operationId);
     if (!active || options.leaseToken && active.lease_token !== options.leaseToken) throw recoveryError("attempt_in_progress", 409);
     const current = sourceIntentProof(state, operationId, routeId);
+    if (options.fromProbe) {
+      const stream = one(state, "SELECT reset_id FROM state_event_source_streams WHERE route_id = ?", routeId);
+      if (!["pending", "parked", "gap_pending"].includes(current.state) || stream?.reset_id) throw recoveryError("attempt_in_progress", 409);
+    }
     if (terminal.has(current.state)) return;
     const intent = current.intent;
     if (outcome.state === "gap") {
@@ -107,7 +114,9 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
   await confirmDestination(state, env, owner, operationId, routeId, options);
   return outcome;
 }
-export function drainStateEventRelay(state, env, options) { return runStateEventRelay(state, env, reconcileStateEventIntent, options); }
+export function drainStateEventRelay(state, env, options) {
+  return runStateEventRelay(state, env, reconcileStateEventIntent, { ...options, acceptOutcome: acceptStateEventDeliveryOutcome });
+}
 export async function handleStateEventOriginRetirement(state, env, request, path) {
   if (path !== "/internal/state-events/origin/retire") return null;
   if (request.method !== "POST" || request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
@@ -187,7 +196,7 @@ export async function handleStateEventDeliverySource(state, env, request, path, 
         for (const row of rows) {
           const intent = JSON.parse(row.intent_json); delete intent.payload;
           const json = canonicalJson(intent), bytes = new TextEncoder().encode(json).byteLength;
-          state.storage.sql.exec("UPDATE state_event_outbox SET state = 'reset_discarded', intent_json = ?, intent_bytes = ?, next_wakeup_at_ms = NULL WHERE operation_id = ?", json, bytes, row.operation_id);
+          state.storage.sql.exec("UPDATE state_event_outbox SET state = 'reset_discarded', intent_json = ?, intent_bytes = ?, next_wakeup_at_ms = NULL, probe_state = CASE WHEN probe_state = 1 THEN 2 ELSE probe_state END, probe_fallback_ms = NULL WHERE operation_id = ?", json, bytes, row.operation_id);
           state.storage.sql.exec("UPDATE state_event_outbox_budget SET bytes = bytes + ?", bytes - row.intent_bytes);
         }
         state.storage.sql.exec("UPDATE state_event_source_streams SET reset_phase = 'committed', gap_first = NULL, gap_last = NULL, blocked = 0 WHERE route_id = ?", input.routeId);

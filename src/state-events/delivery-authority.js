@@ -1,3 +1,4 @@
+import { storageTableExists } from "../storage-alarm.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import { deliverySourceRequest } from "./delivery-source.js";
 import { canonicalJson, recoveryError } from "./identity.js";
@@ -53,5 +54,29 @@ export async function appendWithStateEventBindingAuthority(registry, raw, { trus
     throw error;
   }
   removeStateEventBarrier(registry.state, { operation_id: input.operationId });
+  return result;
+}
+
+// Serialize with the original append/lifecycle authority. Only a positive exact
+// durable receipt can retire a matching barrier; absence never fences a call.
+export async function probeWithStateEventBindingAuthority(registry, raw) {
+  const input = JSON.parse(canonicalJson(raw, 2048));
+  if (input.owner?.kind !== "effective_shareable") throw recoveryError("invalid_route", 422);
+  const result = await callCombinedStream(registry.env, input, "probe");
+  if (result.version !== 1 || result.eventId !== input.eventId || result.fingerprint !== input.fingerprint ||
+      result.outcome?.operationId !== input.operationId || !["appended", "gap"].includes(result.outcome?.state)) return result;
+  const outcome = result.outcome;
+  if (outcome.state === "appended" && (!Number.isSafeInteger(outcome.sequence) || outcome.sequence < 1 ||
+      !Number.isSafeInteger(outcome.acceptedAtMs) || !Number.isSafeInteger(outcome.expiresAtMs) ||
+      ![null, "acknowledged", "reset", "retention"].includes(outcome.terminal))) return result;
+  if (outcome.state === "gap" && (!["lifecycle", "retention"].includes(outcome.reason) || outcome.terminal !== outcome.reason)) return result;
+  if (storageTableExists(registry.state, "state_event_commit_barriers")) {
+    const row = registry.state.storage.sql.exec("SELECT * FROM state_event_commit_barriers WHERE operation_id = ?", input.operationId).toArray()[0];
+    if (row) {
+      const call = JSON.parse(row.attempt_json);
+      if (call.kind !== "append" || canonicalJson(call.owner) !== canonicalJson(input.owner) || call.routeId !== input.routeId) throw recoveryError("outcome_unknown", 503);
+      removeStateEventBarrier(registry.state, row);
+    }
+  }
   return result;
 }

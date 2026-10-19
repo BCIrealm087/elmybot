@@ -36,6 +36,8 @@ describe("combined deferred admission and gaps", () => {
   it("recovers a lost append reply after eviction without extending expiry or appending twice", async () => {
     const f = await deliveryFixture(), a = await f.commit(); let lost = false;
     f.intercept(async (kind, input, _init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(input).endsWith("/probe")) throw Error("receipt probe unavailable");
       const response = await send();
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("lost reply"); }
       return response;
@@ -211,6 +213,8 @@ describe("combined deferred admission and gaps", () => {
   it("returns a proven old append after movement instead of converting it to a lifecycle gap", async () => {
     const f = await deliveryFixture({ shared: true }), a = await f.commit(); let lost = false;
     f.intercept(async (kind, input, _init, send) => {
+      // Keep this regression on the lease/fencing fallback path.
+      if (String(input).endsWith("/probe")) throw Error("receipt probe unavailable");
       const response = await send();
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("lost committed reply"); }
       return response;

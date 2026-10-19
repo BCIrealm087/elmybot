@@ -1,7 +1,7 @@
 import { requestStateEventActivation } from "../state-events/activation.js";
 import { configureStateEventDiagnostics, traceStateEventForOwner } from "../state-events/diagnostics.js";
 import { producerInterestExists, nextProducerWakeup, queueProducerWakeup, drainProducerWakeup } from "../state-events/producer-wakeup.js";
-import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
+import { probeCombinedReceipt, combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
 import { STATE_EVENT_SOURCE_SNAPSHOT_HEADER } from "../state-events/delivery-snapshot.js";
 import { StateEventRecoveryError, recoveryError } from "../state-events/identity.js";
 import {
@@ -1526,6 +1526,7 @@ export class DurableEventStreamBackend {
       if (request.method === "POST" && url.pathname.startsWith(COMBINED_STREAM_PATH)) {
         if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
         const operation = url.pathname.slice(COMBINED_STREAM_PATH.length);
+        if (operation === "probe") return json(probeCombinedReceipt(this.state, this.env, await request.json()));
         if (!["append", "lookup", "fence", "gap", "confirm", "outcome", "interest", "interest-release"].includes(operation)) throw recoveryError("invalid_request", 404);
         if (operation === "outcome" && pruneExpired(this.state, Date.now()) > 0) terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
         const result = await combinedAppend(this.state, this.env, this.registry, await request.json(), operation,
