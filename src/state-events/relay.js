@@ -5,6 +5,7 @@ import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
 import { relayStreamRequest, boundedStateEventRequest, stateEventRetryDelay } from "./relay-client.js";
 import { retireStoredStateEventOwner } from "./storage.js";
 import { createStateEventWorkBudget, STATE_EVENT_WORK_LIMITS } from "./relay-work-budget.js";
+import { sourceDeliverySnapshot } from "./delivery-snapshot.js";
 
 export const STATE_EVENT_RELAY_LIMITS = Object.freeze({ batch: 20, concurrency: 4, workMs: 5000, leaseMs: 30_000,
   scheduledAttempts: 12, totalAttempts: 20, wakeCoalesceMs: 1000 });
@@ -34,7 +35,8 @@ async function interest(state, env, row, intent, deadline, work) {
   const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", row.stream_route_id);
   if (stream.registered_epoch === stream.interest_epoch) return;
   await relayStreamRequest(env, row.stream_route_id, "interest", {
-    owner: selectedOwner(intent), operationId: row.operation_id, epoch: stream.interest_epoch
+    owner: selectedOwner(intent), operationId: row.operation_id, epoch: stream.interest_epoch,
+    sourceSnapshot: sourceDeliverySnapshot(state, env, selectedOwner(intent), row.operation_id, row.stream_route_id)
   }, deadline, work);
   state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = ? WHERE route_id = ? AND interest_epoch = ?", stream.interest_epoch, row.stream_route_id, stream.interest_epoch);
 }
@@ -44,7 +46,8 @@ async function cleanup(state, env, row, intent, deadline, work) {
   // retire its proof while the destination still holds an unprunable receipt.
   if (row.state === "gap_recorded" && !row.destination_confirmed) {
     const outcome = await relayStreamRequest(env, row.stream_route_id, "confirm", {
-      owner: selectedOwner(intent), operationId: row.operation_id
+      owner: selectedOwner(intent), operationId: row.operation_id,
+      sourceSnapshot: sourceDeliverySnapshot(state, env, selectedOwner(intent), row.operation_id, row.stream_route_id)
     }, deadline, work);
     if (outcome?.confirmed !== true) throw recoveryError("outcome_unknown", 503);
     state.storage.sql.exec("UPDATE state_event_outbox SET destination_confirmed = 1 WHERE operation_id = ? AND lease_token = ?", row.operation_id, row.lease_token);

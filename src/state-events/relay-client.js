@@ -1,5 +1,6 @@
 import { traceStateEvent } from "./diagnostics.js";
 import { recoveryError, StateEventRecoveryError } from "./identity.js";
+import { sourceSnapshotHeaders } from "./delivery-snapshot.js";
 
 export async function boundedStateEventRequest(call, deadline = Date.now() + 5000, diagnostics = {}) {
   const started = Date.now();
@@ -36,7 +37,7 @@ export function relayStreamRequest(env, routeId, operation, input, deadline, wor
   work?.take(operation);
   return boundedStateEventRequest(() => env.DURABLE_EVENT_STREAM.get(env.DURABLE_EVENT_STREAM.idFromName(routeId)).fetch(
     `https://stream/internal/events/combined/${operation}`, {
-      method: "POST", headers: { "x-elmybot-durable-event-internal": "v1", "x-elmybot-state-event-delivery": "v1" },
+      method: "POST", headers: { "x-elmybot-durable-event-internal": "v1", "x-elmybot-state-event-delivery": "v1", ...sourceSnapshotHeaders(input.sourceSnapshot) },
       body: JSON.stringify({ ...input, routeId })
     }), deadline, { env, operationId: input.operationId, routeId, rpc: operation });
 }

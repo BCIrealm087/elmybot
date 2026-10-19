@@ -17,7 +17,7 @@ async function guardedFixture(options) {
     const call = () => fault ? fault(kind, path, init, send) : send();
     return guard ? guard.request(path, call) : call();
   });
-  async function alarm({ depth = 4, inject } = {}) {
+  async function alarm({ depth = 2, inject } = {}) {
     const due = f.meter.due(f.ownerStub, f.ownerRole);
     expect(due).not.toBeNull();
     clock.mockReturnValue(Math.max(Date.now(), due));
@@ -43,7 +43,8 @@ describe("state/event invocation work budgets", () => {
       const { guard, measured } = await f.alarm();
       expect(guard.rejected).toBe(0); expect(guard.total).toBe(measured.requests);
       expect(guard.total).toBeLessThanOrEqual(STATE_EVENT_WORK_LIMITS.remoteCalls);
-      expect(guard.peak).toBeLessThanOrEqual(4);
+      expect(guard.peak).toBeLessThanOrEqual(2);
+      expect(guard.paths.some((path) => path.endsWith("delivery/proof"))).toBe(false);
       const events = await f.rows(f.streamStub, "durable_event_stream_events");
       expect(events).toHaveLength(index + 1);
       const rows = await f.rows(f.ownerStub, "state_event_outbox");
@@ -105,7 +106,7 @@ describe("state/event invocation work budgets", () => {
 
   it("labels a deliberately too-small synthetic depth budget and preserves recovery authority", async () => {
     const f = await guardedFixture({ shared: true }), accepted = await f.commit();
-    const constrained = await f.alarm({ depth: 2 });
+    const constrained = await f.alarm({ depth: 1 });
     expect(constrained.guard.rejected).toBeGreaterThan(0);
     expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({ state: "pending", uncertain: 1 });
     expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
@@ -119,10 +120,13 @@ describe("state/event invocation work budgets", () => {
       if (kind === "DURABLE_EVENT_STREAM" && path.endsWith("combined/append")) throw Error("Synthetic lost request");
       return send();
     } });
-    expect(await f.rows(f.registryStub, "state_event_commit_barriers")).toHaveLength(1);
+    const barriers = await f.rows(f.registryStub, "state_event_commit_barriers");
+    expect(barriers).toHaveLength(1);
+    expect(JSON.stringify(barriers)).not.toContain("sourceSnapshot");
+    expect(JSON.stringify(barriers)).not.toContain("payload");
     await runInDurableObject(f.streamStub, (_instance, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 1000"));
     const retry = await f.alarm();
-    expect(retry.guard.rejected).toBe(0); expect(retry.guard.total).toBe(8);
+    expect(retry.guard.rejected).toBe(0); expect(retry.guard.total).toBe(4);
     expect(retry.guard.paths.filter((path) => path.endsWith("combined/fence"))).toHaveLength(2);
     expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({
       state: "pending", lease_token: null, uncertain: 0, last_error: "durable_event_stream_full"

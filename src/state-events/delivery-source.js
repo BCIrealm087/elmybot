@@ -7,6 +7,9 @@ import { integrationRegistryStub } from "../integrations/registry-client.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { initializeStateEventOutbox, maintainStateEventOutbox, stateEventOutboxExists } from "./outbox.js";
 import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
+import { finalizeStateEventOrigin } from "./storage.js";
+import { sourceSnapshotHeaders, sourceIntentProof, sourceDeliverySnapshot } from "./delivery-snapshot.js";
+export { sourceIntentProof, sourceDeliverySnapshot } from "./delivery-snapshot.js";
 
 export const STATE_EVENT_DELIVERY_PATH = "/internal/state-events/delivery/";
 export const STATE_EVENT_DELIVERY_HEADERS = Object.freeze({ "x-elmybot-state-event-delivery": "v1" });
@@ -34,20 +37,6 @@ export async function deliverySourceRequest(env, owner, operation, input) {
     throw recoveryError("outcome_unknown", 503);
   } finally { clearTimeout(timer); }
 }
-export function sourceIntentProof(state, operationId, routeId) {
-  if (!stateEventOutboxExists(state)) throw recoveryError("missing_intent", 409);
-  initializeStateEventOutbox(state);
-  const row = one(state, "SELECT * FROM state_event_outbox WHERE operation_id = ? AND stream_route_id = ?", operationId, routeId);
-  const receipt = one(state, "SELECT metadata_json FROM state_event_records WHERE record_key = ?", `owner:${operationId}`);
-  if (!row || !receipt) throw recoveryError("missing_intent", 409);
-  const intent = JSON.parse(row.intent_json), saved = JSON.parse(receipt.metadata_json).receipt;
-  if (!saved || saved.eventId !== intent.eventId || canonicalJson(saved.stateEvent) !== canonicalJson(intent.stateEvent) ||
-      saved.expiresAtMs !== intent.expiresAtMs || saved.committedAtMs !== intent.committedAtMs) throw recoveryError("invalid_receipt", 503);
-  const head = one(state, `SELECT operation_id FROM state_event_outbox WHERE stream_route_id = ?
-    AND state NOT IN ('appended', 'gap_recorded', 'reset_discarded', 'retiring') ORDER BY operation_sequence LIMIT 1`, routeId);
-  const stream = one(state, "SELECT interest_epoch FROM state_event_source_streams WHERE route_id = ?", routeId);
-  return { intent, state: row.state, head: head?.operation_id ?? null, interestEpoch: Number(stream?.interest_epoch ?? 1) };
-}
 function streamStatus(state, routeId) {
   if (!stateEventOutboxExists(state)) return { pending: 0, gap: false, reset: false, checkpoint: 0 };
   initializeStateEventOutbox(state);
@@ -61,7 +50,8 @@ function streamStatus(state, routeId) {
 async function confirmDestination(state, env, owner, operationId, routeId, options) {
   const row = one(state, "SELECT destination_confirmed FROM state_event_outbox WHERE operation_id = ?", operationId);
   if (row?.destination_confirmed) return;
-  const outcome = await relayStreamRequest(env, routeId, "confirm", { owner, operationId }, options.deadline, options.work);
+  const outcome = await relayStreamRequest(env, routeId, "confirm", { owner, operationId,
+    sourceSnapshot: sourceDeliverySnapshot(state, env, owner, operationId, routeId) }, options.deadline, options.work);
   if (outcome.confirmed !== true) throw recoveryError("outcome_unknown", 503);
   state.storage.sql.exec("UPDATE state_event_outbox SET destination_confirmed = 1 WHERE operation_id = ?", operationId);
 }
@@ -71,17 +61,18 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
   if (terminal.has(proof.state)) {
     await confirmDestination(state, env, owner, operationId, routeId, options);
     if (proof.state === "appended") {
-      return relayStreamRequest(env, routeId, "outcome", { owner, operationId }, options.deadline, options.work);
+      return relayStreamRequest(env, routeId, "outcome", { owner, operationId,
+        sourceSnapshot: sourceDeliverySnapshot(state, env, owner, operationId, routeId) }, options.deadline, options.work);
     }
     return { ...proof.intent.delivery, terminal: proof.intent.delivery.reason };
   }
-  const input = { owner, operationId, routeId };
+  const input = { owner, operationId, routeId, sourceSnapshot: sourceDeliverySnapshot(state, env, owner, operationId, routeId) };
   let outcome;
   try {
     if (owner.kind === "effective_shareable") options.work?.take("authority.append");
     outcome = owner.kind === "effective_shareable"
       ? await boundedStateEventRequest(() => integrationRegistryStub(env).fetch("https://registry/state-events/append", {
-        method: "POST", headers: STATE_EVENT_DELIVERY_HEADERS, body: JSON.stringify(input)
+        method: "POST", headers: { ...STATE_EVENT_DELIVERY_HEADERS, ...sourceSnapshotHeaders(input.sourceSnapshot) }, body: JSON.stringify(input)
       }), options.deadline, { env, operationId, routeId, rpc: "authority.append" })
       : await relayStreamRequest(env, routeId, "append", input, options.deadline, options.work);
   } catch (error) {
@@ -125,6 +116,12 @@ export async function handleStateEventOriginRetirement(state, env, request, path
   const origin = JSON.parse(row.metadata_json);
   if (origin.attempt.identity.operationId !== input.operationId || origin.attempt.route.key !== input.ownerKey ||
       env.CONFIG.idFromName(origin.attempt.identity.originGroupKey).toString() !== state.id.toString()) throw recoveryError("wrong_owner", 422);
+  // The original owner already confirmed this exact durable origin cache. The
+  // trusted terminal retirement request needs no owner lookup to recover it.
+  if (origin.state === "committed" && origin.ownerConfirmed && origin.receipt?.operationId === input.operationId) {
+    finalizeStateEventOrigin(state, origin.attempt, origin.receipt, Date.now(), true);
+    return { retired: true };
+  }
   const result = await createStateEventRecovery(state, createStateEventOwnerClient(env)).retire(origin.attempt.identity);
   if (result?.state !== "committed") throw recoveryError("outcome_unknown", 503);
   return { retired: true };

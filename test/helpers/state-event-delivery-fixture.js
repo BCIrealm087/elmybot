@@ -20,16 +20,17 @@ export async function cleanupDeliveryFixtures() {
   for (const { kind, id } of objects.values()) await runInDurableObject(env[kind].get(id), (_i, state) => state.storage.deleteAlarm());
   objects.clear();
 }
-export async function deliveryFixture({ shared = false, streams = 1, suppressLocalCommitAlarm = false, bounded = false } = {}) {
+export async function deliveryFixture({ shared = false, streams = 1, suppressLocalCommitAlarm = false, bounded = false, payloadPadding = "" } = {}) {
   const featureId = "test.delivery", scope = shared ? { kind: "effective_shareable", namespace: "health" } : { kind: "group_local" };
   const entries = Array.from({ length: streams }, (_, index) => {
     const suffix = index ? `-${index}` : "";
     const operation = defineStateEventOperation({ id: `change${suffix}`, scope, stream: { id: `impacts${suffix}`, version: 2 }, input: schema.object({}),
       mutation: bounded ? { kind: "bounded_counter", name: "health", subject: { literal: "current" }, min: 0, max: 1, initial: 1, operation: "increment", amount: { literal: 1 } }
-        : { kind: "increment", key: { literal: `health${suffix}` }, amount: { literal: 1 } }, event: { value: { result: "after" } } });
+        : { kind: "increment", key: { literal: `health${suffix}` }, amount: { literal: 1 } }, event: {
+      value: { result: "after" }, ...(payloadPadding ? { padding: { literal: payloadPadding } } : {}) } });
     const stream = defineDurableEventStream({ id: `impacts${suffix}`, version: 2, label: "Impacts", description: "Test delivery", platforms: ["discord", "twitch"],
       scope: { kind: scope.kind }, publication: { kind: "state_event", source: scope }, access: { kind: "operator_grant" },
-      payload: { schema: { type: "object", properties: { value: { type: "integer" } }, required: ["value"] } } });
+      payload: { schema: { type: "object", properties: { value: { type: "integer" }, ...(payloadPadding ? { padding: { type: "string", maxLength: 4096 } } : {}) }, required: ["value", ...(payloadPadding ? ["padding"] : [])] } } });
     const action = defineAction({ kind: `test.delivery.change${suffix}.v1`, supportedOrigins: ["discord"], input: operation.input,
       uses: { services: ["stateEvents"], stateEvents: [operation.id] }, cooldown: { scope: "group", seconds: 1 }, async execute() { throw Error("blocked"); } });
     return { operation, stream, action, name: `change${suffix}` };

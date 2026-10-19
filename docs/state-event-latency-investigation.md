@@ -4,7 +4,8 @@ Step 1 of the latency repair roadmap established reproducible failure models and
 an installed-feature harness, without production changes. Step 2 repairs shared
 source alarm scheduling as described below. Step 3 adds a conservative
 [relay remote-work budget](state-event-relay-work-budget.md) and durable
-continuations. Request topology, leases and widget ACK policy remain unchanged.
+continuations. Step 4 [flattens normal publication and retirement requests](state-event-request-chains.md)
+with private owner-validated snapshots. Leases and widget ACK policy remain unchanged.
 The captured production baseline
 is `45c8ed9be7c37299868c06d215e90b382cf7d19d`.
 

@@ -23,6 +23,12 @@ The six-stream local/shared drain records 363/417 SQL writes (30 more in each
 case than step 2), 42 alarm sets and six handlers, with the same 36/48 binding
 requests. These controlled scheduling counters quantify the backlog tradeoff;
 they are not production duration or billing measurements.
+Step 4's [flattened requests](state-event-request-chains.md) reduce the measured
+warm local/shared binding requests from 11/19 to 8/14. Installed health retains
+117 SQL writes and 16 alarm sets, with SQL reads reduced from 4,444 to 4,256.
+Snapshots add bounded transient request bytes, with no registry snapshot/payload
+storage or new durable phase. Current CI artifacts contain these measurements;
+the historical billing scenarios below still await the step-10 refresh.
 
 The design has finite offline maintenance and a measurable write premium for
 atomicity/recovery. The installed health command uses 117 native SQL row writes

@@ -3,6 +3,7 @@ import { durableEventId, durableEventRouteId, serializeDurableEventPayload, sha2
 import { canonicalJson, recoveryError } from "./identity.js";
 import { deliverySourceRequest } from "./delivery-source.js";
 import { storageTableExists } from "../storage-alarm.js";
+import { readSourceSnapshot, STATE_EVENT_DELIVERY_REQUEST_BYTES } from "./delivery-snapshot.js";
 
 export const COMBINED_STREAM_PATH = "/internal/events/combined/";
 const one = (state, sql, ...args) => state.storage.sql.exec(sql, ...args).toArray()[0];
@@ -71,11 +72,12 @@ export function pruneCombinedRecords(state, nowMs) {
   });
   return true;
 }
-export async function combinedAppend(state, env, registry, raw, operation, append) {
-  const input = JSON.parse(canonicalJson(raw, 8192));
+export async function combinedAppend(state, env, registry, raw, operation, append, { trustedSnapshot = false } = {}) {
+  const input = JSON.parse(canonicalJson(raw, STATE_EVENT_DELIVERY_REQUEST_BYTES));
   if ((operation !== "interest-release" && !/^seo1\.[\w-]{43}$/.test(input.operationId ?? "")) || !/^des1\.[\w-]{43}$/.test(input.routeId ?? "") ||
       env.DURABLE_EVENT_STREAM.idFromName(input.routeId).toString() !== state.id.toString() ||
       !["group_local", "effective_shareable"].includes(input.owner?.kind)) throw recoveryError("invalid_route", 422);
+  const forwarded = readSourceSnapshot(input, trustedSnapshot);
   initialize(state);
   if (operation === "interest-release") return releaseProducerInterest(state, input.owner, input.routeId, input.epoch);
   const stored = one(state, "SELECT * FROM state_event_destination_records WHERE operation_id = ?", input.operationId);
@@ -87,7 +89,7 @@ export async function combinedAppend(state, env, registry, raw, operation, appen
     if (["appended", "gap"].includes(outcome.state) && operation !== "interest") return operation === "outcome"
       ? terminalDestinationOutcome(state, outcome, stored.operation_sequence) : outcome;
   }
-  const proof = await deliverySourceRequest(env, input.owner, "proof", { operationId: input.operationId, routeId: input.routeId });
+  const proof = forwarded ?? await deliverySourceRequest(env, input.owner, "proof", { operationId: input.operationId, routeId: input.routeId });
   const intent = proof.intent;
   const descriptor = { deploymentEnvironment: intent.environment, scopeKind: intent.route.kind,
     realmIdentity: input.owner.key, featureId: intent.featureId, streamId: intent.stream.id, version: intent.stream.version };

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
+import { sourceSnapshotHeaders } from "../src/state-events/delivery-snapshot.js";
 afterEach(cleanupDeliveryFixtures);
 describe("combined deferred admission and gaps", () => {
   it.each([false, true])("appends offline with owner receipt authority and the original deadline (shared=%s)", async (shared) => {
@@ -202,7 +203,7 @@ describe("combined deferred admission and gaps", () => {
     expect((await f.source("reconcile", { operationId: a.operationId })).status).toBe(503);
     f.intercept(null); expect((await f.move()).status).toBe(200);
     await expireRelayLease(f);
-    const late = await f.streamCall("combined/append", delayed);
+    const late = await f.streamCall("combined/append", delayed, sourceSnapshotHeaders(delayed.sourceSnapshot));
     expect(late.data.code).toBe("state_event_attempt_fenced");
     expect((await f.source("reconcile", { operationId: a.operationId })).data.reason).toBe("lifecycle");
     expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);

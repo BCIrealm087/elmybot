@@ -1,6 +1,7 @@
 import { configureStateEventDiagnostics, traceStateEventForOwner } from "../state-events/diagnostics.js";
 import { producerInterestExists, nextProducerWakeup, queueProducerWakeup, drainProducerWakeup } from "../state-events/producer-wakeup.js";
 import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
+import { STATE_EVENT_SOURCE_SNAPSHOT_HEADER } from "../state-events/delivery-snapshot.js";
 import { StateEventRecoveryError, recoveryError } from "../state-events/identity.js";
 import {
   DURABLE_EVENT_CODES,
@@ -1525,7 +1526,9 @@ export class DurableEventStreamBackend {
         if (!["append", "lookup", "fence", "gap", "confirm", "outcome", "interest", "interest-release"].includes(operation)) throw recoveryError("invalid_request", 404);
         if (operation === "outcome" && pruneExpired(this.state, Date.now()) > 0) terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
         const result = await combinedAppend(this.state, this.env, this.registry, await request.json(), operation,
-          (input, options) => append(this.state, this.registry, input, options));
+          (input, options) => append(this.state, this.registry, input, options), {
+            trustedSnapshot: request.headers.get(STATE_EVENT_SOURCE_SNAPSHOT_HEADER) === "snapshot-v1"
+          });
         if (result.state === "gap") terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
         if (["interest-release", "confirm", "outcome"].includes(operation)) await scheduleNextAlarm(this.state);
         return json(result);

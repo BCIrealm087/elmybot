@@ -10,10 +10,13 @@ No feature, existing stream version or deployment is migrated here.
 ## Private delivery boundary
 
 A delivery request identifies an operation and its original physical owner and
-stream. It cannot supply an event payload, result or replacement route. The
-stream reads the actual source outbox and owner receipt through binding-only
-handlers on `GroupConfig` or `ShareableStateRealm`. The source verifies its
-physical Durable Object identity and the immutable receipt/intent relationship.
+stream. Public/feature callers cannot supply payloads, results or replacement
+routes to this private protocol. The owner verifies its physical Durable Object
+identity and immutable receipt/intent relationship from its actual local outbox
+and receipt. Latency repair step 4 carries that information on the framework's
+marked private binding path, removing redundant callbacks. Unmarked legacy
+requests still obtain proof through binding-only source handlers. See
+[snapshot trust, fresh authority and recovery](state-event-request-chains.md).
 The destination checks its own physical identity, deployment environment,
 installed combined stream and namespace association, event identity, schema,
 original commit/deadline and versioned correlation. These private modules are

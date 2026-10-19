@@ -4,6 +4,9 @@ Latency roadmap step 3 bounds a relay invocation by complete application request
 paths, in addition to its existing time, attempt and lease limits. This is
 containment while the request chains are flattened in step 4. It does not
 establish Cloudflare's numeric depth threshold or guarantee production latency.
+Step 4 [flattens normal request chains](state-event-request-chains.md). The
+weights below remain conservative for legacy fallback; normal carried snapshots
+avoid the listed source callbacks. Structural tests now enforce depth two.
 
 ## Invocation and owner limits
 

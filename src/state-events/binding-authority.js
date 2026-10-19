@@ -33,10 +33,10 @@ export function removeStateEventBarrier(state, row) {
     if (deleted) state.storage.sql.exec("UPDATE state_event_barrier_budget SET rows = rows - 1, bytes = bytes - ?", deleted.bytes);
   });
 }
-export async function resolveStateEventBarrier(registry, row, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs) {
+export async function resolveStateEventBarrier(registry, row, deadline = Date.now() + STATE_EVENT_BARRIER_LIMITS.timeoutMs, sourceSnapshot) {
   const attempt = JSON.parse(row.attempt_json);
   if (attempt.kind === "append") {
-    const outcome = await resolveCombinedAppendBarrier(registry, attempt, deadline);
+    const outcome = await resolveCombinedAppendBarrier(registry, attempt, deadline, sourceSnapshot);
     removeStateEventBarrier(registry.state, row);
     return outcome;
   }
