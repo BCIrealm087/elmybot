@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEventForOwner } from "../state-events/diagnostics.js";
 import { producerInterestExists, nextProducerWakeup, queueProducerWakeup, drainProducerWakeup } from "../state-events/producer-wakeup.js";
 import { combinedAppend, COMBINED_STREAM_PATH, combinedGap, combinedSourceStatus, prepareCombinedGrant, commitCombinedReset, finishCombinedReset, pruneCombinedRecords, recordExpiredCombinedEvents } from "../state-events/delivery-stream.js";
 import { StateEventRecoveryError, recoveryError } from "../state-events/identity.js";
@@ -395,9 +396,12 @@ async function scheduleNextAlarmInTransaction(state) {
   next = available.length ? Math.min(...available.map(Number)) : null;
   if (next === null || next === undefined) {
     await state.storage.deleteAlarm();
+    traceStateEventForOwner(state, "alarm.clear");
     return;
   }
-  await state.storage.setAlarm(Math.max(Date.now() + 1, Number(next)));
+  const scheduledAtMs = Math.max(Date.now() + 1, Number(next));
+  await state.storage.setAlarm(scheduledAtMs);
+  traceStateEventForOwner(state, "alarm.schedule", { scheduledAtMs, durableDueMs: Number(next) });
 }
 
 async function scheduleNextAlarm(state) {
@@ -556,6 +560,8 @@ function sendNextEvent(state, socket) {
     detachSocket(state, attachment);
     return false;
   }
+  traceStateEventForOwner(state, "socket.send", { operationId: message.stateEvent?.operationId,
+    eventId: row.event_id, sequence: Number(row.sequence), acceptedAtMs: row.accepted_at_ms });
   socket.serializeAttachment({
     ...attachment,
     sentSequence: Number(row.sequence),
@@ -1039,6 +1045,10 @@ async function append(state, registry, rawInput, options = {}) {
     options.commit?.(receipt);
     return receipt;
   });
+  if (options.stateEvent) traceStateEventForOwner(state, "destination.append", {
+    operationId: options.stateEvent.operationId, eventId: input.eventId, routeId: input.route.routeId,
+    acceptedAtMs: result.acceptedAtMs, sequence: result.sequence
+  });
   const socket = currentSocket(state);
   if (socket) sendNextEvent(state, socket);
   state.waitUntil(scheduleNextAlarm(state));
@@ -1203,7 +1213,7 @@ function acknowledgeSocketEvent(state, socket, attachment, cursor) {
   if (cursor === attachment.sentCursor && sentSequence > acknowledgedSequence) {
     const event = one(
       sql,
-      `SELECT sequence, payload_bytes FROM durable_event_stream_events
+      `SELECT sequence, payload_bytes, event_id FROM durable_event_stream_events
        WHERE sequence = ? AND cursor = ?`,
       sentSequence,
       cursor
@@ -1231,6 +1241,7 @@ function acknowledgeSocketEvent(state, socket, attachment, cursor) {
         attachment.grantId
       );
     });
+    traceStateEventForOwner(state, "socket.ack", { eventId: event.event_id, sequence: sentSequence });
     socket.serializeAttachment({
       ...attachment,
       acknowledgedSequence: sentSequence,
@@ -1489,6 +1500,7 @@ export function initializeDurableEventStreamTables(state) {
 export class DurableEventStreamBackend {
   constructor(state, env, registry) {
     this.state = state;
+    configureStateEventDiagnostics(state, env);
     this.env = env;
     this.registry = registry;
     initializeDurableEventStreamTables(state);
@@ -1500,6 +1512,7 @@ export class DurableEventStreamBackend {
   }
 
   async fetch(request) {
+    configureStateEventDiagnostics(this.state, this.env);
     try {
       requireInternal(request);
       const url = new URL(request.url);
@@ -1564,6 +1577,8 @@ export class DurableEventStreamBackend {
   }
 
   async alarm() {
+    configureStateEventDiagnostics(this.state, this.env);
+    traceStateEventForOwner(this.state, "alarm.start");
     const nowMs = Date.now();
     if (pruneExpired(this.state, nowMs) > 0) {
       terminateSockets(this.state, DURABLE_EVENT_SOCKET_STATUS.retentionGap);
@@ -1582,6 +1597,7 @@ export class DurableEventStreamBackend {
   }
 
   async webSocketMessage(socket, message) {
+    configureStateEventDiagnostics(this.state, this.env);
     await handleDurableEventSocketMessage(this.state, this.env, socket, message);
   }
 

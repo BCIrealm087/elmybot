@@ -104,6 +104,21 @@ function event(character = "a", sequence = 1, payload = { data: "play-intro" }) 
 }
 
 describe("durable-event browser client", () => {
+  it("traces receipt, handler completion and ACK without exposing payload or changing delivery", async () => {
+    const records = [];
+    const { client, connections } = harness({ onDiagnostic: (record) => { records.push(record); throw Error("diagnostic sink failed"); } });
+    let finish;
+    const handled = new Promise((resolve) => { finish = resolve; });
+    client.subscribe(() => handled);
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1)); ready(connections[0]);
+    connections[0].serverMessage(event("a", 1, { data: "private-payload" }));
+    await vi.waitFor(() => expect(records.map((row) => row.stage)).toEqual(["event.receive"]));
+    expect(connections[0].sent).toHaveLength(1);
+    finish();
+    await vi.waitFor(() => expect(records.map((row) => row.stage)).toEqual(["event.receive", "event.handled", "event.ack"]));
+    expect(connections[0].sent).toHaveLength(2);
+    expect(JSON.stringify(records)).not.toMatch(/private-payload|cursor|payload/);
+  });
   it.each([true, false])("validates optional combined correlation before handling/acknowledgement (valid=%s)", async (valid) => {
     const { client, connections } = harness(), handler = vi.fn(), statuses = vi.fn();
     client.subscribe(handler, { onStatus: statuses });

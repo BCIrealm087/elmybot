@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEventForOwner } from "./state-events/diagnostics.js";
 import { handleStateEventCommand } from "./state-events/command-origin.js";
 import { drainStateEventRelay, handleStateEventDeliverySource, handleStateEventOriginRetirement } from "./state-events/delivery-source.js";
 import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
@@ -218,6 +219,7 @@ export class GroupConfig {
    */
   constructor(state, env, featureRegistry = null) {
     this.state = state;
+    configureStateEventDiagnostics(state, env);
     this.env = env;
     this.featureRegistry = featureRegistry;
     this.identityMigrationPromise = null;
@@ -404,6 +406,8 @@ export class GroupConfig {
   }
 
   async alarm() {
+    configureStateEventDiagnostics(this.state, this.env);
+    traceStateEventForOwner(this.state, "alarm.start");
     await drainStateEventRelay(this.state, this.env);
     await drainStateQueryGrantInvalidations(this.state, this.env);
     if (stateQueryNotificationTablesExist(this.state)) {

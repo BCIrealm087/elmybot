@@ -1,3 +1,4 @@
+import { traceStateEvent } from "../state-events/diagnostics.js";
 import { recoverStorageAlarm } from "../storage-alarm.js";
 import { logError } from "../common.js";
 import { stateQueryErrorForLog } from "./operations.js";
@@ -568,6 +569,8 @@ function notificationFor(row) {
 }
 
 async function deliverOne(state, env, row, nowMs) {
+  traceStateEvent(env, "read.notify.start", { ownerId: state.id.toString(), notificationId: row.notification_id,
+    stateRevision: Number(row.source_revision), committedAtMs: Number(row.committed_at_ms), dueAtMs: row.next_attempt_at_ms });
   let delivered = false;
   try {
     if (!env?.STATE_QUERY_OBSERVER) throw new Error("Observer binding is unavailable.");
@@ -592,6 +595,8 @@ async function deliverOne(state, env, row, nowMs) {
       attempt: Number(row.attempt_count) + 1
     }, stateQueryErrorForLog(error));
   }
+  traceStateEvent(env, "read.notify.finish", { ownerId: state.id.toString(), notificationId: row.notification_id,
+    result: delivered ? "delivered" : "retry", durationMs: Math.max(0, Date.now() - nowMs) });
   state.storage.transactionSync(() => {
     if (delivered) {
       state.storage.sql.exec(

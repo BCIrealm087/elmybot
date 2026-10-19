@@ -115,7 +115,8 @@ export function createDurableEventClient({
   openWebSocket = (url) => new globalThis.WebSocket(url),
   retryMs = 1_000,
   heartbeatMs = 30_000,
-  heartbeatTimeoutMs = 90_000
+  heartbeatTimeoutMs = 90_000,
+  onDiagnostic
 } = {}) {
   const base = new URL(baseUrl);
   if (base.username || base.password || !/^https?:$/.test(base.protocol)) {
@@ -136,6 +137,11 @@ export function createDurableEventClient({
   let cancelConnection = null;
   let running = Promise.resolve();
 
+  const diagnostic = (stage, event) => {
+    try { onDiagnostic?.({ stage, atMs: Date.now(), operationId: event.stateEvent?.operationId,
+      eventId: event.eventId, sequence: event.sequence, acceptedAt: event.acceptedAt }); }
+    catch { /* Diagnostics cannot own delivery or ACKs. */ }
+  };
   const notify = (value) => {
     try { listener?.onStatus?.(value); } catch { /* Status callbacks do not own delivery. */ }
   };
@@ -299,11 +305,14 @@ export function createDurableEventClient({
             return;
           }
           processing = true;
+          diagnostic("event.receive", accepted);
           const handler = listener.handler;
           notify({ state: "handling", stale: false, ...ready, eventId: accepted.eventId });
           Promise.resolve().then(() => handler(accepted)).then(() => {
+            diagnostic("event.handled", accepted);
             if (!settled && current()) {
               send({ protocol, type: "ack", cursor: accepted.cursor });
+              diagnostic("event.ack", accepted);
               notify({ state: "live", stale: false, ...ready });
             }
           }).catch(() => {

@@ -1,3 +1,5 @@
+import { traceStateEventForOwner } from "./state-events/diagnostics.js";
+
 // Every scheduler in an object must consider every durable work source. Keep
 // the read/decision/write serialized with admission, including SQL + alarm writes.
 export function storageTableExists(state, name) {
@@ -22,10 +24,17 @@ export async function scheduleStorageAlarmInTransaction(state, { candidate = nul
   const current = await state.storage.getAlarm();
   const due = nextStorageWakeup(state, candidate);
   if (due === null) {
-    if (current !== null) await state.storage.deleteAlarm();
+    if (current !== null) {
+      await state.storage.deleteAlarm();
+      traceStateEventForOwner(state, "alarm.clear", { previousAlarmMs: current });
+    }
   } else {
     const next = Math.max(nowMs, due);
     if (current === null || current > next) await state.storage.setAlarm(next);
+    traceStateEventForOwner(state, "alarm.schedule", {
+      scheduledAtMs: current === null || current > next ? next : current,
+      previousAlarmMs: current, durableDueMs: due
+    });
   }
 }
 export async function recoverStorageAlarm(state, options) {

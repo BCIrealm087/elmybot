@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, stateEventDiagnosticsEnabled, traceStateEvent, traceStateEventRow } from "./diagnostics.js";
 import { initializeStateEventOutbox, maintainStateEventOutbox, stateEventOutboxExists } from "./outbox.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
@@ -37,6 +38,7 @@ async function interest(state, env, row, intent, deadline) {
   state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = ? WHERE route_id = ? AND interest_epoch = ?", stream.interest_epoch, row.stream_route_id, stream.interest_epoch);
 }
 async function cleanup(state, env, row, intent, deadline) {
+  traceStateEventRow(env, "cleanup.start", row);
   // A gap is cached before confirmation. A crash at that boundary must not
   // retire its proof while the destination still holds an unprunable receipt.
   if (row.state === "gap_recorded" && !row.destination_confirmed) {
@@ -61,7 +63,7 @@ async function cleanup(state, env, row, intent, deadline) {
   if (intent.route.kind === "effective_shareable") {
     const acknowledged = await boundedStateEventRequest(() => env.CONFIG.get(env.CONFIG.idFromName(intent.originGroupKey)).fetch("https://origin/internal/state-events/origin/retire", {
       method: "POST", headers: { "x-elmybot-state-event-delivery": "v1" }, body: JSON.stringify({ sourceKey: intent.retirementSourceKey, operationId: row.operation_id, ownerKey: intent.route.key })
-    }), deadline);
+    }), deadline, { env, operationId: row.operation_id, routeId: row.stream_route_id, rpc: "origin.retire" });
     if (acknowledged.retired !== true) throw recoveryError("outcome_unknown", 503);
   }
   const stream = one(state, "SELECT * FROM state_event_source_streams WHERE route_id = ?", row.stream_route_id);
@@ -78,12 +80,20 @@ async function cleanup(state, env, row, intent, deadline) {
     if (count === 1) state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = 0 WHERE route_id = ? AND interest_epoch = ?", row.stream_route_id, stream.interest_epoch);
     await scheduleStorageAlarmInTransaction(state);
   });
+  traceStateEventRow(env, "cleanup.finish", row);
 }
-async function claim(state, { onlyOperationId = null, manual = false, nowMs = Date.now(), remaining = 20 } = {}) {
+async function claim(state, env, { onlyOperationId = null, manual = false, nowMs = Date.now(), remaining = 20 } = {}) {
   return state.storage.transaction(async () => {
     const active = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).total);
     if (active >= STATE_EVENT_RELAY_LIMITS.concurrency) {
       const lease = Number(one(state, "SELECT MIN(lease_until_ms) AS due FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).due);
+      if (stateEventDiagnosticsEnabled(env)) {
+        const blocker = one(state, "SELECT * FROM state_event_outbox WHERE lease_until_ms > ? ORDER BY lease_until_ms LIMIT 1", nowMs);
+        for (const row of state.storage.sql.exec("SELECT * FROM state_event_outbox WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) LIMIT 20", nowMs, nowMs).toArray()) {
+          traceStateEventRow(env, "relay.blocked", row, { reason: "owner_capacity", activeLeases: active,
+            blockerOperationId: blocker?.operation_id, blockerState: blocker?.state, leaseUntilMs: lease });
+        }
+      }
       state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 1,
         next_wakeup_at_ms = CASE WHEN state IN ('pending', 'parked') AND deadline_ms > ? THEN MIN(deadline_ms, ?) ELSE ? END
         WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`, nowMs, lease, lease, nowMs, nowMs);
@@ -105,18 +115,22 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
       const cleanup = cleanupLane(row), lane = `${row.stream_route_id}:${cleanup ? "cleanup" : "append"}`;
       if (streams.has(lane)) continue;
       if (row.deadline_ms > nowMs && ["pending", "parked"].includes(row.state)) {
-        const head = one(state, `SELECT next_wakeup_at_ms, deadline_ms FROM state_event_outbox WHERE stream_route_id = ?
+        const head = one(state, `SELECT operation_id, state, lease_until_ms, next_wakeup_at_ms, deadline_ms FROM state_event_outbox WHERE stream_route_id = ?
           AND operation_sequence < ? AND state IN ('pending', 'parked', 'gap_pending') ORDER BY operation_sequence LIMIT 1`, row.stream_route_id, row.operation_sequence);
         if (head) {
+          traceStateEventRow(env, "relay.blocked", row, { reason: "ordered_head", blockerOperationId: head.operation_id,
+            blockerState: head.state, leaseUntilMs: head.lease_until_ms, nextWakeupAtMs: head.next_wakeup_at_ms });
           if (manual) throw recoveryError("delivery_order", 409);
           state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", head.next_wakeup_at_ms ?? head.deadline_ms, row.operation_id);
           continue;
         }
       }
-      const leased = one(state, `SELECT MIN(lease_until_ms) AS due FROM state_event_outbox
+      const leased = one(state, `SELECT MIN(lease_until_ms) AS due, operation_id, state FROM state_event_outbox
         WHERE stream_route_id = ? AND lease_until_ms > ? AND (state IN ${cleanupStates}) = ?`,
       row.stream_route_id, nowMs, cleanup ? 1 : 0);
       if (leased?.due != null) {
+        traceStateEventRow(env, "relay.blocked", row, { reason: "lane_lease", blockerOperationId: leased.operation_id,
+          blockerState: leased.state, leaseUntilMs: leased.due });
         state.storage.sql.exec("UPDATE state_event_outbox SET owner_busy = 1, next_wakeup_at_ms = ? WHERE operation_id = ?", row.deadline_ms > nowMs ? Math.min(row.deadline_ms, leased.due) : leased.due, row.operation_id);
         continue;
       }
@@ -124,12 +138,14 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
       const scheduled = isControl ? row.control_scheduled : row.scheduled_attempts;
       const expired = row.deadline_ms <= nowMs;
       if (used >= 20 || (!isControl && !expired && used >= 19)) {
+        traceStateEventRow(env, "relay.blocked", row, { reason: "attempt_budget" });
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", !isControl && !expired ? row.deadline_ms : null, row.operation_id);
         continue;
       }
       // Once automatic retries are exhausted, only a recorded useful wakeup,
       // explicit recovery or the original expiry may start another attempt.
       if (!manual && scheduled >= 12 && (isControl || !expired) && row.last_error !== "useful_wakeup") {
+        traceStateEventRow(env, "relay.blocked", row, { reason: "automatic_budget" });
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", isControl ? null : row.deadline_ms, row.operation_id);
         continue;
       }
@@ -139,14 +155,16 @@ async function claim(state, { onlyOperationId = null, manual = false, nowMs = Da
       state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 0, lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ?,
         attempts = attempts + ?, scheduled_attempts = scheduled_attempts + ?, control_attempts = control_attempts + ?, control_scheduled = control_scheduled + ? WHERE operation_id = ?`,
       token, nowMs + 30_000, nowMs + 30_000, isControl ? 0 : 1, !isControl && !manual ? 1 : 0, isControl ? 1 : 0, isControl && !manual ? 1 : 0, row.operation_id);
-      result.push({ ...current(state, row.operation_id), wake_generation: row.wake_generation }); streams.add(lane);
+      const claimed = { ...current(state, row.operation_id), wake_generation: row.wake_generation };
+      result.push(claimed); streams.add(lane);
+      traceStateEventRow(env, "relay.claim", claimed, { ownerId: state.id.toString(), activeLeases: active + result.length });
       if (result.length >= Math.min(remaining, 4 - active)) break;
     }
     await scheduleStorageAlarmInTransaction(state, { nowMs });
     return result;
   });
 }
-async function finish(state, row, error = null, terminalDelivery = false) {
+async function finish(state, env, row, error = null, terminalDelivery = false) {
   await state.storage.transaction(async () => {
     const active = current(state, row.operation_id);
     if (!active || active.lease_token !== row.lease_token) return;
@@ -172,13 +190,23 @@ async function finish(state, row, error = null, terminalDelivery = false) {
     uncertain ? active.lease_until_ms : null, due, useful ? "useful_wakeup" : error?.code ?? (error ? "state_event_outcome_unknown" : null), uncertain ? 1 : 0, row.operation_id);
     if (parked && !isControl && !useful) state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = deadline_ms
       WHERE stream_route_id = ? AND operation_id <> ? AND lease_token IS NULL AND state IN ('pending', 'parked') AND deadline_ms > ?`, row.stream_route_id, row.operation_id, now);
+    traceStateEventRow(env, "relay.finish", active, { code: error?.code ?? (error ? "state_event_outcome_unknown" : "ok"),
+      reason: uncertain ? "uncertain" : parked ? "parked" : "completed", nextWakeupAtMs: due,
+      leaseUntilMs: uncertain ? active.lease_until_ms : undefined });
     resumeBusyStreams(state, now);
     await scheduleStorageAlarmInTransaction(state);
   });
 }
 export async function runStateEventRelay(state, env, reconcile, options = {}) {
+  configureStateEventDiagnostics(state, env);
   if (!stateEventOutboxExists(state)) return { attempted: 0 };
   initializeStateEventOutbox(state);
+  if (stateEventDiagnosticsEnabled(env)) {
+    const snapshot = one(state, `SELECT MIN(next_wakeup_at_ms) AS due,
+      SUM(lease_until_ms > ?) AS active, SUM(lease_until_ms > ? AND state IN ${cleanupStates}) AS cleanup FROM state_event_outbox`, Date.now(), Date.now());
+    traceStateEvent(env, "relay.start", { ownerId: state.id.toString(), dueAtMs: snapshot.due,
+      activeLeases: Number(snapshot.active ?? 0), cleanupLeases: Number(snapshot.cleanup ?? 0) });
+  }
   await observeStateEventRelayMode(state, env);
   const started = Date.now();
   const expired = await maintainStateEventOutbox(state, Date.now(), options.onlyOperationId ?? null);
@@ -200,16 +228,16 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
       const active = current(state, row.operation_id);
       if (active && result.terminal) {
         await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline);
-      } else await finish(state, row);
+      } else await finish(state, env, row);
       return result;
     } catch (error) {
-      await finish(state, row, error);
+      await finish(state, env, row, error);
       if (options.onlyOperationId) throw error;
       return { state: "pending", code: error.code ?? "state_event_outcome_unknown" };
     }
   };
   while (attempted < batch && Date.now() - started < 5000) {
-    const rows = await claim(state, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now(), remaining: batch - attempted });
+    const rows = await claim(state, env, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now(), remaining: batch - attempted });
     if (!rows.length) break;
     const outcomes = await Promise.allSettled(rows.slice(0, batch - attempted).map(work));
     attempted += outcomes.length;

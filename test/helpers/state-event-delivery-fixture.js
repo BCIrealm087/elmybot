@@ -56,7 +56,13 @@ export async function deliveryFixture({ shared = false, streams = 1, suppressLoc
       return interceptor ? interceptor(kind, input, init, send) : send();
     } })
   }]));
-  const testEnv = { ...env, ...bindings, INTEGRATION_REGISTRY: { idFromName: () => registryId, get: () => tracked("INTEGRATION_REGISTRY", registryId) } };
+  const testEnv = { ...env, ...bindings, INTEGRATION_REGISTRY: { idFromName: () => registryId, get: () => ({ fetch: async (input, init) => {
+    const stub = tracked("INTEGRATION_REGISTRY", registryId);
+    // The native runtime may evict an idle registry between paced commands.
+    // Reinstall fixture bindings on every request, as for the owner/stream.
+    await runInDurableObject(stub, (instance) => { instance.env = testEnv; });
+    return stub.fetch(input, init);
+  } }) } };
   const registryStub = tracked("INTEGRATION_REGISTRY", registryId);
   await runInDurableObject(registryStub, (instance) => { instance.env = testEnv; });
   const route = shared ? await resolveStateEventSharedRoute(testEnv, { sourceGroup: group, targetPlatform: "twitch", featureId, namespaceId: "health", schemaVersion: 1, stream }) : {

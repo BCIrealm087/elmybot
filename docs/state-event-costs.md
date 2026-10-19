@@ -227,3 +227,7 @@ The measured implementation satisfies the bounded-work gate after the two
 amplification fixes. It preserves hibernating transport and acceptance remains
 disabled. [Final author/operator guidance and release review](state-event-release.md)
 complete step 12; deployment remains with the operator.
+
+Private [latency diagnostics](state-event-diagnostics.md) default off. Enabled
+tracing adds bounded logs and relay inspection reads, but no diagnostic writes,
+RPCs or polling. The ordinary cost profile keeps this switch disabled.

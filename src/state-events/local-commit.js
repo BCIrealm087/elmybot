@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import {
   applyLocalStateEventMutation, prepareLocalStateEventMutation, readLocalStateEventMutation
 } from "../framework/feature-storage.js";
@@ -13,6 +14,7 @@ import { allocateStateEventSequence, enqueueStateEventIntent, STATE_EVENT_OUTBOX
 // Private storage boundary. Command/service execution remains blocked until the
 // shared-owner, delivery and operational-mode stages are complete.
 export async function commitLocalStateEvent(state, env, registry, input) {
+  configureStateEventDiagnostics(state, env);
   const normalized = JSON.parse(canonicalJson(input, 24 * 1024));
   if (!normalized || !normalized.request || typeof normalized.request !== "object" || Array.isArray(normalized.request)) {
     throw recoveryError("invalid_request", 422);
@@ -49,7 +51,7 @@ export async function commitLocalStateEvent(state, env, registry, input) {
   // SQLite storage.transaction includes SQL and alarm operations. The nested
   // synchronous transaction contains all state/result/notification/intent writes;
   // outer rollback also covers a failed alarm write, leaving no unscheduled commit.
-  return state.storage.transaction(async () => {
+  const committed = await state.storage.transaction(async () => {
     const outcome = await commitStateEventAtOwner(state, { attempt, request: prepared, physicalOwnerKey: attempt.route.key }, () => {
       const origin = lookupStateEventOrigin(state, identity);
       if (!origin || origin.state !== "prepared") throw recoveryError("missing_origin", 503);
@@ -86,4 +88,9 @@ export async function commitLocalStateEvent(state, env, registry, input) {
     await scheduleStorageAlarmInTransaction(state);
     return outcome;
   });
+  traceStateEvent(env, "commit", { ownerId: state.id.toString(), operationId: identity.operationId,
+    routeId: attempt.route.streamRouteId, eventId: committed.receipt.eventId,
+    committedAtMs: committed.receipt.committedAtMs, sequence: committed.receipt.stateEvent.operationSequence,
+    stateRevision: committed.receipt.stateEvent.stateRevision });
+  return committed;
 }

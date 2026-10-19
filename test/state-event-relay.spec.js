@@ -215,7 +215,11 @@ describe("bounded state/event relay and producer wakeups", () => {
     for (const next of accepted) expect(receipts.map((row) => row.event_id)).toContain(next.receipt.eventId);
   });
   it.each([false, true])("keeps an uncertain unappended head ordered while cleanup uses another lane (shared=%s)", async (shared) => {
-    const f = await fixture({ shared }), first = await f.commit(); let lost = false;
+    const f = await fixture({ shared }); f.testEnv.STATE_EVENT_DIAGNOSTICS = "true";
+    const logs = [], log = vi.spyOn(console, "log").mockImplementation((value) => {
+      try { logs.push(JSON.parse(value)); } catch { /* unrelated logs */ }
+    });
+    const first = await f.commit(); let lost = false;
     f.intercept(async (kind, input, _init, send) => {
       const result = await send();
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/append") && !lost) { lost = true; throw Error("append reply lost"); }
@@ -230,6 +234,11 @@ describe("bounded state/event relay and producer wakeups", () => {
     expect((await f.rows(f.streamStub, "durable_event_stream_events")).map((row) => row.event_id)).toEqual([first.receipt.eventId]);
     const waiting = (await f.rows(f.ownerStub, "state_event_outbox")).find((row) => row.operation_id === second.operationId);
     expect(waiting).toMatchObject({ state: "pending", attempts: 0, next_wakeup_at_ms: head.lease_until_ms });
+    expect(logs.some((row) => row.stage === "relay.finish" && row.operationId === first.operationId && row.reason === "uncertain")).toBe(true);
+    expect(logs.some((row) => row.stage === "relay.blocked" && row.operationId === second.operationId &&
+      row.reason === "ordered_head" && row.blockerOperationId === first.operationId && row.leaseUntilMs === head.lease_until_ms)).toBe(true);
+    log.mockRestore();
+    f.testEnv.STATE_EVENT_DIAGNOSTICS = "false";
     f.intercept(null); clock.mockReturnValue(head.lease_until_ms + 1);
     await drain(f);
     const delivered = (await f.rows(f.streamStub, "durable_event_stream_events")).sort((a, b) => a.sequence - b.sequence);

@@ -3,11 +3,23 @@ import { createStateQueryClient } from "/state-query/client.js";
 import { watchStateEvents } from "/event-stream/state-event.js";
 
 const STREAM = "fun.health:impacts:v2";
-const events = createDurableEventClient(), state = createStateQueryClient();
+// Temporary operator diagnostics are opt-in and never include values or grants.
+const diagnostics = new URL(location.href).searchParams.get("diagnostics") === "1";
+let traceWindow = 0, traceCount = 0;
+function trace(record) {
+  if (!diagnostics) return;
+  const atMs = Date.now();
+  if (atMs - traceWindow >= 60_000) { traceWindow = atMs; traceCount = 0; }
+  if (traceCount++ >= 200) return;
+  console.log(JSON.stringify({ event: "health.trace", ...record, atMs }));
+}
+const events = createDurableEventClient({ onDiagnostic: diagnostics ? trace : undefined }), state = createStateQueryClient();
 const access = document.querySelector("#access"), grantInput = document.querySelector("#grant"), readGrantInput = document.querySelector("#read-grant");
 const meter = document.querySelector("#meter"), fill = document.querySelector("#fill"), value = document.querySelector("#value"), status = document.querySelector("#status");
 let subscription, animation, initialized = false;
 function draw(cell) {
+  trace({ stage: "snapshot.receive", scopeToken: cell.stateEvent?.scopeToken,
+    sequence: cell.stateEvent?.operationSequence, stateRevision: cell.stateEvent?.stateRevision });
   if (cell.state !== "present" || !Number.isInteger(cell.value) || cell.value < 0 || cell.value > 100) throw Error("Invalid authoritative health snapshot.");
   initialized = true; meter.hidden = false; status.textContent = "Live";
   fill.style.width = `${cell.value}%`; value.textContent = `${cell.value} / 100`;
@@ -15,6 +27,7 @@ function draw(cell) {
   requestAnimationFrame(() => meter.classList.add("ready"));
 }
 async function impact(event) {
+  trace({ stage: "animation.start", operationId: event.stateEvent?.operationId, eventId: event.eventId });
   const payload = event.payload;
   if (!payload || !["damage", "heal"].includes(payload.operation) || !Number.isInteger(payload.requestedAmount) || payload.requestedAmount < 1 || payload.requestedAmount > 100 ||
       !Number.isInteger(payload.appliedAmount) || payload.appliedAmount < 0 || payload.appliedAmount > 100 ||
@@ -27,6 +40,7 @@ async function impact(event) {
   ] : [{ boxShadow: "0 4px 15px #0009" }, { boxShadow: "0 0 28px #76ff9a" }, { boxShadow: "0 4px 15px #0009" }], { duration: damage ? 450 : 550, easing: "ease-out" });
   try { await animation.finished; } catch { /* Teardown can cancel an animation. */ }
   animation = null;
+  trace({ stage: "animation.finish", operationId: event.stateEvent?.operationId, eventId: event.eventId });
 }
 function onStatus(update) {
   status.textContent = update.state === "live" ? initialized ? "Live" : "Synchronizing health…"

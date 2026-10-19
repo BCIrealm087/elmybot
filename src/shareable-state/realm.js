@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEventForOwner } from "../state-events/diagnostics.js";
 import { readableStateEventWatermark } from "../state-events/readable.js";
 import { drainStateEventRelay, handleStateEventDeliverySource } from "../state-events/delivery-source.js";
 import { commitShareableStateEvent, STATE_EVENT_AUTHORITY_HEADER, STATE_EVENT_AUTHORITY_VALUE } from "../state-events/shareable-commit.js";
@@ -1689,6 +1690,7 @@ function operationMayMutateState(operation, storage) {
 export class ShareableStateRealmBackend {
   constructor(state, env, featureRegistry) {
     this.state = state;
+    configureStateEventDiagnostics(state, env);
     this.env = env;
     this.featureRegistry = featureRegistry;
     this.legacyAdoptions = new Map();
@@ -1905,6 +1907,8 @@ export class ShareableStateRealmBackend {
   }
 
   async alarm() {
+    configureStateEventDiagnostics(this.state, this.env);
+    traceStateEventForOwner(this.state, "alarm.start");
     await drainStateEventRelay(this.state, this.env);
     if (stateQueryNotificationTablesExist(this.state)) await drainStateQueryNotifications(this.state, this.env);
   }

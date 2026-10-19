@@ -1,5 +1,7 @@
 # State/event failure, compatibility and resource verification
 
+See [latency diagnostics](state-event-diagnostics.md) for bounded opt-in traces and paced native regressions.
+
 Roadmap step 10 verifies the implementation through step 9 against the
 [combined-operation contract](state-event-contract.md). Checked-in environments
 still disable new acceptance. This work authorizes no deployment.

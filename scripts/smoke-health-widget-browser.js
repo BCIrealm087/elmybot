@@ -82,14 +82,19 @@ async function impact(sequence, payload, version = 2) {
   await wait(() => acknowledgements > previous, "Health widget did not acknowledge after its animation");
 }
 const payload = (operation, before, after, requestedAmount) => ({ operation, before, after, requestedAmount, appliedAmount: Math.abs(after - before), changed: before !== after });
-async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "event-v2" } = {}) {
+async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "event-v2", diagnostics = false } = {}) {
   const context = await browser.newContext();
   await context.addInitScript(({ key, legacyNumber }) => {
     if (legacyNumber !== undefined) localStorage.setItem(key, JSON.stringify({ health: legacyNumber, recentIds: [] }));
     window.impactAnimations = 0; const original = Element.prototype.animate;
     Element.prototype.animate = function (...args) { if (this.id === "meter") window.impactAnimations++; return original.apply(this, args); };
   }, { key: `elmybot.health.v1:${target.platform}:${target.groupId}`, legacyNumber });
-  const page = await context.newPage(); page.on("pageerror", (error) => errors.push(error)); await page.goto(`${origin}/health-widget/`);
+  const page = await context.newPage(), diagnosticRecords = [];
+  page.on("pageerror", (error) => errors.push(error));
+  page.on("console", (message) => {
+    try { const record = JSON.parse(message.text()); if (record.event === "health.trace") diagnosticRecords.push(record); } catch { /* unrelated browser output */ }
+  });
+  await page.goto(`${origin}/health-widget/${diagnostics ? "?diagnostics=1" : ""}`);
   await page.locator("#access").waitFor({ state: "visible" });
   // Transparent overlays must retain readable setup text on a white browser
   // canvas. DOM visibility alone does not detect white-on-white labels.
@@ -113,12 +118,12 @@ async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "
   }
   await page.getByLabel("Current-health read grant:", { exact: true }).fill(readGrant);
   await page.getByLabel("Health v2 event grant:", { exact: true }).fill(eventGrant);
-  await page.getByRole("button", { name: "Connect", exact: true }).click(); return { page, context };
+  await page.getByRole("button", { name: "Connect", exact: true }).click(); return { page, context, diagnosticRecords };
 }
 try {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve)); origin = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch({ headless: true });
-  const first = await pageFor({ legacyNumber: 0 }), page = first.page;
+  const first = await pageFor({ legacyNumber: 0, diagnostics: true }), page = first.page;
   await page.waitForFunction(() => document.getElementById("value").textContent === "85 / 100");
   await impact(1, payload("damage", 100, 85, 15)); assert.equal(await page.evaluate(() => window.impactAnimations), 0);
   update(2, 80); await page.waitForFunction(() => document.getElementById("value").textContent === "80 / 100");
@@ -129,12 +134,17 @@ try {
   assert.equal(await page.evaluate(() => window.impactAnimations), 4);
   assert.equal(await page.locator("#value").textContent(), "100 / 100");
   assert.equal(await page.locator("#grant").inputValue(), ""); assert.equal(await page.locator("#read-grant").inputValue(), "");
+  for (const stage of ["snapshot.receive", "event.receive", "event.handled", "event.ack", "animation.start", "animation.finish"]) {
+    assert.ok(first.diagnosticRecords.some((record) => record.stage === stage), `Missing ${stage} diagnostic`);
+  }
+  assert.ok(!JSON.stringify(first.diagnosticRecords).match(/read-health|event-v2|payload|requestedAmount|appliedAmount/));
   assert.ok(!page.url().includes("grant")); await first.context.close(); await wait(() => connections.size === 0, "Widget teardown failed");
 
   update(6, 73); const fresh = await pageFor();
   await fresh.page.waitForFunction(() => document.getElementById("value").textContent === "73 / 100");
   await impact(6, payload("damage", 100, 73, 27)); assert.equal(await fresh.page.evaluate(() => window.impactAnimations), 0);
   assert.equal(await fresh.page.evaluate(() => localStorage.getItem("elmybot.health.v1:discord:health-fixture")), null);
+  assert.equal(fresh.diagnosticRecords.length, 0, "Health diagnostics must default off");
   await fresh.context.close(); await wait(() => connections.size === 0, "Fresh widget teardown failed");
 
   const legacy = await pageFor({ legacyNumber: 5, eventGrant: "event-v1" });
@@ -150,7 +160,7 @@ try {
   await mismatch.page.waitForFunction(() => document.getElementById("status").textContent.includes("same group"));
   assert.equal(connections.size, 0); await mismatch.context.close();
   assert.deepEqual(errors, []);
-  console.log("Health v2 Chromium smoke passed: readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
+  console.log("Health v2 Chromium smoke passed: opt-in payload-free receipt/snapshot/animation/ACK traces, readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
 } finally {
   await browser?.close(); for (const connection of connections) connection.socket.terminate(); sockets.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
 }

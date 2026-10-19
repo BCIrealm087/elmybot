@@ -1,5 +1,7 @@
 # Bounded state/event relay and producer wakeups
 
+See [latency diagnostics](state-event-diagnostics.md) for bounded opt-in traces and paced native regressions.
+
 Step 11's [cost measurements and regression budgets](state-event-costs.md)
 verify the relay's work under bursts, history growth and long outages. New
 admission wakes unresolved work without rescheduling confirmed appended rows;

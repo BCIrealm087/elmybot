@@ -1,3 +1,4 @@
+import { traceStateEvent, traceStateEventForOwner } from "./diagnostics.js";
 import { storageTableExists } from "../storage-alarm.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { boundedStateEventRequest, stateEventRetryDelay } from "./relay-client.js";
@@ -34,11 +35,17 @@ export async function queueProducerWakeup(state, schedule, nowMs = Date.now()) {
   if (!producerInterestExists(state)) return;
   await state.storage.transaction(async () => {
     const interest = one(state, "SELECT * FROM state_event_producer_interest");
-    if (!interest?.active) return;
+    if (!interest?.active) {
+      traceStateEventForOwner(state, "wake.skipped", { reason: "inactive_interest" });
+      return;
+    }
     if (!Number.isSafeInteger(interest.version + 1)) throw recoveryError("sequence_exhausted", 409);
     const due = Math.max(nowMs, Number(interest.last_sent_ms) + 1000);
     state.storage.sql.exec(`UPDATE state_event_producer_interest SET version = version + 1, attempts = 0,
       due_ms = CASE WHEN lease_until_ms > ? THEN lease_until_ms ELSE MIN(COALESCE(due_ms, ?), ?) END WHERE singleton = 1`, nowMs, due, due);
+    traceStateEventForOwner(state, "wake.queued", { routeId: interest.route_id, version: interest.version + 1,
+      nextWakeupAtMs: interest.lease_until_ms > nowMs ? interest.lease_until_ms : Math.min(interest.due_ms ?? due, due),
+      leaseUntilMs: interest.lease_until_ms });
     await schedule();
   });
 }
@@ -46,7 +53,11 @@ export async function drainProducerWakeup(state, env, schedule, nowMs = Date.now
   if (!producerInterestExists(state)) return { attempted: 0 };
   const claimed = await state.storage.transaction(async () => {
     const row = one(state, "SELECT * FROM state_event_producer_interest WHERE active = 1 AND due_ms <= ?", nowMs);
-    if (!row || row.lease_until_ms > nowMs) return null;
+    if (!row) return null;
+    if (row.lease_until_ms > nowMs) {
+      traceStateEvent(env, "wake.blocked", { routeId: row.route_id, version: row.version, leaseUntilMs: row.lease_until_ms });
+      return null;
+    }
     const token = crypto.randomUUID();
     state.storage.sql.exec(`UPDATE state_event_producer_interest SET lease_token = ?, lease_until_ms = ?, due_ms = ?,
       last_sent_ms = ?, attempts = attempts + 1 WHERE singleton = 1`, token, nowMs + 30_000, nowMs + 30_000, nowMs);
@@ -54,12 +65,14 @@ export async function drainProducerWakeup(state, env, schedule, nowMs = Date.now
     return { ...row, lease_token: token, attempts: row.attempts + 1 };
   });
   if (!claimed) return { attempted: 0 };
+  traceStateEvent(env, "wake.claim", { ownerId: state.id.toString(), routeId: claimed.route_id,
+    version: claimed.version, dueAtMs: claimed.due_ms, leaseUntilMs: nowMs + 30_000, attempts: claimed.attempts });
   let result, error;
   try {
     const owner = JSON.parse(claimed.owner_json), binding = owner.kind === "group_local" ? env.CONFIG : env.SHAREABLE_STATE_REALM;
     result = await boundedStateEventRequest(() => binding.get(binding.idFromName(owner.key)).fetch("https://owner/internal/state-events/delivery/wake", {
       method: "POST", headers: { "x-elmybot-state-event-delivery": "v1" }, body: JSON.stringify({ owner, routeId: claimed.route_id, version: claimed.version })
-    }));
+    }), undefined, { env, routeId: claimed.route_id, rpc: "producer.wake" });
     if (result.accepted !== true) throw recoveryError("outcome_unknown", 503);
   } catch (cause) { error = cause; }
   await state.storage.transaction(async () => {
@@ -70,6 +83,8 @@ export async function drainProducerWakeup(state, env, schedule, nowMs = Date.now
     if (error && !changed && claimed.attempts < 12) due = Date.now() + stateEventRetryDelay(claimed.attempts);
     state.storage.sql.exec(`UPDATE state_event_producer_interest SET due_ms = ?, active = ?, lease_token = NULL, lease_until_ms = NULL WHERE singleton = 1`,
       due, !changed && result?.pending === false ? 0 : current.active);
+    traceStateEvent(env, "wake.finish", { ownerId: state.id.toString(), routeId: claimed.route_id,
+      version: claimed.version, nextWakeupAtMs: due, code: error?.code ?? (error ? "state_event_outcome_unknown" : "ok") });
     await schedule();
   });
   return { attempted: 1 };

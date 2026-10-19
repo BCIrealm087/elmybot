@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import { calculatePreparedStateEvent, StateEventOperationDefinitionError, validatePreparedStateEventOperation } from "../framework/state-event-operation.js";
 import { durableEventId, durableEventRouteId } from "../durable-events/contract.js";
 import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
@@ -12,6 +13,7 @@ export const STATE_EVENT_AUTHORITY_VALUE = "registry-v1";
 export const STATE_EVENT_ORIGIN_HEADER = "x-elmybot-state-event-origin";
 
 export async function commitShareableStateEvent(state, env, registry, input, adapter) {
+  configureStateEventDiagnostics(state, env);
   const normalized = JSON.parse(canonicalJson(input, 24 * 1024));
   if (!normalized?.request || typeof normalized.request !== "object" || Array.isArray(normalized.request)) throw recoveryError("invalid_request", 422);
   const { attempt, request } = normalized;
@@ -44,7 +46,7 @@ export async function commitShareableStateEvent(state, env, registry, input, ada
     originGroupKey: identity.originGroupKey, sourceEventId: identity.sourceEventId });
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   const candidateToken = "ses1." + btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-  return state.storage.transaction(async () => {
+  const committed = await state.storage.transaction(async () => {
     const outcome = await commitStateEventAtOwner(state, { attempt, request: prepared, physicalOwnerKey: adapter.ownerKey }, () => {
       // No remote authority read inside this transaction: registry serialization
       // and its durable barrier protect the route, while these owner-local checks
@@ -71,4 +73,9 @@ export async function commitShareableStateEvent(state, env, registry, input, ada
     await scheduleStorageAlarmInTransaction(state);
     return outcome;
   });
+  traceStateEvent(env, "commit", { ownerId: state.id.toString(), operationId: identity.operationId,
+    routeId: attempt.route.streamRouteId, eventId: committed.receipt.eventId,
+    committedAtMs: committed.receipt.committedAtMs, sequence: committed.receipt.stateEvent.operationSequence,
+    stateRevision: committed.receipt.stateEvent.stateRevision });
+  return committed;
 }

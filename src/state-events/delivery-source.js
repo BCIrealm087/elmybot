@@ -1,3 +1,4 @@
+import { configureStateEventDiagnostics, traceStateEvent } from "./diagnostics.js";
 import { runStateEventRelay, wakeStateEventRelay, observeStateEventRelayMode } from "./relay.js";
 import { relayStreamRequest, boundedStateEventRequest } from "./relay-client.js";
 import { createStateEventRecovery } from "./recovery.js";
@@ -80,7 +81,7 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
     outcome = owner.kind === "effective_shareable"
       ? await boundedStateEventRequest(() => integrationRegistryStub(env).fetch("https://registry/state-events/append", {
         method: "POST", headers: STATE_EVENT_DELIVERY_HEADERS, body: JSON.stringify(input)
-      }), options.deadline)
+      }), options.deadline, { env, operationId, routeId, rpc: "authority.append" })
       : await relayStreamRequest(env, routeId, "append", input, options.deadline);
   } catch (error) {
     if (error.code === "durable_event_gap_requires_reset") state.storage.sql.exec("UPDATE state_event_source_streams SET blocked = 1 WHERE route_id = ?", routeId);
@@ -109,6 +110,7 @@ export async function reconcileStateEventIntent(state, env, owner, operationId, 
     state.storage.sql.exec("UPDATE state_event_outbox_budget SET bytes = bytes + ?", bytes - active.intent_bytes);
     await scheduleStorageAlarmInTransaction(state);
   });
+  traceStateEvent(env, "source.cached", { ownerId: state.id.toString(), operationId, routeId, state: outcome.state, acceptedAtMs: outcome.acceptedAtMs });
   await confirmDestination(state, env, owner, operationId, routeId, options);
   return outcome;
 }
@@ -128,6 +130,7 @@ export async function handleStateEventOriginRetirement(state, env, request, path
 }
 export async function handleStateEventDeliverySource(state, env, request, path, kind) {
   if (!path.startsWith(STATE_EVENT_DELIVERY_PATH)) return null;
+  configureStateEventDiagnostics(state, env);
   if (request.method !== "POST" || request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
   const input = await request.json(), owner = input?.owner;
   const binding = kind === "group_local" ? env.CONFIG : env.SHAREABLE_STATE_REALM;
@@ -140,7 +143,10 @@ export async function handleStateEventDeliverySource(state, env, request, path, 
     if (proof.intent.route.key !== owner.key || proof.intent.route.kind !== kind) throw recoveryError("wrong_owner", 422);
     return proof;
   }
-  if (operation === "wake") return wakeStateEventRelay(state, input.routeId, input.version ?? null);
+  if (operation === "wake") {
+    traceStateEvent(env, "wake.receive", { ownerId: state.id.toString(), routeId: input.routeId, version: input.version });
+    return wakeStateEventRelay(state, input.routeId, input.version ?? null);
+  }
   if (operation === "reconcile") {
     if (!stateEventOutboxExists(state)) throw recoveryError("missing_intent", 409);
     const row = one(state, "SELECT operation_id FROM state_event_outbox WHERE operation_id = ?", input.operationId);
