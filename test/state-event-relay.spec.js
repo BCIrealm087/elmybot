@@ -170,12 +170,14 @@ describe("bounded state/event relay and producer wakeups", () => {
     const received = new Promise((resolve) => socket.addEventListener("message", ({ data }) => { const value = JSON.parse(data); if (value.type === "event") resolve(value); }));
     socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "register" }));
     const first = await received;
-    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: first.cursor }));
-    await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+    // Arm the fault before ACK can wake cleanup. Installing it after observing
+    // event removal races the real producer wake and can miss interest release.
     f.intercept(async (kind, input, _init, send) => {
       if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/interest-release")) throw Error("cleanup response unavailable");
       return send();
     });
+    socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ack", cursor: first.cursor }));
+    await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
     await drain(f);
     // A real ACK wakeup can finish its already-claimed cleanup alongside the
     // controlled drain. Observe its durable failure before admitting new work.

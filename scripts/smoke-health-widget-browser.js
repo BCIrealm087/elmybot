@@ -82,13 +82,21 @@ async function impact(sequence, payload, version = 2) {
   await wait(() => acknowledgements > previous, "Health widget did not acknowledge after its animation");
 }
 const payload = (operation, before, after, requestedAmount) => ({ operation, before, after, requestedAmount, appliedAmount: Math.abs(after - before), changed: before !== after });
-async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "event-v2", diagnostics = false } = {}) {
+async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "event-v2", diagnostics = false, stallAnimation = false } = {}) {
   const context = await browser.newContext();
-  await context.addInitScript(({ key, legacyNumber }) => {
+  await context.addInitScript(({ key, legacyNumber, stallAnimation }) => {
     if (legacyNumber !== undefined) localStorage.setItem(key, JSON.stringify({ health: legacyNumber, recentIds: [] }));
     window.impactAnimations = 0; const original = Element.prototype.animate;
-    Element.prototype.animate = function (...args) { if (this.id === "meter") window.impactAnimations++; return original.apply(this, args); };
-  }, { key: `elmybot.health.v1:${target.platform}:${target.groupId}`, legacyNumber });
+    Element.prototype.animate = function (...args) {
+      const animation = original.apply(this, args);
+      if (this.id === "meter") {
+        window.impactAnimations++;
+        // Synthetic completion delay, not a simulation of background-tab policy.
+        if (stallAnimation) Object.defineProperty(animation, "finished", { value: new Promise((resolve) => { window.releaseHealthEffect = resolve; }) });
+      }
+      return animation;
+    };
+  }, { key: `elmybot.health.v1:${target.platform}:${target.groupId}`, legacyNumber, stallAnimation });
   const page = await context.newPage(), diagnosticRecords = [];
   page.on("pageerror", (error) => errors.push(error));
   page.on("console", (message) => {
@@ -147,6 +155,21 @@ try {
   assert.equal(fresh.diagnosticRecords.length, 0, "Health diagnostics must default off");
   await fresh.context.close(); await wait(() => connections.size === 0, "Fresh widget teardown failed");
 
+  // Characterize the current ACK-after-effect policy independently from backend
+  // latency. Step 8 will replace this baseline with its bounded visual queue.
+  const stalled = await pageFor({ stallAnimation: true });
+  await stalled.page.waitForFunction(() => document.getElementById("value").textContent === "73 / 100");
+  const priorAcks = acknowledgements, pendingEffect = impact(7, payload("damage", 73, 70, 3));
+  await stalled.page.waitForFunction(() => typeof window.releaseHealthEffect === "function");
+  assert.equal(acknowledgements, priorAcks, "An unfinished effect currently holds ACK");
+  update(7, 70);
+  await stalled.page.waitForFunction(() => document.getElementById("value").textContent === "70 / 100");
+  assert.equal(acknowledgements, priorAcks, "Readable snapshots can update while the effect holds ACK");
+  await stalled.page.evaluate(() => window.releaseHealthEffect()); await pendingEffect;
+  assert.equal(acknowledgements, priorAcks + 1);
+  await stalled.context.close(); await wait(() => connections.size === 0, "Stalled-effect widget teardown failed");
+  update(6, 73); // Restore the unrelated legacy/mismatched-grant scenario baseline.
+
   const legacy = await pageFor({ legacyNumber: 5, eventGrant: "event-v1" });
   await legacy.page.waitForFunction(() => document.getElementById("status").textContent.includes("legacy v1 event grant"));
   assert.equal(connections.size, 0); assert.equal(await legacy.page.locator("#value").textContent(), "— / 100");
@@ -160,7 +183,7 @@ try {
   await mismatch.page.waitForFunction(() => document.getElementById("status").textContent.includes("same group"));
   assert.equal(connections.size, 0); await mismatch.context.close();
   assert.deepEqual(errors, []);
-  console.log("Health v2 Chromium smoke passed: opt-in payload-free receipt/snapshot/animation/ACK traces, readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
+  console.log("Health v2 Chromium smoke passed: delayed-effect ACK characterization, opt-in payload-free receipt/snapshot/animation/ACK traces, readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
 } finally {
   await browser?.close(); for (const connection of connections) connection.socket.terminate(); sockets.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
 }

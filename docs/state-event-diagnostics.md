@@ -91,6 +91,10 @@ production latency guarantee.
 
 ## Automated evidence
 
+See [the step-1 latency investigation](state-event-latency-investigation.md) for
+the sanitized production timing fixture, request/reentry map, installed-health
+raw-binding tests, controlled failure models and remaining production unknowns.
+
 `test/state-event-latency.spec.js` uses real clocks, native SQLite/alarm/RPC and
 WebSocket registration/ACK, with three commands at five-second local/shared and
 fifteen-second shared spacing. It does not force due dates, clear leases or
