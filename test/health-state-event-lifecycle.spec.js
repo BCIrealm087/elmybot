@@ -41,6 +41,7 @@ async function verifyClean(f, fault, count, value) {
   expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
   expect((await f.rows(f.streamStub, "state_event_producer_interest"))[0].active).toBe(0);
   expect((await f.rows(f.ownerStub, "state_event_partitions"))[0].operation_sequence).toBe(count);
+  const readAtMs = Date.now(), dispatchesBeforeRead = fault.dispatches.length;
   expect(await f.read()).toMatchObject({ value, stateEvent: { operationSequence: count } });
   const receipts = await f.rows(f.streamStub, "state_event_destination_records");
   expect(receipts).toHaveLength(count);
@@ -54,9 +55,19 @@ async function verifyClean(f, fault, count, value) {
   // owner's obligations belong to this cleanup assertion.
   expect((await f.rows(f.registryStub, "state_event_commit_barriers"))
     .filter((row) => row.owner_key === f.route.key)).toEqual([]);
+  // Resolving the snapshot's shared binding schedules one registry safety
+  // check while the event grant's binding watcher is active. It is addressed
+  // work from our read, not idle polling. Require exactly that wake, then start
+  // the idle window only after the last useful request has settled.
+  const callsBeforeSettle = fault.calls.length;
+  await fault.runUntil(Date.now() + 2000);
+  expect(fault.dispatches.slice(dispatchesBeforeRead)).toEqual([{
+    kind: "INTEGRATION_REGISTRY", dueMs: readAtMs + 1000, startedAtMs: readAtMs + 1000
+  }]);
+  expect(fault.calls.length).toBe(callsBeforeSettle);
   const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
   await fault.runUntil(Date.now() + 60_000);
-  expect(fault.dispatches.length).toBe(alarmsBefore);
+  expect(fault.dispatches.slice(alarmsBefore)).toEqual([]);
   expect(fault.calls.length).toBe(before); // No idle consumer/receipt polling.
 }
 
@@ -152,7 +163,7 @@ describe("installed health combined lifecycle regression", () => {
       expect(appended.every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
       const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
       await fault.runUntil(Date.now() + 60_000);
-      expect(fault.dispatches.length).toBe(alarmsBefore); expect(fault.calls.length).toBe(before);
+      expect(fault.dispatches.slice(alarmsBefore)).toEqual([]); expect(fault.calls.length).toBe(before);
       const c = await consumer(f);
       for (let index = 0; index < 3; index++) {
         await expect.poll(() => c.frames.length).toBe(index + 1);
@@ -203,7 +214,7 @@ describe("installed health combined lifecycle regression", () => {
       expect(parked.next_wakeup_at_ms).toBe(parked.deadline_ms);
       const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
       await fault.runUntil(Date.now() + 60_000);
-      expect(fault.dispatches.length).toBe(alarmsBefore); expect(fault.calls.length).toBe(before);
+      expect(fault.dispatches.slice(alarmsBefore)).toEqual([]); expect(fault.calls.length).toBe(before);
       await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 0"));
       let confirmFailed = false, releaseFailed = false;
       fault.intercept(async (_kind, url, _init, send) => {

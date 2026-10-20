@@ -64,7 +64,11 @@ Every fault sequence ends by checking authoritative health and watermark,
 unique destination receipts, no retained event after ACK, terminal owner receipts,
 zero source rows/bytes, inactive producer interest and neither alarm dispatches
 nor outbound binding calls during a further controlled idle minute. Offline and
-capacity-parked idle periods also check both counters. Faults are deterministic application
+capacity-parked idle periods also check both counters. The final readable check
+resolves its shared binding, which deliberately schedules one registry safety
+wake after one second while an event-grant watcher is active. The test requires
+that exact wake with no outgoing call, settles it, then begins the idle minute.
+It does not count deferred work from its own final read as idle polling. Faults are deterministic application
 models; only the native boundaries/storage/handlers they surround are real.
 
 ## Harness validity
@@ -129,6 +133,9 @@ not completion evidence: while a wake RPC is still in flight, retaining its
 ACK/interest-release fault cases also move application time ahead of the native
 dispatcher, preventing registration alarms from racing their controlled drain.
 Their charged-retirement and eventual-cleanup assertions remain unchanged.
+The shared capacity-rollback test likewise holds application time fixed in the
+native dispatcher's future, so a seed publication alarm cannot change its
+before/after snapshots independently of the rejected transaction.
 
 ## Automated gate
 
