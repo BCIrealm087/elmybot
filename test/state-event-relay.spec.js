@@ -143,6 +143,10 @@ describe("bounded state/event relay and producer wakeups", () => {
   });
   it.each([false, true].flatMap((shared) => [false, true].map((lostReply) => ({ shared, lostReply }))))(
     "recovers interrupted interest release after ACK without replay or uncharged work (%j)", async ({ shared, lostReply }) => {
+      // This case drives recovery manually. Registration/ACK also arm real
+      // native alarms; keep those in the dispatcher's future so they cannot
+      // claim cleanup concurrently and turn the assertion into a timing race.
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
       const f = await fixture({ shared }), accepted = await f.commit(); await drain(f);
       f.intercept(async (kind, input, _init, send) => {
         if (kind === "DURABLE_EVENT_STREAM" && String(input).endsWith("combined/interest-release")) {

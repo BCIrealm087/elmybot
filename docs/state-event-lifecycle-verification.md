@@ -95,7 +95,10 @@ Object tests and Chromium tests provide complementary boundary evidence.
 The immediate ACK-coalescing regression waits for the preceding producer wake
 to finish before asserting its idle coalescing deadline. An attempt counter is
 not completion evidence: while a wake RPC is still in flight, retaining its
-30-second lease is correct. The test retains the original deadline assertions.
+30-second lease is correct. The test retains the original deadline assertions. The older manually driven
+ACK/interest-release fault cases also move application time ahead of the native
+dispatcher, preventing registration alarms from racing their controlled drain.
+Their charged-retirement and eventual-cleanup assertions remain unchanged.
 
 ## Automated gate
 
