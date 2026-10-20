@@ -57,6 +57,13 @@ describe("health widget cosmetic acceptance queue", () => {
     animations[1].resolve(); await flush(); expect(queue.runningCount).toBe(0); queue.close();
   });
 
+  it("discards stale effects on a delivered visible transition even without an observed hidden notification", () => {
+    const { queue, animations } = harness(); queue.accept(event(1)); queue.accept(event(2));
+    queue.visibilityChanged();
+    expect(animations[0].animation.cancel).toHaveBeenCalledOnce(); expect(queue.pendingCount).toBe(0); expect(queue.runningCount).toBe(0);
+    queue.accept(event(3)); expect(animations.at(-1).effect.eventId).toBe(event(3).eventId); queue.close();
+  });
+
   it.each(["reconnecting", "credentials", "ended", "obsolete"])("clears obsolete work on %s and fences late rejection", async (reason) => {
     const { queue, animations } = harness(); queue.accept(event(1)); queue.accept(event(2));
     queue.clear(reason); queue.accept(event(3)); queue.accept(event(4));

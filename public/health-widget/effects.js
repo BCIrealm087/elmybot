@@ -64,7 +64,9 @@ export function createHealthEffectQueue({ animate, isHidden = () => document.vis
       // Returning acknowledges acceptance. Never return animation.finished.
     },
     clear,
-    visibilityChanged() { if (isHidden()) clear("hidden"); },
+    // A suspended page may resume without having run its hidden notification.
+    // Clear on either transition rather than replaying stale pending effects.
+    visibilityChanged() { clear(isHidden() ? "hidden" : "visible"); },
     close() { closed = true; clear("closed"); },
     get pendingCount() { return pending.length; },
     get runningCount() { return running ? 1 : 0; }

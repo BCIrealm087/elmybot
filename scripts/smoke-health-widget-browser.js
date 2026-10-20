@@ -157,7 +157,17 @@ try {
   update(4, 100); await impact(4, payload("heal", 90, 100, 10));
   update(5, 100); await impact(5, payload("heal", 100, 100, 10)); await impact(5, payload("heal", 100, 100, 10));
   await page.waitForFunction(() => window.impactAnimations === 4);
-  await wait(() => first.diagnosticRecords.filter((r) => r.stage === "animation.finish").length === 4, "Cosmetic queue did not drain");
+  try {
+    await wait(() => first.diagnosticRecords.filter((r) => r.stage === "animation.finish").length === 4, "Cosmetic queue did not drain");
+  } catch (error) {
+    console.error("Health cosmetic completion failure", JSON.stringify({
+      effects: first.diagnosticRecords.filter((r) => r.stage.startsWith("animation.")),
+      browser: await page.evaluate(() => ({ starts: window.impactAnimations, cancels: window.impactCancels,
+        active: document.getElementById("meter").getAnimations().map((a) => ({ playState: a.playState, currentTime: a.currentTime })) })),
+      errors: errors.map((e) => e.message)
+    }));
+    throw error;
+  }
   assert.equal(await page.locator("#value").textContent(), "100 / 100");
   assert.equal(await page.locator("#grant").inputValue(), ""); assert.equal(await page.locator("#read-grant").inputValue(), "");
   for (const stage of ["snapshot.receive", "event.receive", "event.handled", "event.ack", "animation.start", "animation.finish"]) {

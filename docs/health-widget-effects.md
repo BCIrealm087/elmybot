@@ -23,7 +23,7 @@ full. Existing recovery/baseline rules still apply on reconnect.
 | Running cosmetic effect | At most one; its completion does not own ACK. |
 | Pending cosmetic effects | At most eight; overflow drops the oldest pending descriptor. |
 | Retained descriptor | Only operation, event ID and operation ID; no numeric health, payload or credential. |
-| Hidden page | Cancel running work, clear pending work, validate/accept new events without effects. Becoming visible does not replay skipped effects. |
+| Hidden page | Cancel running work, clear pending work, validate/accept new events without effects. Every delivered visibility transition clears stale effects, including return to visible after suspension; skipped effects do not replay. |
 | Reconnect, handler failure, terminal end, new credentials/connect | Clear obsolete work and cancel the running animation. Late completion cannot clear or advance a newer run. |
 | Page teardown | Close the queue, cancel running work, detach both transports. BFCache restoration reloads for a fresh baseline. |
 | Animation failure | Cancel/drop that cosmetic effect and continue the queue. It does not reject an already accepted event. |
