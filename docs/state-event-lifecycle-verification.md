@@ -25,7 +25,10 @@ boundary; Discord/Twitch HTTP signature validation is outside this fixture.
 The installed health owner is a shareable realm even when standalone. The
 existing `state-event-latency.spec.js` separately covers group-local `CONFIG`
 and shareable owners at both five- and fifteen-second spacing, three commands
-per case, using its explicitly injected declaration/binding fixture.
+per case, using its explicitly injected declaration/binding fixture. Group-local
+cases explicitly evict the owner before the second command. Fixture setup
+restores its injected bindings/declarations before direct commits after eviction;
+production constructors already install the real feature registry.
 
 The shipped coordinator and health effect queue handle native event frames.
 Animation completion never resolves: both events still ACK, reconnect cancels
@@ -88,6 +91,11 @@ The Chromium smoke loads shipped browser modules through an HTTP/WebSocket test
 server. Its server is a protocol fixture, not a deployed Worker. Visibility is
 controlled to verify policy, not to emulate vendor suspension. Native Durable
 Object tests and Chromium tests provide complementary boundary evidence.
+
+The immediate ACK-coalescing regression waits for the preceding producer wake
+to finish before asserting its idle coalescing deadline. An attempt counter is
+not completion evidence: while a wake RPC is still in flight, retaining its
+30-second lease is correct. The test retains the original deadline assertions.
 
 ## Automated gate
 

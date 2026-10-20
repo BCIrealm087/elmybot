@@ -93,7 +93,11 @@ export async function deliveryFixture({ shared = false, streams = 1, suppressLoc
       origin: { group, actor: { platform: "discord", id: "actor", claims: [] } } });
     const identity = await createStateEventIdentity({ environment: env.DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT, featureId, invocation, declaration: { mutation: operation.mutation, stream: operation.stream } });
     const origin = tracked("CONFIG", env.CONFIG.idFromName(group.key));
-    const record = await runInDurableObject(origin, (_i, state) => {
+    const record = await runInDurableObject(origin, (instance, state) => {
+      // A paced local owner may have been evicted since socket setup. Its
+      // constructor restores production bindings/declarations; restore this
+      // injected fixture before direct commit so alarm delivery uses them too.
+      instance.env = testEnv; instance.featureRegistry = registry; instance.registry = registry;
       state.storage.sql.exec("DELETE FROM framework_feature_cooldowns");
       return prepareStateEventOrigin(state, { identity, request: prepareStateEventOperation(operation, {}), route: selectedRoute, cooldownSeconds: 1 });
     });

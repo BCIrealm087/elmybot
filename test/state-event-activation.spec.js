@@ -202,7 +202,13 @@ describe("immediate bounded state/event activation", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await f.commit(); await settled(f);
     await f.connect();
-    await expect.poll(async () => (await f.rows(f.streamStub, "state_event_producer_interest"))[0].attempts).toBe(1);
+    // A charged attempt is visible before its wake RPC has completed. Wait
+    // for completion before testing ACK inside the idle coalescing window; an
+    // in-flight wake correctly retains its existing 30-second lease.
+    await expect.poll(async () => {
+      const interest = (await f.rows(f.streamStub, "state_event_producer_interest"))[0];
+      return interest.attempts === 1 && interest.lease_token === null;
+    }).toBe(true);
     // ACK inside the existing wake-coalescing window must not start another
     // local loop; the queued destination wake is still durably scheduled.
     await f.ack();

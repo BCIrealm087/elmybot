@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
 
 afterEach(async () => { await cleanupDeliveryFixtures(); vi.restoreAllMocks(); });
@@ -31,6 +32,12 @@ describe("state-event scheduling at ordinary command spacing", () => {
         if (index) {
           const remaining = accepted[index - 1].receipt.committedAtMs + spacing - Date.now();
           if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+        }
+        if (!shared && index === 1) {
+          // It may already be evicted after the real idle interval. Wake it
+          // before explicitly exercising eviction; commit restores fixture env.
+          await runInDurableObject(f.ownerStub, () => {});
+          await evictDurableObject(f.ownerStub);
         }
         const next = await f.commit(); accepted.push(next);
         await expect.poll(() => frames.length, { timeout: 4500 }).toBe(index + 1);
