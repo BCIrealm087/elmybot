@@ -1,11 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
 import { sourceDeliverySnapshot, sourceSnapshotHeaders } from "../src/state-events/delivery-snapshot.js";
 import worker from "../src/index.js";
 import { nativeHealthFixture, cleanupNativeHealthFixtures } from "./helpers/installed-health-native-fixture.js";
 
-afterEach(async () => { vi.restoreAllMocks(); await cleanupDeliveryFixtures(); await cleanupNativeHealthFixtures(); });
+// These tests explicitly reconcile captured snapshots. Keep native alarms in
+// the real dispatcher's future so it cannot publish between manual steps.
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000); });
+afterEach(async () => {
+  try { await cleanupDeliveryFixtures(); await cleanupNativeHealthFixtures(); }
+  finally { vi.restoreAllMocks(); }
+});
 async function snapshot(f, operationId, owner = f.owner) {
   return runInDurableObject(f.ownerStub, (_instance, state) => sourceDeliverySnapshot(state, f.testEnv, owner, operationId, f.route.streamRouteId));
 }
@@ -80,7 +86,6 @@ describe("private owner-validated delivery snapshots", () => {
     expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
   });
   it("keeps registry revocation authoritative for an installed linked owner's queued publication", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
     const f = await nativeHealthFixture({ linked: true }), invocation = f.invocation();
     expect((await f.command(invocation)).output.message).toBe("Health saved and impact queued.");
     const revoked = await f.registryStub.fetch("https://registry/groups/revoke", { method: "POST", body: JSON.stringify({

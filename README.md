@@ -463,6 +463,14 @@ GitHub Actions runs the complete suite for pushes to `master` and
 
 The CI Wrangler dry run is the authoritative clean build/configuration check.
 
+Vitest runs at most two Worker runtimes concurrently and gives each test a
+15-second default harness deadline for setup and multistep integration work.
+Explicit delivery-latency and protocol-budget assertions remain separate.
+File isolation and concurrent operations inside tests remain enabled. Run one
+full suite at a time when checking timings; the
+[lifecycle verification notes](docs/state-event-lifecycle-verification.md)
+explain the separation between real-clock tests and manually driven fault tests.
+
 ## Writing features
 
 For a first command, start with [Your first Elmybot feature](docs/feature-quickstart.md).

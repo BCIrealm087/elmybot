@@ -2,6 +2,16 @@ import { defineConfig } from "vitest/config";
 import { cloudflareTest } from "@cloudflare/vitest-plugin";
 
 export default defineConfig({
+  test: {
+    // Each pool worker starts a full workerd runtime. Bound cross-file fixture
+    // traffic so it does not starve native alarm/socket deadlines.
+    // File isolation and the tests' explicit concurrent operations stay enabled.
+    maxWorkers: 2,
+    // Multi-object setup, delivery, ACK and cleanup can exceed five seconds on
+    // development hosts. This is the outer harness deadline; tests keep their
+    // explicit delivery-latency, lease, work-budget and retry assertions.
+    testTimeout: 15_000,
+  },
   plugins: [
     cloudflareTest({
       miniflare: {

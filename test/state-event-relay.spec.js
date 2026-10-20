@@ -353,6 +353,10 @@ describe("bounded state/event relay and producer wakeups", () => {
     f.intercept(null); await drain(f); expect(await f.rows(f.streamStub, "durable_event_stream_events")).toHaveLength(1);
   });
   it("coalesces many capacity notifications into at most one wakeup per second", async () => {
+    // Hundreds of native transactions need not finish within a wall-clock
+    // second. Test the coalescing boundary with explicit application time.
+    const now = Date.now() + 120_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const f = await fixture(); await f.commit(); await drain(f);
     let notifications = 0;
     f.intercept(async (kind, input, _init, send) => { if (kind === "CONFIG" && String(input).endsWith("delivery/wake")) notifications++; return send(); });
@@ -361,8 +365,13 @@ describe("bounded state/event relay and producer wakeups", () => {
       expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(1);
       for (let i = 0; i < 100; i++) await queueProducerWakeup(state, async () => {});
       expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(0);
+      clock.mockReturnValue(now + 999);
+      expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(0);
+      expect(notifications).toBe(1);
+      clock.mockReturnValue(now + 1000);
+      expect((await drainProducerWakeup(state, f.testEnv, async () => {})).attempted).toBe(1);
     });
-    expect(notifications).toBe(1);
+    expect(notifications).toBe(2);
   });
   it("rolls back a wakeup marker when its durable alarm cannot be written", async () => {
     const f = await fixture(); await f.commit(); await drain(f);

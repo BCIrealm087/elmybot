@@ -1,8 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { cleanupDeliveryFixtures, deliveryFixture } from "./helpers/state-event-delivery-fixture.js";
 import { sourceSnapshotHeaders } from "../src/state-events/delivery-snapshot.js";
-afterEach(async () => { vi.restoreAllMocks(); await cleanupDeliveryFixtures(); });
+// Reconciliation and fault timing are driven explicitly in this suite. Native
+// alarm delivery has separate real-clock coverage in the latency suites.
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000); });
+afterEach(async () => {
+  try { await cleanupDeliveryFixtures(); }
+  finally { vi.restoreAllMocks(); }
+});
 describe("combined deferred admission and gaps", () => {
   it.each([false, true])("appends offline with owner receipt authority and the original deadline (shared=%s)", async (shared) => {
     const f = await deliveryFixture({ shared }); const accepted = await f.commit();
@@ -134,10 +140,6 @@ describe("combined deferred admission and gaps", () => {
     await expect(f.commit()).rejects.toMatchObject({ code: "state_event_stream_blocked" });
   });
   it("can reconcile expiry on a frozen shared owner without reopening feature writes", async () => {
-    // This case controls expiry in SQL and invokes recovery explicitly. Keep
-    // native alarm dispatch in the future so it cannot claim the same record
-    // between the controlled expiry/freeze and the explicit reconciliation.
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
     const f = await deliveryFixture({ shared: true }), a = await f.commit(); await expireIntent(f, a.operationId);
     await runInDurableObject(f.ownerStub, (_i, state) => state.storage.sql.exec("UPDATE shareable_state_realm_namespaces SET freeze_id = ?", crypto.randomUUID()));
     expect(await f.source("reconcile", { operationId: a.operationId })).toMatchObject({ status: 200, data: { state: "gap" } });
