@@ -36,7 +36,8 @@ function impact(effect) {
   ] : [{ boxShadow: "0 4px 15px #0009" }, { boxShadow: "0 0 28px #76ff9a" }, { boxShadow: "0 4px 15px #0009" }], { duration: damage ? 450 : 550, easing: "ease-out" });
 }
 function onStatus(update) {
-  if (update.state !== "live") effects.clear(update.state);
+  // "handling" is normal per-event progress, not a connection boundary.
+  if (["connecting", "reconnecting", "handler_failed", "ended", "closed"].includes(update.state)) effects.clear(update.state);
   status.textContent = update.state === "live" ? initialized ? "Live" : "Synchronizing health…"
     : `${update.state}${update.code ? `: ${update.code}` : ""}`;
   if (update.state === "ended") access.hidden = false;
