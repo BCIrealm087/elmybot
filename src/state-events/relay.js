@@ -179,14 +179,14 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
     // A complete shared publication phase (without remote housekeeping) costs
     // 14; an appended outcome/confirmation phase costs 6. They can share the
     // existing 20-call pass instead of making every owed cleanup turn defer a
-    // fresh command to an alarm. Controls already retiring are indivisible.
+    // fresh command to an alarm. Control cleanup attempts are indivisible.
     const publication = candidates.find((candidate) => !cleanupLane(candidate) && !candidate.reset_id);
-    if (["appended", "gap_recorded"].includes(row.state) && publication &&
+    if (row.state === "appended" && publication &&
         budget.reserved + stateEventRecordRemoteCost(row) + stateEventRecordRemoteCost({ ...publication, deferCleanup: true, probeOnly: publication.probe_state === 1 }) > STATE_EVENT_WORK_LIMITS.remoteCalls) {
       row = { ...row, deferCleanup: true };
     }
     let reason = budget.reason(row);
-    if (reason === "remote_budget" && !["retiring", "reset_discarded"].includes(row.state)) {
+    if (reason === "remote_budget" && !control(row)) {
       const split = { ...row, deferCleanup: true };
       if (!budget.reason(split)) { row = split; reason = null; }
     }

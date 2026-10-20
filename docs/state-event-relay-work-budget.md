@@ -53,11 +53,14 @@ retiring/reset-discarded row reserves 1/5. These deliberately include stages
 that can already be complete. Step 7 can split remote terminal housekeeping
 from outcome/confirmation and publication when both classes need service.
 The selected local/shared phase then reserves 3/4 for a standalone probe,
-7/14 for publication, 6/6 for an appended outcome, or 2/2 for gap confirmation.
+7/14 for publication, or 6/6 for an appended outcome.
 The charged `retiring` row keeps the remote 1/5 housekeeping obligation for its
 next claim. Thus a shared appended phase (6) and publication phase (14) fit in
 one existing 20-call invocation. Full-path reservations remain the default when
-there is room. Changing authority, destination or origin paths
+there is room. Control cleanup remains indivisible, including gap confirmation,
+so a final automatic/total attempt can complete all terminal housekeeping rather
+than spend its last allowance staging another phase. Changing authority,
+destination or origin paths
 requires updating both these weights and the enforced-call tests.
 
 ## Yield and recovery

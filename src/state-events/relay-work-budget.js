@@ -17,7 +17,7 @@ export function stateEventRecordRemoteCost(row) {
   // remote retirement/release. That housekeeping receives its own later claim.
   const terminalCleanup = row.deferCleanup ? 0 : cleanup;
   if (row.probeOnly) return probe + STATE_EVENT_REMOTE_COST.confirm + terminalCleanup;
-  if (controls.has(row.state)) return terminalCleanup + (row.state === "gap_recorded" ? STATE_EVENT_REMOTE_COST.confirm : 0);
+  if (controls.has(row.state)) return cleanup + (row.state === "gap_recorded" ? STATE_EVENT_REMOTE_COST.confirm : 0);
   return STATE_EVENT_REMOTE_COST.interest + STATE_EVENT_REMOTE_COST.confirm + terminalCleanup +
     (row.state === "appended" ? STATE_EVENT_REMOTE_COST.outcome : STATE_EVENT_REMOTE_COST[shared ? "authority.append" : "append"] + probe);
 }

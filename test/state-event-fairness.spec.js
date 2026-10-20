@@ -138,6 +138,27 @@ describe("durable publication/cleanup fairness", () => {
     expect((await f.rows(f.ownerStub, "state_event_outbox_budget"))[0]).toMatchObject({ rows: 0, bytes: 0 });
   });
 
+  it.each([{ total: 19, scheduled: 0 }, { total: 11, scheduled: 11 }])("keeps the last control cleanup attempt complete (%j)", async (attempts) => {
+    const f = await fixture({ shared: true }), old = await commit(f);
+    f.clock.mockReturnValue(old.receipt.expiresAtMs + 1);
+    f.intercept((_kind, url, _init, send) => {
+      if (String(url).endsWith("combined/confirm")) throw Error("gap confirmation unavailable"); return send();
+    });
+    await pass(f);
+    expect((await rows(f))[0].state).toBe("gap_recorded");
+    f.intercept(null); f.clock.mockReturnValue(Date.now() + 31_000);
+    const next = await commit(f, 1);
+    await edit(f, "UPDATE state_event_outbox SET control_attempts = ?, control_scheduled = ?, next_wakeup_at_ms = 0 WHERE operation_id = ?", attempts.total, attempts.scheduled, old.operationId);
+    await edit(f, "UPDATE state_event_relay_schedule SET publication_streak = 3");
+    expect((await pass(f, { activation: true })).attempted).toBe(1);
+    expect((await rows(f)).some((r) => r.operation_id === old.operationId)).toBe(false);
+    // The rare seven-call gap/control path and fourteen-call publication cannot
+    // share twenty. Keep that final housekeeping attempt complete, then yield.
+    expect((await rows(f)).find((r) => r.operation_id === next.operationId)).toMatchObject({ state: "pending", attempts: 0 });
+    f.clock.mockReturnValue(Date.now() + 25); await pass(f);
+    expect((await rows(f)).find((r) => r.operation_id === next.operationId)).toMatchObject({ state: "appended", attempts: 1 });
+  });
+
   it("puts new admissions behind an eligible retry instead of repeatedly favoring first attempts", async () => {
     const f = await fixture(), first = await commit(f);
     const claims = [];

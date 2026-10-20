@@ -56,6 +56,11 @@ records an immediate due time. The unresolved row stays fully charged; its next
 cleanup claim owns remote retirement/release and the usual control budget.
 Inline positive receipt probes carry the same split decision. Uncertain
 confirmation still retains the original lease and follows normal recovery.
+Control cleanup (`gap_recorded`, `retiring`, `reset_discarded`) is indivisible.
+It always reserves its full confirmation/retirement/release path, preserving the
+last automatic or total control attempt. A shared gap/control path (7) cannot
+share twenty with a publication phase (14); that rare case yields publication
+to its existing continuation after completing the control attempt.
 If there is room for the full path, ordinary single-record handling keeps its
 existing inline terminal cleanup. A phase must still fit its full reservation
 before a claim, and all calls charge the selected allowance before transmission.
