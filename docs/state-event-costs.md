@@ -84,7 +84,10 @@ State-only/event-only references also omit generic action/cooldown work.
 
 ## Observed core work
 
-These are native SQL counters before alarm-storage and delayed-cleanup allowances.
+These are native SQL counters from the checked-in run, before alarm-storage and
+delayed-cleanup allowances. Repeated runs differed by one burst SQL read and a
+few alarm sets in scheduling profiles; the warm billing counters matched.
+Regression ceilings allow reviewed headroom for that variation.
 
 | Scenario | SQL reads | SQL writes | Binding requests | Alarm invocations |
 | --- | ---: | ---: | ---: | ---: |
@@ -103,7 +106,7 @@ These are native SQL counters before alarm-storage and delayed-cleanup allowance
 | Legacy health v1 publication plus ACK | 416 | 23 | 5 | 0 |
 | Existing bounded health-state mutation | 19 | 4 | 1 | 0 |
 | Six-stream local burst: acceptance / six relay passes | 4,383 / 11,602 | 299 / 363 | 12 / 18 | 0 / 6 |
-| Six-stream shared burst: acceptance / six relay passes | 4,006 / 10,061 | 352 / 417 | 36 / 24 | 0 / 6 |
+| Six-stream shared burst: acceptance / six relay passes | 4,006 / 10,062 | 352 / 417 | 36 / 24 | 0 / 6 |
 | Twelve scheduled destination failures | 14,891 | 84 | 13 | 12 |
 | Failed final expiry reconciliation | 1,643 | 9 | 1 | 1 |
 
