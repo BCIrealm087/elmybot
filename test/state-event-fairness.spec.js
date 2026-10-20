@@ -87,18 +87,22 @@ describe("durable publication/cleanup fairness", () => {
       // Let the original, finite leases mature; never erase a live lease.
       f.clock.mockReturnValue(Date.now() + 31_000);
       const accepted = await commit(f, 3 + round % 3);
-      for (let index = 0; index < 4 && (await rows(f)).find((r) => r.operation_id === accepted.operationId).state !== "appended"; index++) {
+      let current = (await rows(f)).find((r) => r.operation_id === accepted.operationId);
+      for (let index = 0; index < 4 && current.state !== "appended"; index++) {
         guard = stateEventRequestGuard({ calls: 20, depth: 2 }); await pass(f, { activation: true });
         expect(guard.rejected).toBe(0); expect(guard.total).toBeLessThanOrEqual(20); guard = null;
         f.clock.mockReturnValue(Date.now() + 25);
+        current = (await rows(f)).find((r) => r.operation_id === accepted.operationId);
       }
-      expect((await rows(f)).find((r) => r.operation_id === accepted.operationId)).toMatchObject({ state: "appended", attempts: 1 });
+      expect(current).toMatchObject({ state: "appended", attempts: 1 });
       // An independent cleanup pass between commands exercises repeated remote
       // failures as well as the terminal-to-retiring split under mixed traffic.
       guard = stateEventRequestGuard({ calls: 20, depth: 2 }); await pass(f);
       expect(guard.rejected).toBe(0); guard = null;
-      for (const receipt of old) expect((await rows(f)).some((r) => r.operation_id === receipt.operationId)).toBe(true);
+      // One coherent snapshot covers all retained receipts; no mutation occurs
+      // between these assertions, so repeated control RPCs add no coverage.
       const pending = await rows(f), budget = (await f.rows(f.ownerStub, "state_event_outbox_budget"))[0];
+      for (const receipt of old) expect(pending.some((r) => r.operation_id === receipt.operationId)).toBe(true);
       expect(budget).toMatchObject({ rows: pending.length, bytes: pending.reduce((n, r) => n + r.intent_bytes, 0) });
       if (round === 2) await evictDurableObject(f.ownerStub);
     }

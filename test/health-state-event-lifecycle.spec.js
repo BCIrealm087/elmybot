@@ -50,13 +50,36 @@ async function verifyClean(f, fault, count, value) {
   const owners = (await f.rows(f.ownerStub, "state_event_records")).filter((row) => row.record_key.startsWith("owner:"));
   expect(owners).toHaveLength(count);
   expect(owners.every((row) => JSON.parse(row.metadata_json).pendingDelivery === false)).toBe(true);
-  expect(await f.rows(f.registryStub, "state_event_commit_barriers")).toEqual([]);
-  const before = fault.calls.length;
+  // The native registry is shared with other fixture groups. Only this
+  // owner's obligations belong to this cleanup assertion.
+  expect((await f.rows(f.registryStub, "state_event_commit_barriers"))
+    .filter((row) => row.owner_key === f.route.key)).toEqual([]);
+  const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
   await fault.runUntil(Date.now() + 60_000);
+  expect(fault.dispatches.length).toBe(alarmsBefore);
   expect(fault.calls.length).toBe(before); // No idle consumer/receipt polling.
 }
 
 describe("installed health combined lifecycle regression", () => {
+  it("keeps faults observable after eviction without reinstalling controls and forbids backward time", async () => {
+    const { f, fault } = await faultFixture({ linked: true });
+    await f.command(f.invocation());
+    let rejected = 0;
+    fault.intercept((_kind, url, _init, send) => {
+      if (String(url).endsWith("/state-events/append")) { rejected++; throw Error("Injected authority failure after eviction"); }
+      return send();
+    });
+    await evictDurableObject(f.ownerStub); // Deliberately do not call fault.install().
+    await fault.runUntil(Date.now() + 2000);
+    expect(rejected).toBe(1);
+    expect(fault.dispatches.some((row) => row.kind === "SHAREABLE_STATE_REALM")).toBe(true);
+    expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({ attempts: 1, uncertain: 1 });
+    expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+    const now = Date.now(), before = fault.dispatches.length;
+    await expect(fault.runUntil(now - 1)).rejects.toThrow("cannot move backward");
+    expect(Date.now()).toBe(now); expect(fault.dispatches).toHaveLength(before);
+  });
+
   it.each([
     { linked: false, platform: "discord", spacing: 5000, snapshotFirst: true },
     { linked: false, platform: "twitch", spacing: 15000, snapshotFirst: false },
@@ -84,7 +107,9 @@ describe("installed health combined lifecycle regression", () => {
       expect(frame.sequence).toBe(index + 1);
       expect(frame.receivedAtMs - input.sourceCreatedAtMs).toBeLessThan(4500);
       expect(snapshot).toMatchObject({ value: 99 - index, stateEvent: { operationSequence: index + 1 } });
-      expect(frame.stateEvent.scopeToken).toBe(snapshot.stateEvent.scopeToken);
+      expect(frame).toMatchObject({ stateEvent: snapshot.stateEvent, payload: {
+        operation: "damage", requestedAmount: 1, appliedAmount: 1, before: 100 - index, after: 99 - index, changed: true
+      } });
       if (options.snapshotFirst) coordinator.update(snapshot);
       await coordinator.handle(frame);
       if (!options.snapshotFirst) {
@@ -122,9 +147,12 @@ describe("installed health combined lifecycle regression", () => {
       await evictDurableObject(f.ownerStub); await fault.install();
       clock.mockReturnValue(Date.now() + 60_000); // Deliberately late dispatch.
       await fault.runUntil(Date.now() + 10_000);
-      expect((await f.rows(f.ownerStub, "state_event_outbox")).every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
-      const before = fault.calls.length;
-      await fault.runUntil(Date.now() + 60_000); expect(fault.calls.length).toBe(before);
+      const appended = await f.rows(f.ownerStub, "state_event_outbox");
+      expect(appended).toHaveLength(3);
+      expect(appended.every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
+      const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
+      await fault.runUntil(Date.now() + 60_000);
+      expect(fault.dispatches.length).toBe(alarmsBefore); expect(fault.calls.length).toBe(before);
       const c = await consumer(f);
       for (let index = 0; index < 3; index++) {
         await expect.poll(() => c.frames.length).toBe(index + 1);
@@ -173,8 +201,9 @@ describe("installed health combined lifecycle regression", () => {
       const parked = (await f.rows(f.ownerStub, "state_event_outbox"))[0];
       expect(parked).toMatchObject({ state: "pending", last_error: "durable_event_stream_full", attempts: 1 });
       expect(parked.next_wakeup_at_ms).toBe(parked.deadline_ms);
-      const before = fault.calls.length;
-      await fault.runUntil(Date.now() + 60_000); expect(fault.calls.length).toBe(before);
+      const before = fault.calls.length, alarmsBefore = fault.dispatches.length;
+      await fault.runUntil(Date.now() + 60_000);
+      expect(fault.dispatches.length).toBe(alarmsBefore); expect(fault.calls.length).toBe(before);
       await runInDurableObject(f.streamStub, (_i, state) => state.storage.sql.exec("UPDATE durable_event_stream_metadata SET retained_count = 0"));
       let confirmFailed = false, releaseFailed = false;
       fault.intercept(async (_kind, url, _init, send) => {

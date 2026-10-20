@@ -5,7 +5,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 
 export async function installedHealthFaults(f, clock) {
   let interceptor = null;
-  const calls = [];
+  const calls = [], dispatches = [];
   const bindings = Object.fromEntries(["CONFIG", "SHAREABLE_STATE_REALM", "DURABLE_EVENT_STREAM", "INTEGRATION_REGISTRY"].map((kind) => [kind, {
     idFromName: (key) => env[kind].idFromName(key),
     get: (id) => ({ fetch: (url, init) => {
@@ -21,19 +21,26 @@ export async function installedHealthFaults(f, clock) {
   };
   await install();
   return {
-    calls, install,
+    calls, dispatches, install,
     intercept(value) { interceptor = value; },
     async restore() {
       for (const [stub] of objects) await runInDurableObject(stub, (instance) => { instance.env = env; });
     },
     async runUntil(targetMs) {
+      if (!Number.isSafeInteger(targetMs) || targetMs < Date.now()) throw RangeError("The fault clock cannot move backward");
       for (let pass = 0; pass < 80; pass++) {
-        const alarms = await Promise.all(objects.map(async ([stub]) => ({ stub,
-          due: await runInDurableObject(stub, (_i, state) => state.storage.getAlarm()) })));
+        const alarms = await Promise.all(objects.map(async ([stub, kind]) => ({ stub, kind,
+          due: await runInDurableObject(stub, (instance, state) => {
+            // Reading the alarm can wake an evicted object. Restore fault
+            // bindings here so its next handler cannot silently bypass them.
+            instance.env = faultEnv; return state.storage.getAlarm();
+          }) })));
         const next = alarms.filter((item) => item.due !== null && item.due <= targetMs).sort((a, b) => a.due - b.due)[0];
-        if (!next) { clock.mockReturnValue(targetMs); return; }
+        if (!next) { clock.mockReturnValue(Math.max(Date.now(), targetMs)); return; }
         clock.mockReturnValue(Math.max(Date.now(), next.due));
+        dispatches.push({ kind: next.kind, dueMs: next.due, startedAtMs: Date.now() });
         await runInDurableObject(next.stub, async (instance, state) => {
+          instance.env = faultEnv;
           await state.storage.deleteAlarm(); // The synthetic dispatcher consumes it.
           await instance.alarm();
         });

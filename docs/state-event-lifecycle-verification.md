@@ -62,9 +62,39 @@ and Twitch origins represented:
 
 Every fault sequence ends by checking authoritative health and watermark,
 unique destination receipts, no retained event after ACK, terminal owner receipts,
-zero source rows/bytes, inactive producer interest and no outbound binding calls
-during a further controlled idle minute. Faults are deterministic application
+zero source rows/bytes, inactive producer interest and neither alarm dispatches
+nor outbound binding calls during a further controlled idle minute. Offline and
+capacity-parked idle periods also check both counters. Faults are deterministic application
 models; only the native boundaries/storage/handlers they surround are real.
+
+## Harness validity
+
+The fault dispatcher restores its injected bindings when waking objects to read
+or dispatch an alarm. Its own regression evicts an owner without reinstalling
+controls, then requires the owner-to-registry append fault to fire. This prevents an evicted
+object's production constructor from silently bypassing fault injection or
+request counters. Cleanup checks scope registry barriers to the fixture owner:
+the native registry singleton can also retain unrelated fixtures' obligations.
+The helper records dispatches and rejects backward clock
+movement. Healthy native pacing still uses native bindings without this helper.
+
+Installed event frames are checked against the complete readable watermark and
+health payload. Burst checks require the expected row count before testing every
+row, so an empty result cannot satisfy an `every` assertion.
+
+The sustained-failure fairness cases still run eighteen traffic rounds, keep
+three old cleanup obligations charged, assert per-pass call/depth limits and
+retain the original twenty-second test timeout. Assertions that inspect one
+unchanged state now share a single database snapshot, reducing control RPCs
+without removing traffic, failure injection or recovery assertions.
+
+A test audit also ran three temporary negative controls against the actual
+assertions: changing oldest-pending overflow to newest-pending, disabling event
+deduplication, and removing fault-binding restoration after eviction. Each was
+rejected by an assertion in its targeted existing/new test; the fault regression
+observed zero intercepted calls instead of one. All temporary mutations were
+restored byte for byte. These representative checks establish sensitivity to
+those regressions, not exhaustive mutation coverage.
 
 ## Complementary regressions
 
