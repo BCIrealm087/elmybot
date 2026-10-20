@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import {
   defineAction, defineDurableEventStream, defineFeature, defineStateEventOperation, discordActionCommand,
@@ -22,6 +22,9 @@ let sequence = 0;
 const unique = (label) => `${label}-${Date.now()}-${++sequence}`;
 const cleanup = new Map();
 function track(kind, id) { cleanup.set(`${kind}:${id}`, { kind, id }); }
+// These tests explicitly drive commits, lifecycle transitions and recovery.
+// Keep unrelated native publication alarms out of atomic before/after snapshots.
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000); });
 afterEach(async () => {
   try {
     for (const { kind, id } of cleanup.values()) await runInDurableObject(env[kind].get(id), (_i, state) => state.storage.deleteAlarm());
@@ -475,10 +478,6 @@ describe("shareable atomic state/event acceptance and lifecycle", () => {
   });
 
   it("rolls back state and sequence when the shared outbox or receipt budget is full", async () => {
-    // Compare only the rejected transaction's effects. An independently due
-    // publication alarm may legitimately change the seed outbox and alarm;
-    // keep it in the native dispatcher's future throughout both snapshots.
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
     for (const limit of ["outbox", "receipt"]) {
       const f = await fixture(); const a = group("discord"); const seed = await f.prepare(a, 1); await f.commit(a, seed);
       await runInDurableObject(f.rawRealm(seed.attempt.route.key), (_i, state) => {

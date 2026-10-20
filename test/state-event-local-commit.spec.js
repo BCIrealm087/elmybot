@@ -1,5 +1,5 @@
 import { env, evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defineAction, defineDurableEventStream, defineFeature, defineStateEventOperation, discordActionCommand,
   frameworkApiVersion, schema
@@ -19,9 +19,16 @@ import { GroupConfig } from "../src/group-configuration.js";
 
 let sequence = 0;
 const fixtureStubs = new Set();
+// Atomic snapshots and admission windows are driven explicitly here. A native
+// publication alarm must not change the before/after state of a rejected commit.
+beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000); });
 afterEach(async () => {
-  for (const stub of fixtureStubs) await runInDurableObject(stub, (_i, state) => state.storage.deleteAlarm());
-  fixtureStubs.clear();
+  try {
+    for (const stub of fixtureStubs) await runInDurableObject(stub, (_i, state) => state.storage.deleteAlarm());
+  } finally {
+    fixtureStubs.clear();
+    vi.restoreAllMocks();
+  }
 });
 const unique = (name) => `${name}-${Date.now()}-${++sequence}`;
 const environment = { ...env, DURABLE_EVENT_DEPLOYMENT_ENVIRONMENT: "test" };

@@ -137,9 +137,10 @@ The shared capacity-rollback test likewise holds application time fixed in the
 native dispatcher's future, so a seed publication alarm cannot change its
 before/after snapshots independently of the rejected transaction.
 
-The manually reconciled delivery and delivery-snapshot suites use the same
-clock separation for every case, and clear fixture alarms before restoring the
-clock. Previously, a native alarm could publish the ordered head between capture
+The manually driven local-commit, shareable-commit, delivery and delivery-snapshot
+suites use the same clock separation for every case, and clear fixture alarms
+before restoring the clock. Admission-window checks also hold application time
+fixed. Previously, a native alarm could publish the ordered head between capture
 and validation, or claim the operation before an explicit reconciliation call.
 A temporary 1.5-second pause reproduced the ordered-head assertion failure; the
 same pause passed after clock separation. The diagnostic pause is not retained
@@ -152,15 +153,23 @@ from unfinished timed-out tests. Both two-runtime and serial diagnostics still
 exceeded the default five-second whole-test deadline in multistep integration
 cases. The default harness timeout is therefore fifteen seconds; explicit
 per-test timeouts and internal latency, lease, retry and SQL/RPC/alarm assertions
-remain unchanged. This allows fixture setup and complete delivery/ACK/cleanup
-cycles to finish on development hosts without mistaking the entire scenario for
-a single delivery-latency measurement. File isolation and concurrent operations
+remain unchanged. This gives fixture setup and complete delivery/ACK/cleanup
+cycles additional headroom without treating the entire scenario as a single
+delivery-latency measurement. File isolation and concurrent operations
 inside tests remain enabled. Run one full suite at a time when diagnosing timings.
 The producer-wakeup coalescing test also holds application
 time fixed while queuing its two hundred notifications, then checks that the
 second wake is blocked at 999 milliseconds and permitted at 1000 milliseconds.
 Its correctness no longer depends on storage transactions finishing in under a
 wall-clock second.
+
+The 2026-10-20 investigation still observed local whole-test timeouts and two
+group-local generic-fixture delivery deadline failures with these runner limits.
+The installed-health native pacing/reconnect and fault cases passed locally;
+the complete suite passed in CI. Local Node 24 and CI Node 22 also differ, so
+the remaining delay needs profiling under matched environments before assigning
+a cause. Keep the latency and work-budget guards intact, and do not use a
+failed or interrupted run as a cost-measurement baseline.
 
 ## Automated gate
 
