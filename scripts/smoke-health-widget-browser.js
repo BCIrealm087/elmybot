@@ -18,7 +18,7 @@ const server = createServer(async (request, response) => {
     const path = new URL(request.url, origin).pathname;
     if (path.startsWith("/health-widget/") || ["/event-stream/client.js", "/event-stream/state-event.js", "/event-stream/correlation.js", "/state-query/client.js"].includes(path)) {
       const name = path.endsWith("/") ? path + "index.html" : path;
-      assert.ok(["/health-widget/index.html", "/health-widget/app.js", "/health-widget/legacy.html", "/health-widget/legacy.js", "/event-stream/client.js", "/event-stream/state-event.js", "/event-stream/correlation.js", "/state-query/client.js"].includes(name));
+      assert.ok(["/health-widget/index.html", "/health-widget/app.js", "/health-widget/effects.js", "/health-widget/legacy.html", "/health-widget/legacy.js", "/event-stream/client.js", "/event-stream/state-event.js", "/event-stream/correlation.js", "/state-query/client.js"].includes(name));
       response.writeHead(200, { "content-type": name.endsWith(".js") ? "text/javascript" : "text/html", "cache-control": "no-store" });
       response.end(await readFile(new URL(`../public${name}`, import.meta.url))); return;
     }
@@ -45,7 +45,7 @@ function sendState(connection, type = "update") {
   } }));
 }
 sockets.on("connection", (socket, request) => {
-  const connection = { kind: request.url.startsWith("/state-query/") ? "read" : "event", socket, sequence: 0, version: request.headers.cookie?.includes("event=v1") ? 1 : 2, registered: false };
+  const connection = { kind: request.url.startsWith("/state-query/") ? "read" : "event", socket, sequence: 0, version: request.headers.cookie?.includes("event=v1") ? 1 : 2, registered: false, acknowledged: [] };
   connections.add(connection);
   socket.on("message", (data) => {
     try {
@@ -55,7 +55,7 @@ sockets.on("connection", (socket, request) => {
         connection.registered = true;
         if (connection.kind === "read") { connection.queries = message.queries; sendState(connection, "snapshot"); }
         else socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "ready", stream: stream(connection.version), delivery: { kind: "bounded_at_least_once", retentionSeconds: 1800, maxRetainedEvents: 1000, maxRetainedBytes: 1048576 } }));
-      } else { assert.equal(message.type, "ack"); if (connection.kind === "event") acknowledgements++; }
+      } else { assert.equal(message.type, "ack"); if (connection.kind === "event") { acknowledgements++; connection.acknowledged.push(message.cursor); } }
     } catch (error) { errors.push(error); socket.close(1008, "Fixture failed"); }
   });
   socket.on("close", () => connections.delete(connection));
@@ -73,29 +73,46 @@ function update(sequence, value) {
   model.sequence = sequence; model.value = value;
   for (const connection of connections) if (connection.kind === "read" && connection.registered) sendState(connection);
 }
-async function impact(sequence, payload, version = 2) {
+async function sendImpact(sequence, payload, version = 2) {
   await wait(() => [...connections].some((value) => value.kind === "event" && value.version === version && value.registered), "Event consumer missing");
-  const connection = [...connections].find((value) => value.kind === "event" && value.version === version), previous = acknowledgements;
+  const connection = [...connections].find((value) => value.kind === "event" && value.version === version), previous = connection.acknowledged.length;
+  const cursor = id("dec1.", `${version}:${sequence}`);
   connection.socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "event", stream: stream(version), eventId: id("dev1.", `${version}:${sequence}`),
-    sequence, cursor: id("dec1.", `${version}:${sequence}`), acceptedAt: "2026-10-18T00:00:00Z", expiresAt: "2026-10-18T00:30:00Z", payload,
+    sequence, cursor, acceptedAt: "2026-10-18T00:00:00Z", expiresAt: "2026-10-18T00:30:00Z", payload,
     ...(version === 2 ? { stateEvent: { ...marker(sequence), operationId: id("seo1.", sequence) } } : {}) }));
-  await wait(() => acknowledgements > previous, "Health widget did not acknowledge after its animation");
+  return { connection, previous, cursor };
+}
+async function impact(sequence, payload, version = 2) {
+  const { connection, previous, cursor } = await sendImpact(sequence, payload, version);
+  await wait(() => connection.acknowledged.length > previous && connection.acknowledged.at(-1) === cursor, "Health widget did not acknowledge accepted handling");
 }
 const payload = (operation, before, after, requestedAmount) => ({ operation, before, after, requestedAmount, appliedAmount: Math.abs(after - before), changed: before !== after });
 async function pageFor({ legacyNumber, readGrant = "read-health", eventGrant = "event-v2", diagnostics = false, stallAnimation = false } = {}) {
   const context = await browser.newContext();
   await context.addInitScript(({ key, legacyNumber, stallAnimation }) => {
     if (legacyNumber !== undefined) localStorage.setItem(key, JSON.stringify({ health: legacyNumber, recentIds: [] }));
-    window.impactAnimations = 0; const original = Element.prototype.animate;
+    window.impactAnimations = 0; window.impactCancels = 0; window.effectControls = [];
+    // Deterministic visibility events test policy, not vendor background timers.
+    window.healthHidden = false;
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => window.healthHidden ? "hidden" : "visible" });
+    window.setHealthHidden = (value) => { window.healthHidden = value; document.dispatchEvent(new Event("visibilitychange")); };
+    const original = Element.prototype.animate;
     Element.prototype.animate = function (...args) {
       const animation = original.apply(this, args);
       if (this.id === "meter") {
         window.impactAnimations++;
-        // Synthetic completion delay, not a simulation of background-tab policy.
-        if (stallAnimation) Object.defineProperty(animation, "finished", { value: new Promise((resolve) => { window.releaseHealthEffect = resolve; }) });
+        const cancel = animation.cancel.bind(animation);
+        animation.cancel = () => { window.impactCancels++; cancel(); };
+        if (stallAnimation) {
+          animation.pause();
+          let finish;
+          Object.defineProperty(animation, "finished", { value: new Promise((resolve) => { finish = resolve; }) });
+          window.effectControls.push(() => { if (animation.playState !== "idle") animation.finish(); finish(); });
+        }
       }
       return animation;
     };
+    window.completeHealthEffect = (index) => window.effectControls[index]();
   }, { key: `elmybot.health.v1:${target.platform}:${target.groupId}`, legacyNumber, stallAnimation });
   const page = await context.newPage(), diagnosticRecords = [];
   page.on("pageerror", (error) => errors.push(error));
@@ -139,7 +156,8 @@ try {
   await impact(3, payload("heal", 80, 90, 10)); assert.equal(await page.locator("#value").textContent(), "80 / 100"); update(3, 90);
   update(4, 100); await impact(4, payload("heal", 90, 100, 10));
   update(5, 100); await impact(5, payload("heal", 100, 100, 10)); await impact(5, payload("heal", 100, 100, 10));
-  assert.equal(await page.evaluate(() => window.impactAnimations), 4);
+  await page.waitForFunction(() => window.impactAnimations === 4);
+  await wait(() => first.diagnosticRecords.filter((r) => r.stage === "animation.finish").length === 4, "Cosmetic queue did not drain");
   assert.equal(await page.locator("#value").textContent(), "100 / 100");
   assert.equal(await page.locator("#grant").inputValue(), ""); assert.equal(await page.locator("#read-grant").inputValue(), "");
   for (const stage of ["snapshot.receive", "event.receive", "event.handled", "event.ack", "animation.start", "animation.finish"]) {
@@ -155,19 +173,66 @@ try {
   assert.equal(fresh.diagnosticRecords.length, 0, "Health diagnostics must default off");
   await fresh.context.close(); await wait(() => connections.size === 0, "Fresh widget teardown failed");
 
-  // Characterize the current ACK-after-effect policy independently from backend
-  // latency. Step 8 will replace this baseline with its bounded visual queue.
-  const stalled = await pageFor({ stallAnimation: true });
-  await stalled.page.waitForFunction(() => document.getElementById("value").textContent === "73 / 100");
-  const priorAcks = acknowledgements, pendingEffect = impact(7, payload("damage", 73, 70, 3));
-  await stalled.page.waitForFunction(() => typeof window.releaseHealthEffect === "function");
-  assert.equal(acknowledgements, priorAcks, "An unfinished effect currently holds ACK");
-  update(7, 70);
-  await stalled.page.waitForFunction(() => document.getElementById("value").textContent === "70 / 100");
-  assert.equal(acknowledgements, priorAcks, "Readable snapshots can update while the effect holds ACK");
-  await stalled.page.evaluate(() => window.releaseHealthEffect()); await pendingEffect;
-  assert.equal(acknowledgements, priorAcks + 1);
-  await stalled.context.close(); await wait(() => connections.size === 0, "Stalled-effect widget teardown failed");
+  const stalled = await pageFor({ diagnostics: true, stallAnimation: true }), stalledPage = stalled.page;
+  await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "73 / 100");
+  const priorAcks = acknowledgements;
+  await impact(7, payload("damage", 73, 70, 3));
+  assert.equal(acknowledgements, priorAcks + 1, "A never-resolving animation must not hold ACK");
+  assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 1);
+  assert.ok(!stalled.diagnosticRecords.some((r) => r.stage === "animation.finish"));
+  update(7, 70); await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "70 / 100");
+  for (let sequence = 8; sequence <= 27; sequence++) await impact(sequence, payload("heal", 100, 100, 10));
+  await impact(27, payload("heal", 100, 100, 10)); // Accepted duplicate cannot evict another effect.
+  assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 1);
+  await wait(() => stalled.diagnosticRecords.filter((r) => r.stage === "animation.drop").length === 12, "Overflow diagnostics missing");
+  const dropped = stalled.diagnosticRecords.filter((r) => r.stage === "animation.drop");
+  assert.deepEqual(dropped.map((r) => r.eventId), Array.from({ length: 12 }, (_, index) => id("dev1.", `2:${8 + index}`)));
+  assert.ok(stalled.diagnosticRecords.every((r) => (r.pendingEffects ?? 0) <= 8 && (r.runningEffects ?? 0) <= 1));
+  update(27, 30); await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "30 / 100");
+  for (let index = 0; index < 9; index++) {
+    await stalledPage.waitForFunction((count) => window.effectControls.length === count, index + 1);
+    await stalledPage.evaluate((n) => window.completeHealthEffect(n), index);
+  }
+  await wait(() => stalled.diagnosticRecords.filter((r) => r.stage === "animation.finish").length === 9, "Bounded retained effects did not finish");
+  assert.deepEqual(stalled.diagnosticRecords.filter((r) => r.stage === "animation.start").map((r) => r.eventId),
+    [7, ...Array.from({ length: 8 }, (_, index) => 20 + index)].map((n) => id("dev1.", `2:${n}`)));
+  assert.equal(await stalledPage.locator("#value").textContent(), "30 / 100");
+
+  await impact(28, payload("damage", 30, 29, 1)); await impact(29, payload("damage", 29, 28, 1));
+  await stalledPage.evaluate(() => window.setHealthHidden(true));
+  assert.equal(await stalledPage.evaluate(() => window.impactCancels), 1);
+  for (let sequence = 30; sequence <= 33; sequence++) await impact(sequence, payload("damage", 30, 29, 1));
+  update(33, 45); await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "45 / 100");
+  assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 10);
+  await stalledPage.evaluate(() => window.setHealthHidden(false));
+  await impact(34, payload("heal", 45, 46, 1)); await impact(35, payload("heal", 46, 47, 1));
+  await stalledPage.evaluate(() => window.completeHealthEffect(9)); // Obsolete completion cannot start pending 35.
+  assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 11);
+
+  update(35, 44);
+  const oldConnection = [...connections].find((c) => c.kind === "event"); oldConnection.socket.close(1012, "Synthetic reconnect");
+  await wait(() => [...connections].some((c) => c.kind === "event" && c !== oldConnection && c.registered), "Health consumer did not reconnect");
+  await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "44 / 100");
+  await impact(35, payload("heal", 46, 47, 1)); assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 11);
+  await impact(36, payload("heal", 44, 45, 1)); await impact(37, payload("heal", 45, 46, 1)); update(37, 42);
+  await stalledPage.reload(); await stalledPage.waitForFunction(() => document.getElementById("value").textContent === "42 / 100");
+  await impact(37, payload("heal", 45, 46, 1)); assert.equal(await stalledPage.evaluate(() => window.impactAnimations), 0);
+  await impact(38, payload("heal", 42, 43, 1));
+  const ending = [...connections].find((c) => c.kind === "event");
+  ending.socket.send(JSON.stringify({ protocol: "durable-event-socket/v1", type: "status", code: "retention_gap", terminal: true }));
+  await stalledPage.waitForFunction(() => document.getElementById("status").textContent.includes("retention_gap"));
+  assert.equal(await stalledPage.evaluate(() => window.impactCancels), 1);
+  await wait(() => connections.size === 0, "Ended health coordination did not tear down both transports");
+  await stalled.context.close();
+
+  update(40, 40);
+  const invalid = await pageFor({ stallAnimation: true });
+  await invalid.page.waitForFunction(() => document.getElementById("value").textContent === "40 / 100");
+  const malformed = await sendImpact(41, { ...payload("damage", 40, 39, 1), before: "invalid" });
+  await wait(() => malformed.connection.socket.readyState === 3, "Invalid impact did not fail handling");
+  assert.ok(!malformed.connection.acknowledged.includes(malformed.cursor), "Invalid health must not be ACKed");
+  assert.equal(await invalid.page.evaluate(() => window.impactAnimations), 0);
+  await invalid.context.close(); await wait(() => connections.size === 0, "Invalid widget teardown failed");
   update(6, 73); // Restore the unrelated legacy/mismatched-grant scenario baseline.
 
   const legacy = await pageFor({ legacyNumber: 5, eventGrant: "event-v1" });
@@ -183,7 +248,7 @@ try {
   await mismatch.page.waitForFunction(() => document.getElementById("status").textContent.includes("same group"));
   assert.equal(connections.size, 0); await mismatch.context.close();
   assert.deepEqual(errors, []);
-  console.log("Health v2 Chromium smoke passed: delayed-effect ACK characterization, opt-in payload-free receipt/snapshot/animation/ACK traces, readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one animation per impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
+  console.log("Health v2 Chromium smoke passed: ACK before cosmetic completion, bounded oldest-pending overflow, hidden/reconnect/reload/terminal cancellation, invalid-event rejection, opt-in payload-free receipt/snapshot/animation/ACK traces, readable setup labels/status on transparent pages, authoritative recovery after cleared/legacy storage, separate grants, both arrival orders, one effect per retained live impact including clamping, duplicate suppression, v1 grant rejection and explicit legacy drain.");
 } finally {
   await browser?.close(); for (const connection of connections) connection.socket.terminate(); sockets.close(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
 }

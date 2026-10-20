@@ -83,7 +83,12 @@ can return 401/403 before credentials are connected; continued denials after
 connection require checking the grant/session rather than changing health state.
 
 The widget obtains a fresh snapshot/watch through `watchStateEvents`, draws only
-bot health, and awaits one animation per live impact before acknowledgement.
+bot health, and ACKs validated acceptance into a bounded cosmetic queue rather
+than animation completion. The queue retains at most eight pending effects and
+one running effect, drops the oldest pending effect on overflow, and skips
+hidden-page effects. Reconnect/teardown cancels obsolete work. See
+[health cosmetic acceptance](health-widget-effects.md) for the exact policy and
+its crash/reload tradeoff.
 Events already covered by its initial/recovery baseline are historical and do
 not replay startup animations. Snapshot-first/event-first arrival, accepted
 zero-applied impacts and duplicate delivery never apply another health delta.
@@ -138,6 +143,7 @@ capacity rollback, authorization and clamped no-op receipts.
 `scripts/smoke-health-widget-browser.js`, included in `npm run test:browser`, uses
 the actual health UI and shipped clients in Chromium. It verifies state recovery
 after cleared/old storage, separate sessions and target checks, both arrival
-orders, per-impact/clamped animations, duplicate suppression, v1-grant rejection
+orders, accepted/clamped effects, ACK during a stalled animation, bounded overflow,
+hidden/reconnect/reload recovery, duplicate suppression, v1-grant rejection
 and explicit legacy backlog handling. Existing framework, event-only, state-only,
 shared-lifecycle and browser suites remain compatibility gates.

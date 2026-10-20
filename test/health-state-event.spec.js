@@ -143,9 +143,16 @@ describe("installed health command and durable state/event integration", () => {
     clock.mockRestore();
   });
   it("enforces one-second cooldown for new sources and preserves clamped no-op receipts", async () => {
-    const f = await fixture(), input = f.invocation(f.discord, { operation: "heal" }); await f.command(input);
+    const f = await fixture();
+    // The cooldown is a one-second application-clock boundary, not a limit on
+    // how quickly a loaded runner must complete intervening reads/duplicates.
+    // Keep native fallback alarms in the dispatcher's real-clock future.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+    const input = f.invocation(f.discord, { operation: "heal" }); await f.command(input);
     const first = await f.read(); expect(first).toMatchObject({ value: 100, stateEvent: { operationSequence: 1 } });
     await f.command(input); expect((await f.read()).stateEvent).toEqual(first.stateEvent);
     await expect(f.command(f.invocation())).rejects.toMatchObject({ code: "action_cooldown_active" });
+    clock.mockReturnValue(Date.now() + 1000); await f.command(f.invocation());
+    expect(await f.read()).toMatchObject({ value: 85, stateEvent: { operationSequence: 2 } });
   });
 });

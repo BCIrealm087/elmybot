@@ -38,7 +38,7 @@ recovery advances persisted lease deadlines without resetting retry counters.
 | Receipt/source retention expires | Recovery tests reject fresh sources after two hours, recover existing accepted results, keep uncertain/pending records, and prune at most twenty proven terminal receipts. Source retry lifetime never restarts. |
 | Reset interrupted between owner phases | Delivery/reset tests retain fences, resume the same checkpoint, reject stale append proofs and preserve operation sequence. Relay tests recover reset-discarded leased rows without reopening feature mutation. |
 | Binding transport throws or sends invalid JSON/error bodies | `state-event-transport.spec.js` asserts stable code/message/status for command requests, producer proof/status and registry-to-stream delivery, preserving validated cooldown guidance and rejecting malformed retry hints. Raw transport messages, arbitrary exception codes and private payload/grant text do not escape those boundaries, including into the registry logger. Producer-status/reset transport outages now return a redacted unknown outcome (503), replacing an unclassified 500. |
-| Browser snapshots/events arrive in either order, duplicate, reconnect or change scope | Browser/readable suites preserve authoritative state, suppress historical animations, bound buffering/deduplication, retry concurrent reads and stop both subscriptions on gap, denied read or mismatched owner. ACK follows successful validated handling. |
+| Browser snapshots/events arrive in either order, duplicate, reconnect or change scope | Browser/readable suites preserve authoritative state, suppress historical animations, bound buffering/deduplication, retry concurrent reads and stop both subscriptions on gap, denied read or mismatched owner. ACK follows successful validated handling. The health-only bounded cosmetic queue returns after acceptance; a stalled animation does not hold its ACK. |
 
 Primary suites:
 
@@ -118,3 +118,13 @@ Consumer effects remain at-least-once; a crash between visual effects and durabl
 deduplication is not exactly-once animation. No deployed load or billing trial is
 claimed. Step 11 still owns SQL/RPC/alarm/active-time measurements and current
 price scenarios; step 12 owns final contributor guidance and review preparation.
+
+## Health cosmetic queue (latency step 8)
+
+The health-specific [effect queue](health-widget-effects.md) validates before
+acceptance, caps pending work at eight plus one running effect, and drops the
+oldest pending cosmetic descriptor on overflow. Its unit/coordinator cases and
+Chromium smoke retain generic awaited-handler semantics while proving health
+ACK can precede animation completion. They cover hidden/visible transitions,
+obsolete completion after cancellation, duplicates, invalid payloads without
+ACK, reconnect, terminal teardown and authoritative recovery after reload.

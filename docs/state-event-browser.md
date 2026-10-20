@@ -110,6 +110,10 @@ and stale absolute event results overwriting newer state.
 
 The existing event client acknowledges only after the async handler completes.
 A failed animation is not remembered; ordinary delivery recovery may retry it.
+These are generic handler semantics. The shipped health v2 widget instead
+returns after validated acceptance into its [bounded cosmetic queue](health-widget-effects.md),
+so animation failure/completion does not own ACK. Its unfinished effects can be
+lost after acceptance; its number still comes from snapshots.
 On reconnect, the helper pauses handling and acquires a replacement snapshot;
 missed retained impacts covered by that recovery baseline may be deliberately
 omitted. No browser-local numeric state is uploaded or treated as authoritative.

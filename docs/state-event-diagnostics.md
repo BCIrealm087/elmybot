@@ -42,7 +42,7 @@ placement, alarm dispatch, or transport failures.
 | `read.notify.start`, `read.notify.receive`, `read.notify.finish` | Readable-state source notification and observer receipt, joined by opaque notification ID; source owner/revision and commit time are available. |
 | `read.evaluate` | Correlated state-query evaluation, with scope token, operation watermark and state revision; no state value. |
 | Browser `event.receive`, `event.handled`, `event.ack` | Arrival in the shipped event client, completion of the asynchronous widget handler, and ACK send. |
-| Browser `snapshot.receive`, `animation.start`, `animation.finish` | Authoritative snapshot applied to the health DOM versus event-driven visual effect. The number/width comes from snapshots, not events. |
+| Browser `snapshot.receive`, `animation.queued`, `animation.start`, `animation.finish` | Authoritative snapshot applied to the health DOM versus event-driven visual effect. The number/width comes from snapshots, not events. Health ACK follows queue acceptance rather than animation completion. |
 
 Join operations across objects by `operationId`, routes by `routeId`, delivery by
 `eventId`, and snapshots by scope token/watermark/revision. `sequence` on a relay
@@ -115,3 +115,9 @@ now assert that diagnostics identify its ordered successor's exact blocker.
 Diagnostic tests cover opt-in behavior, redaction, output caps, unknown alarm
 times and log-sink failure. Browser-client tests preserve ACK-after-handler
 behavior even when the diagnostic callback throws.
+
+Latency step 8 adds health-only `animation.drop`, `animation.skip`,
+`animation.cancel` and `animation.error` records with bounded pending/running
+counts and reasons. These separate overflow, hidden/lifecycle cancellation and
+cosmetic failure from validated acceptance/ACK. The [health queue policy](health-widget-effects.md)
+preserves generic client handler/ACK behavior and the existing opt-in log cap.
