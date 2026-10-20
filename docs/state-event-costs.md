@@ -251,5 +251,6 @@ authority and hidden metadata contribute to fleet storage, beyond the source's
 The measured implementation retains finite failure work and hibernating idle
 transport, with a substantial write premium for atomicity and recovery. There
 is no newly demonstrated cost blocker at modest traffic; high command volume
-and provider-active duration still require explicit budgeting. The remaining
-latency-roadmap step is the final release review (step 11).
+and provider-active duration still require explicit budgeting. The
+[final release review](state-event-release.md) completes latency-roadmap step 11
+on 2026-10-20 and carries these costs and their limits into the operator guidance.

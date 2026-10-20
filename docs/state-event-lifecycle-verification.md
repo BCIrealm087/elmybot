@@ -163,13 +163,16 @@ second wake is blocked at 999 milliseconds and permitted at 1000 milliseconds.
 Its correctness no longer depends on storage transactions finishing in under a
 wall-clock second.
 
-The 2026-10-20 investigation still observed local whole-test timeouts and two
+The earlier 2026-10-20 investigation observed local whole-test timeouts and two
 group-local generic-fixture delivery deadline failures with these runner limits.
 The installed-health native pacing/reconnect and fault cases passed locally;
-the complete suite passed in CI. Local Node 24 and CI Node 22 also differ, so
-the remaining delay needs profiling under matched environments before assigning
-a cause. Keep the latency and work-budget guards intact, and do not use a
-failed or interrupted run as a cost-measurement baseline.
+the complete suite passed in CI. Subsequent full local runs passed, including
+877/877 tests in 81 files at the step-10 baseline, and its final CI run passed
+the same suite and all four Chromium smokes. Local Node 24 and CI Node 22 differ;
+the unusually slow historical run remains incompletely attributed. Profiling
+under matched environments would be needed to assign its remaining delay a
+cause. Keep the latency and work-budget guards intact, and do not use a failed
+or interrupted run as a cost-measurement baseline.
 
 ## Automated gate
 
@@ -182,5 +185,6 @@ npm run test:browser
 CI additionally checks JavaScript syntax and performs the non-deploying Wrangler
 build. No deployment, grant regeneration, data cleanup or schema migration is
 required by this verification step. [Cost remeasurement](state-event-costs.md)
-completed latency roadmap step 10 on 2026-10-20. Final release review remains
-step 11.
+completed latency roadmap step 10 on 2026-10-20. The
+[final release review](state-event-release.md) completes step 11 on the same date,
+recording compatibility, recovery controls, evidence and production uncertainties.

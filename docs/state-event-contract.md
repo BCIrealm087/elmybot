@@ -1,6 +1,8 @@
 # Atomic state changes with durable events: contract
 
-Status: implemented normative contract; roadmap steps 1–12 complete.
+Status: implemented normative contract; original implementation roadmap steps
+1–12 complete. The subsequent latency-repair roadmap is also complete; see the
+[final release review](state-event-release.md) for evidence and operational limits.
 Declarations, local/shareable atomic acceptance, recovery, bounded delivery,
 readable/browser correlation and health v2 are implemented. See the
 [failure evidence](state-event-verification.md), [measured costs](state-event-costs.md)
@@ -340,8 +342,8 @@ selected audience.
 ## 9. Initial resource and recovery limits
 
 All limits apply together. These are design ceilings, not claims about measured
-billed operations; step 11 measures amplification and may justify stricter
-limits. Raising them or changing retention requires an explicit contract update.
+billed operations. The [cost report](state-event-costs.md) measures amplification;
+raising these limits or changing retention requires an explicit contract update.
 
 | Limit | Initial value and boundary |
 | --- | --- |
@@ -414,9 +416,9 @@ the same scope and recognize which operations the snapshot already includes.
 During initial setup/recovery, buffer registered events while acquiring the
 snapshot. Treat events at or below its operation watermark as historical:
 handle/acknowledge them safely without replaying old impact animations. Process
-later events in stream order and keep current values from snapshots or their
-correlated absolute results without moving backward. Store handled event IDs
-for at-least-once deduplication. A scope change invalidates comparison with the
+later events in stream order and keep current health from authorized snapshots
+without applying event deltas or copying old event results over it. Store handled
+event IDs for at-least-once deduplication. A scope change invalidates comparison with the
 old watermark; acquire a fresh snapshot and authorized stream.
 
 A fresh widget therefore recovers current health without replaying every old
@@ -425,6 +427,13 @@ a gap. Once live, it handles each retained new event, including an accepted
 zero-applied impact. Exactly-once animation across a browser crash is not
 guaranteed; acknowledgement and local storage cannot atomically commit a
 visible browser effect.
+
+The health v2 handler validates and accepts live effects into its bounded
+cosmetic queue before returning for ACK; animation completion is independent.
+Overflow, hiding, cancellation or a crash can therefore drop an accepted effect.
+This health-specific policy leaves generic and legacy awaited-handler ACK
+behavior unchanged. See the [effect policy](health-widget-effects.md) for bounds
+and lifecycle rules.
 
 The state and event credentials remain separately issued and scoped. A widget
 that wants both authoritative recovery and impacts needs authorization to both;

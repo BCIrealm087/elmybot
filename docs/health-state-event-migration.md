@@ -1,11 +1,13 @@
 # Authoritative health v2 migration
 
-Roadmap step 9 moves the installed `fun.health` command to atomic shared health
-and per-operation events. The implementation is opt-in: both production and test
-Wrangler configurations explicitly leave `STATE_EVENT_OPERATIONS_ENABLED` at
+Original implementation roadmap step 9 moves the installed `fun.health` command
+to atomic shared health and per-operation events. The implementation is opt-in:
+both production and test Wrangler configurations explicitly leave
+`STATE_EVENT_OPERATIONS_ENABLED` at
 `"false"`. No deployment or live migration is performed by this change. The
 [failure matrix](state-event-verification.md), [cost measurements](state-event-costs.md)
-and [release guidance](state-event-release.md) complete steps 10–12.
+and [release guidance](state-event-release.md) complete original steps 10–12.
+The release guide also records the completed subsequent latency-repair roadmap.
 
 ## Versioned behavior
 

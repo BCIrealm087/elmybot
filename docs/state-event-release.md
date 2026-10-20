@@ -1,10 +1,18 @@
 # State/event release review and operations
 
-Status: roadmap steps 1–12 complete on 2026-10-18, prepared for review on
-`codex-state-ironing`. This milestone implements atomic command acceptance and
-health v2. Both checked-in Wrangler environments retain
+Status: original implementation roadmap steps 1–12 completed on 2026-10-18;
+latency-repair roadmap steps 1–11 completed on 2026-10-20 on
+`codex-state-ironing`. The final review covers atomic command acceptance, health
+v2 and the subsequent latency repairs. Both checked-in Wrangler environments retain
 `STATE_EVENT_OPERATIONS_ENABLED: "false"`. Deployment, live enablement and
 operator grant changes remain separate operator decisions.
+
+The review found no new architectural blocker within the supported one-owner,
+one-stream scope. Automated evidence supports code review and operator rollout;
+it does not establish production latency or prove that the observed Cloudflare
+delays are eliminated. The reviewed implementation and cost baseline is
+`b6bc593f5636723747271ec66a8f41dfd8e5b552`, compared with pre-repair
+`45c8ed9be7c37299868c06d215e90b382cf7d19d`.
 
 ## Behavior to review
 
@@ -36,14 +44,50 @@ it does **not** restore the retired v1 action. See the
 | API and public outcomes | [Contract](state-event-contract.md), [authoring and errors](state-event-authoring.md), [API v1](framework-api.md), generated [catalog](feature-catalog.md). |
 | Atomicity, identity and lost replies | [Recovery](state-event-recovery.md), [local](state-event-local-storage.md) and [shared](state-event-shareable-storage.md) commit guides; native command/health tests. |
 | Ordering, grants, gaps, reset and lifecycle | [Delivery](state-event-delivery.md), [relay](state-event-relay.md), [failure matrix](state-event-verification.md); actual SQLite/binding/eviction tests. |
-| Browser and installed product | [Correlation](state-event-browser.md), [health migration](health-state-event-migration.md); readable/browser tests and four shipped-client/UI Chromium smoke suites. |
+| Browser and installed product | [Correlation](state-event-browser.md), [health migration](health-state-event-migration.md), [health cosmetic policy](health-widget-effects.md); readable/browser tests and four shipped-client/UI Chromium smoke suites. |
+| Latency repair and recovery boundaries | [Lifecycle verification](state-event-lifecycle-verification.md); native installed-health pacing, reconnect, eviction, lost-reply and fault tests, plus strict call/nesting guards. |
 | Cost and bounded work | [Measured report](state-event-costs.md), [raw measurements](state-event-cost-measurements.json), native cost tests and pure calculator tests; CI cost artifact. |
 
-The complete suite has **723 tests in 69 files** at this milestone. It includes
+The reviewed implementation has **877 tests in 81 files**. It includes
 ordinary state-only/event-only behavior, grant separation, authorization,
 source conflicts, capacity rollback, clamped no-ops, shared lifecycle fences,
 crashes/lost responses, gap/reset recovery and bounded idle work. The contributor
 simulator is a convenience; it is not the native atomicity or billing proof.
+
+The implementation baseline passed the full local suite and
+[CI run 39511128665](https://github.com/BCIrealm087/elmybot/actions/runs/39511128665):
+877/877 tests, all four Chromium smoke suites, lint/API/workspace/catalog checks,
+tracked JavaScript syntax and the non-deploying Wrangler build. Its actual job
+logs were inspected. Later commits still require their own CI run and log review.
+
+## Latency-repair review findings
+
+| Boundary | Result and retained limit |
+| --- | --- |
+| Shared alarm scheduling | Source, notification, invalidation and watcher deadlines participate in one durable minimum. Failure recovery recomputes it; abrupt termination still depends on persisted work and lease recovery. |
+| Remote work and request chains | [Complete-path reservations](state-event-relay-work-budget.md) cap each relay pass at 20 weighted application calls, two claimed records and one publication. [Owner-validated snapshots](state-event-request-chains.md) remove normal nested source callbacks. The tested owner-rooted nesting depth of two is not a measured Cloudflare platform threshold or a bound on command ingress ancestry. |
+| Immediate publication | [One background pass](state-event-immediate-delivery.md) starts after durable commit without awaiting delivery. Suppression, overlap, eviction or failure retain the persisted alarm/lease fallback. `waitUntil` neither resets the incoming request context nor creates another work budget. |
+| Lost append replies | [One finite receipt probe](state-event-receipt-probes.md) can reconcile positive evidence at the original destination. Missing, malformed or failed proof preserves uncertainty and its original lease; it cannot authorize a fresh append or mutation. |
+| Publication versus cleanup | [Persisted fair selection](state-event-cleanup-fairness.md) bounds eligible claim order across streams, with a three-publication preference and shared four-lease ceiling. Split terminal housekeeping stays charged. Neither fairness nor a 25 ms continuation promises a dispatch deadline. |
+| Widget acceptance | A valid health v2 event enters a queue with at most one running/eight pending cosmetic effects before its handler returns for ACK. Overflow, hiding, reload or cancellation may lose effects after ACK. Authorized snapshots alone set health. Generic and legacy clients retain awaited-handler ACK semantics. |
+| Privacy and compatibility | New snapshot/probe endpoints remain private Durable Object protocol routes; internal markers are not public credentials. Tests reject public routing and malformed proofs. Framework API v1, command declarations, bindings and Wrangler migration history are unchanged by the latency repairs. |
+
+Native workerd tests exercise standalone and linked Discord/Twitch health,
+including eight sequential commands with fallback alarms withheld. Additional
+fault, reconnect, lifecycle/reset and old-schema/eviction cases retain ordering,
+deduplication, capacity charges and terminal proof before retirement. Chromium
+tests exercise the shipped clients and widget against protocol fixtures. Neither
+environment reproduces production placement, minute-spaced alarm dispatch,
+Cloudflare's observed request-depth failure, or browser suspension timing.
+
+Earlier local runs also exposed fixture-clock races and whole-test resource
+contention. Clock separation and bounded test concurrency now retain the strict
+latency/work guards, and subsequent full local and CI runs pass. The unusually
+slow historical run has no proven complete attribution; do not treat successful
+local timings as a production p99 or failed runs as cost baselines. No universal
+sub-two-second delivery, ACK or animation guarantee is introduced.
+
+## Reproducing the review
 
 Run these from the repository root with locked dependencies:
 
@@ -81,6 +125,19 @@ The switches are `STATE_EVENT_OPERATIONS_ENABLED` and
 `DURABLE_EVENT_STREAMS_ENABLED`; only the literal string `"true"` enables either.
 They do not authorize a public reader. Current-health read and impact event
 grants remain independently scoped, signed and revocable.
+
+Immediate activation is enabled by default. The optional private variable
+`STATE_EVENT_IMMEDIATE_DELIVERY_ENABLED: "false"` suppresses background
+activations while retaining normal alarm recovery and explicit reconciliation.
+Use it to isolate the immediate path without changing acceptance, stream
+identities or credentials; alarm-only operation can still incur dispatch delay.
+It is a separate control from disabling combined acceptance or the event master.
+
+Server tracing requires `STATE_EVENT_DIAGNOSTICS: "true"`; it remains `"false"`
+in both checked-in environments. The health widget's `?diagnostics=1` opt-in
+records bounded stage/correlation traces without grants, payloads or health
+values. Compare acceptance, append, socket/ACK and animation stages separately;
+logical timeout or animation timing alone does not identify provider delay.
 
 For an operator-selected rollout:
 
@@ -149,6 +206,12 @@ This implementation lazily adds tables/indexes to existing `GroupConfig`,
 It adds no Durable Object class or binding. Wrangler migrations through `v16`
 remain unchanged and append-only; no new tag is needed for these additive tables.
 Never edit prior deployed migration tags.
+
+The latency repairs lazily add probe fields/indexes, queue tickets and one
+constant-size relay schedule row. Upgrade tests preserve old pending records,
+live leases and unknown outcomes. No manual SQL cleanup, state reset or grant
+regeneration is required solely for this upgrade. Existing grant scope and the
+original v1-to-v2 transition rules still apply.
 
 Operational rollback disables fresh acceptance and retains compatible receipt,
 outbox, relay, gap/reset and health semantic handlers. Do not roll back to a
