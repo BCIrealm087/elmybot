@@ -7,7 +7,7 @@ describe("state-event scheduling at ordinary command spacing", () => {
   // Real clocks, native SQL, alarms, RPC, WebSocket registration and ACKs. Do
   // not force due dates, expire leases, or call alarm/drain from the test. This
   // catches application scheduling regressions, not Cloudflare placement jitter.
-  it.each([{ shared: false, spacing: 5000 }, { shared: true, spacing: 5000 }, { shared: true, spacing: 15000 }])(
+  it.each([{ shared: false, spacing: 5000 }, { shared: false, spacing: 15000 }, { shared: true, spacing: 5000 }, { shared: true, spacing: 15000 }])(
     "publishes and ACKs three commands without a lease-length stall (%j)", async ({ shared, spacing }) => {
       const f = await deliveryFixture({ shared });
       f.testEnv.STATE_EVENT_DIAGNOSTICS = "true";

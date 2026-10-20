@@ -1,6 +1,8 @@
 # State/event failure, compatibility and resource verification
 
-See [latency diagnostics](state-event-diagnostics.md) for bounded opt-in traces and paced native regressions.
+See [latency diagnostics](state-event-diagnostics.md) for bounded opt-in traces and
+[combined lifecycle evidence](state-event-lifecycle-verification.md) for the latency
+repair roadmap step 9 matrix.
 
 Roadmap step 10 verifies the implementation through step 9 against the
 [combined-operation contract](state-event-contract.md). Checked-in environments

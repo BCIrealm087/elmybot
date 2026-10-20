@@ -22,7 +22,7 @@ export async function cleanupNativeHealthFixtures() {
 // declaration replacement, forced due date or manual drain in the measured path.
 // Permission authorization is supplied at the action boundary, not simulated as
 // a Discord/Twitch HTTP signature. Control operations are counted separately.
-export async function nativeHealthFixture({ linked = false, immediate = false } = {}) {
+export async function nativeHealthFixture({ linked = false, immediate = false, platform = "discord" } = {}) {
   const suffix = `${Date.now()}${++serial}`;
   const discord = createPlatformGroupRef({ platform: "discord", kind: "guild", id: `${suffix}1` });
   const twitch = createPlatformGroupRef({ platform: "twitch", kind: "channel", id: `${suffix}2` });
@@ -53,7 +53,8 @@ export async function nativeHealthFixture({ linked = false, immediate = false } 
   const routeFor = (group) => resolveStateEventSharedRoute(env, { sourceGroup: group,
     targetPlatform: group.platform === "discord" ? "twitch" : "discord", featureId: "fun.health", namespaceId: "health", schemaVersion: 1,
     stream: featureRegistry.eventStreams["fun.health:impacts:v2"].definition });
-  const route = await routeFor(discord), otherRoute = await routeFor(twitch);
+  const group = platform === "twitch" ? twitch : discord;
+  const route = await routeFor(group), otherRoute = await routeFor(platform === "twitch" ? discord : twitch);
   const ownerStub = env.SHAREABLE_STATE_REALM.get(env.SHAREABLE_STATE_REALM.idFromName(route.key));
   owners.add(ownerStub);
   const otherOwner = env.SHAREABLE_STATE_REALM.get(env.SHAREABLE_STATE_REALM.idFromName(otherRoute.key));
@@ -67,7 +68,7 @@ export async function nativeHealthFixture({ linked = false, immediate = false } 
     });
   }
   const actionRegistry = createActionRegistry(featureRegistry.actions);
-  function invocation(group = discord, args = { operation: "damage", amount: 1 }) {
+  function invocation(group = platform === "twitch" ? twitch : discord, args = { operation: "damage", amount: 1 }) {
     return createCommandInvocation({ kind: "fun.health.impact.v2", args, sourceCreatedAtMs: Date.now(),
       sourceEventId: `${group.platform}:native-health:${suffix}:${++serial}`,
       origin: { group, actor: { platform: group.platform, id: "operator", claims: [] } } });
@@ -75,7 +76,7 @@ export async function nativeHealthFixture({ linked = false, immediate = false } 
   const command = (input = invocation()) => executeAction(actionRegistry, input, {
     ...createFeatureServiceRuntime(env, input, featureRegistry), authorize: async () => true
   });
-  async function read(group = discord) {
+  async function read(group = platform === "twitch" ? twitch : discord) {
     const result = await evaluateStateQuery(featureRegistry, { version: 1, target: { platform: group.platform, groupId: group.id },
       bindings: { current: { read: { feature: "fun.health", export: "current", version: 1 } } }, select: { health: { ref: "current" } }
     }, { env });
@@ -84,17 +85,19 @@ export async function nativeHealthFixture({ linked = false, immediate = false } 
   }
   async function openSocket() {
     const { grant } = await issueDurableEventGrant(env, featureRegistry, {
-      target: { platform: discord.platform, groupId: discord.id }, stream: "fun.health:impacts:v2", expiresInSeconds: 600
-    }, { actor: { platform: discord.platform, id: "operator" } });
+      target: { platform: group.platform, groupId: group.id }, stream: "fun.health:impacts:v2", expiresInSeconds: 600
+    }, { actor: { platform: group.platform, id: "operator" } });
     const response = await streamStub.fetch("https://stream/internal/events/socket", { method: "GET", headers: {
       ...durableEventInternalHeaders, upgrade: "websocket", "x-elmybot-durable-event-grant": grant.id,
-      "x-elmybot-durable-event-platform": discord.platform, "x-elmybot-durable-event-group": discord.id,
+      "x-elmybot-durable-event-platform": group.platform, "x-elmybot-durable-event-group": group.id,
       "x-elmybot-durable-event-route": route.streamRouteId
     } });
     if (response.status !== 101) throw Error(`Native socket setup failed (${response.status})`);
     response.webSocket.accept(); sockets.add(response.webSocket); return response.webSocket;
   }
-  const f = { discord, twitch, route, otherRoute, ownerStub, streamStub, registryStub, invocation, command, read, openSocket,
+  const nativeObjects = [[registryStub, "INTEGRATION_REGISTRY"], ...originStubs.map((stub) => [stub, "CONFIG"]),
+    ...[...owners].map((stub) => [stub, "SHAREABLE_STATE_REALM"]), [streamStub, "DURABLE_EVENT_STREAM"]];
+  const f = { discord, twitch, group, nativeObjects, route, otherRoute, ownerStub, streamStub, registryStub, invocation, command, read, openSocket,
     get controlCalls() { return controlCalls; },
     rows(stub, table) { return control(stub, (_i, state) => state.storage.sql.exec(`SELECT * FROM ${table}`).toArray()); },
     async close() {
