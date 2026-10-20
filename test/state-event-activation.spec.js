@@ -282,6 +282,10 @@ describe("immediate bounded state/event activation", () => {
     clock.mockReturnValue(Date.now() + 1100);
     const warm = await f.meter.phase(async () => { await f.commit(); await settled(f, 2); });
     expect(cold.alarms.invocations).toBe(0); expect(warm.alarms.invocations).toBe(0);
+    expect(cold.rowsWritten).toBeLessThanOrEqual(shared ? 190 : 160);
+    expect(warm.rowsWritten).toBeLessThanOrEqual(shared ? 100 : 85);
+    expect(warm.requests).toBeLessThanOrEqual(shared ? 10 : 5);
+    expect(warm.alarms.writes).toBeLessThanOrEqual(5);
     expect(Object.keys(warm.requestPaths).some((path) => path.endsWith("/activate"))).toBe(false);
     task.meta.stateEventCost = { shared, immediate: true, cold, warm };
   });

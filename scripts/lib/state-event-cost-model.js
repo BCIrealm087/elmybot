@@ -1,6 +1,6 @@
 // Pricing assumptions are explicit inputs, separate from the native workerd
 // counters. This is a reproducible scenario calculator, not invoice telemetry.
-export const PRICE_DATE = "2026-10-18";
+export const PRICE_DATE = "2026-10-20";
 export const PRICE_SOURCES = Object.freeze([
   "https://developers.cloudflare.com/durable-objects/platform/pricing/",
   "https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/",

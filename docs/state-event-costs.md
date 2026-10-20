@@ -1,86 +1,33 @@
 # State/event cost measurements and operation budgets
 
-Original combined-operation roadmap step 11, measured on 2026-10-18. New combined acceptance remains false
-in checked-in environments. No deployment or live billing experiment is part of
-this work.
+Latency repair roadmap step 10, remeasured on **2026-10-20** after steps 1–9.
+The [raw report](state-event-cost-measurements.json) contains 29 profiles and
+reproducible billing scenarios. Checked-in environments still disable new
+combined acceptance; this work authorizes no deployment or live billing test.
 
-The tables and checked-in JSON below are the historical baseline, before the
-latency repair roadmap. Step 2 adds overdue-alarm repair and handler-completion
-recomputation. Its focused installed-health warm-cycle measurement retains 117
-SQL row writes and 19 binding requests, with alarm sets increasing from 12 to 16,
-alarm reads from 12 to 14 and SQL rows read from 3,938 to 4,189. The meter now
-includes completion recomputation around its isolated relay drain; notification
-delivery remains a separate profile. That step's CI artifacts record those counters.
-The latency roadmap's step 10 will refresh the complete report and billing model
-after the remaining repairs; the historical prices below are not a measurement
-of the repaired implementation.
-Step 3's [remote-work limit](state-event-relay-work-budget.md) further splits
-backlog across invocations; the six-stream profile now includes six relay
-handlers and their scheduling work rather than one batch.
-The step-3 installed-health warm cycle still uses 117 SQL writes, 19 binding
-requests and 16 alarm sets; it records 16 alarm reads and 4,444 SQL rows read.
-The six-stream local/shared drain records 363/417 SQL writes (30 more in each
-case than step 2), 42 alarm sets and six handlers, with the same 36/48 binding
-requests. These controlled scheduling counters quantify the backlog tradeoff;
-they are not production duration or billing measurements.
-Step 4's [flattened requests](state-event-request-chains.md) reduce the measured
-warm local/shared binding requests from 11/19 to 8/14. Installed health retains
-117 SQL writes and 16 alarm sets, with SQL reads reduced from 4,444 to 4,256.
-Snapshots add bounded transient request bytes, with no registry snapshot/payload
-storage or new durable phase. Current CI artifacts contain these measurements;
-the historical billing scenarios below still await the step-10 refresh.
+A warmed installed-health v2 cycle using immediate delivery records **118 SQL
+row writes, 14 application binding requests, thirteen alarm sets, one alarm
+delete, one destination alarm and one incoming ACK**. Adding alarm storage and
+the measured-batch receipt-cleanup allowance gives **140 modeled writes and
+15.15 Durable Object request units per command**. The alarm-only equivalent
+uses the same SQL writes/requests, but sixteen alarm sets and three alarm
+invocations: 143 modeled writes and 17.15 request units.
 
-Step 5 adds two immediate cold/warm profiles alongside the existing twenty
-alarm-driven profiles. In the local run, cold acceptance plus offline delivery
-uses the same 5/10 binding requests and 142/174 SQL writes for local/shared
-owners as acceptance plus a separate alarm-driven drain. Immediate delivery
-records no alarm invocation, with 4 alarm sets and 8 reads; its warm pass records
-76/89 SQL writes, 5/10 requests, 4 alarm sets and 7 reads. These profiles stop at
-confirmed append and exclude ACK cleanup, so they are not comparable to the
-complete online-cycle totals above. Activation adds no self-RPC, persistent
-phase or polling loop. Cloudflare object duration and the full billing refresh
-remain step 10 work; these counts establish no production billing claim.
+The original 2026-10-18 health baseline was 138 modeled writes and 22.15 request
+units. Immediate delivery therefore saves seven request units while adding two
+modeled writes relative to that baseline. The legacy event-only reference is
+30 writes; adding an ordinary bounded state mutation makes 34. The remaining
+106-write premium covers atomic acceptance, recovery, publication and retirement.
+These independent primitives are infrastructure references, not permission to
+combine independent services in a feature action.
 
-Step 6 adds four [receipt-probe cost profiles](state-event-receipt-probes.md).
-An isolated absent/positive destination read records 22/38 SQL rows read, zero
-writes and zero alarm operations. A complete local/shared lost-reply recovery
-adds 1/2 binding requests, 371/385 SQL rows read, seven SQL writes, two alarm
-reads and one alarm set over its matching healthy relay pass. This opportunity
-is capped once per operation. Healthy warm immediate delivery retains its
-requests/writes/alarms, with 60/52 more SQL rows read for marker/index checks;
-cold initialization adds one index-creation SQL write. The old-schema tests
-verify lazy field/index addition separately. Current CI exports 26 profiles;
-these bounded counters do not measure Cloudflare object duration or refresh the
-historical billing model below.
-
-Step 7 adds [fair publication/cleanup scheduling](state-event-cleanup-fairness.md).
-The local meter retains 5/10 binding requests, four alarm sets and seven alarm
-reads for warm immediate local/shared acceptance plus append. SQL writes rise
-from 76/89 to 77/90, and reads from 2,317/2,102 to 2,366/2,143. Cold writes rise
-from 143/175 to 147/179 including lazy schedule setup. The complete installed
-health warm cycle records 118 writes, 4,440 reads, 14 requests and 16 alarm sets.
-Persisting a queue ticket adds one schedule write on admission; on claim the
-schedule write replaces the old last-served write. Mixed traffic can split
-terminal housekeeping into another bounded claim, adding SQL/continuation work
-while keeping cleanup plus publication within the existing 20-call allowance.
-All 26 cost profiles are exported. These counts do not refresh the historical
-pricing assumptions or measure provider object duration; that remains step 10.
-
-The design has finite offline maintenance and a measurable write premium for
-atomicity/recovery. In the historical baseline, installed health used 117
-native SQL row writes for a warmed online cycle. Including alarm calls and a conservative allowance
-for later receipt pruning gives **138 modeled row writes per command**. The
-corresponding legacy event-only reference is 30. Adding the ordinary bounded
-state mutation accounts for four of the 108 additional writes; the remaining
-104 cover combined acceptance, recovery, outbox delivery, confirmation and
-retirement, including their alarm/receipt overhead. These are infrastructure
-comparisons, not permission to combine independent services in a feature action.
-
-At the illustrative paid-plan assumptions below, 100,000 monthly health commands
-model at $5.30 total; one million model at $96.30. Existing account usage, active
-object time and connected readable-state observers change those amounts. This
-is suitable for modest command traffic, with a meaningful storage-write premium
-at sustained high volume. It is not a fixed invoice ceiling.
+At the explicit assumptions below, 100,000 monthly health commands model at
+**$5.15 total** and one million at **$97.25**, including the one $5 subscription.
+The old one-million-command scenario was $96.30. Storage writes remain the
+dominant marginal cost; the latency repairs do not add an idle polling loop.
+These scenarios exclude existing bot traffic and observers, and are not invoice
+ceilings. The historical inputs remain available in
+[the pre-refresh report](https://github.com/BCIrealm087/elmybot/blob/9d18a93fca55b929603768c04791576ec792bf08/docs/state-event-cost-measurements.json).
 
 ## Reproduce and inspect
 
@@ -93,141 +40,146 @@ npm test -- --run
 npm run lint
 ```
 
-The measurement command runs the actual workerd integration suite and updates
-[`state-event-cost-measurements.json`](state-event-cost-measurements.json).
-The full CI test run also exports a `state-event-cost-measurements` Actions
-artifact. The [reporter](../scripts/state-event-cost-reporter.js) receives test
-metadata, so production code gains no measurement wrappers or logging.
-The [calculator](../scripts/lib/state-event-cost-model.js) exposes usage, total
-paid-plan bills and incremental bills given existing account usage.
+The command runs the cost, activation, receipt-probe and calculator suites:
+71 native cases export 29 measurement profiles, and six pure cases check pricing
+and profile selection. It replaces the destination only after every
+case passes and all required complete-cycle profiles are present. Failed or
+incomplete runs leave the previous baseline intact. Metadata records collection
+time, the source commit, Node, Vitest, workerd and the pricing check date. The
+source commit identifies the runtime base; test/instrumentation changes made
+in the measuring worktree are part of this step's reviewed changes.
 
-The twenty integration cases in
-[`state-event-cost.spec.js`](../test/state-event-cost.spec.js) exercise production
-handlers, SQLite transactions, service calls, actual registered hibernating
-WebSockets and ACK handlers. They include local/shared owners, the installed
-health package, clamped no-ops, six concurrent action sources, duplicate recovery,
-destination failures, retained-capacity pressure, reconnect, 30-day simulated
-outages, 10,000 historical receipts, twelve independent groups and delayed
-receipt deletion. Synthetic capacity/history rows are labeled in the raw report.
+The full CI suite exports the same raw profiles in its
+`state-event-cost-measurements` artifact. The CLI also adds scenario tables
+using [the calculator](../scripts/lib/state-event-cost-model.js) and
+[profile summary](../scripts/lib/state-event-cost-summary.js). Profile order is
+stable; local handler timings are diagnostic and vary between runs.
 
 ## Measurement boundaries
 
 | Metric | Meaning and limit |
 | --- | --- |
-| SQL rows read/written | Native `SqlStorageCursor` counters after consuming queries, including index/trigger work. The calibration observes three writes for an indexed insert with a trigger, one for its delete. |
-| SQL batches | A native batch cursor reports only its final statement. The test meter splits top-level statements synchronously, preserving quoted text, comments, trigger bodies and `CASE`; its two-insert calibration records six writes instead of the final cursor's three. No production SQL is rewritten. |
-| Deletes | `deleteRowsWritten` is the native write count for DELETE statements, already included in total writes. Trigger/index amplification is not added a second time. |
-| Alarm scheduling | A test clock records get/set/delete and dispatches only due alarms. Scheduling is virtual to prevent background races; real alarm and crash behavior is covered by the relay/health suites. SQL cursor counts exclude hidden alarm storage. The model adds one read per get and one write per set/delete conservatively. |
-| Requests | Actual application binding fetches, counted separately from alarm invocations and incoming ACK messages. Test `runInDurableObject` control calls are excluded. |
-| Local handler spans | Wall-clock sums include instrumentation, test transport and overlapping activity on an object. They are diagnostic proxies; they are not Cloudflare CPU or billed duration and are not used as timing inputs to the calculator. |
-| Physical SQLite size | `databaseBytes` samples native allocated database size, including indexes. It includes the fixture's existing schemas; do not multiply its whole isolated registry database by a production group count. Hidden platform metadata/backups and fleet storage are not measured. |
-| First use | Existing Durable Object constructors and grant/session setup are outside the command profiles. Lazy combined schema creation during a first acceptance/append is included. The separate reconnect case includes grant/registration work. Cold object creation and deployments are not measured invoices. |
+| SQL rows read/written | Native `SqlStorageCursor` counters after query execution, including index/trigger work. The indexed-insert/trigger calibration observes three writes; its delete observes one. |
+| SQL batches | Native batch counters report only the last statement. The test meter splits top-level statements synchronously, preserving quotes, comments, trigger bodies and `CASE`; two indexed inserts therefore measure six writes. Production SQL is not rewritten. |
+| Deletes | Native DELETE write counters are already included in total SQL writes. Index/trigger amplification is not added again. |
+| Alarms | Test-only virtual get/set/delete and due-alarm dispatch prevent background races. SQL counters exclude hidden alarm storage. The model adds one write per set/delete and one read per get conservatively; Cloudflare explicitly bills each set as one written row. |
+| Background activation | Phase accounting waits for tracked `waitUntil` tasks and their completion scheduling before closing. An append-only profile stops before ACK; complete-cycle profiles include ACK, producer wake and retirement. |
+| Requests | Application binding fetches, alarm invocations and incoming ACKs are counted separately. Test control requests and inspection SQL through the raw fixture state are excluded. |
+| Local handler spans | Include instrumentation, test transport and overlapping object activity. They are neither Cloudflare CPU time nor billed object duration, and do not supply timing inputs to the calculator. |
+| SQLite size | Allocated native database bytes include indexes and existing fixture schemas. Hidden platform metadata/backups and fleet storage are not measured. Do not multiply an isolated registry fixture's whole database by a production group count. |
+| First use | Constructors and grant/session setup are excluded. Lazy schema initialization during acceptance/publication is included. Reconnect work has its own profile. Cold online and cold offline-append fixtures have different setup boundaries. |
 
-Request paths and SQL text are aggregated without bindings, row values, raw group
-identities or credentials. The pricing profile assumes reused event connections
-and excludes ordinary bot ingress/authentication, outbound Discord/Twitch APIs,
-grant/session renewal, initial widget snapshots and observer re-evaluation.
-Observability/log export, taxes and unrelated Cloudflare products are outside
-the calculator's dimensions.
-Those existing paths must be added through account usage or separate workload
-measurements. The state-only and event-only references omit feature action code
-and generic cooldown handling; their deltas describe infrastructure, not an
-alternative authoring contract.
+The immediate complete-cycle model deliberately coalesces the ACK wake through
+one destination alarm. Source publication and cleanup use background activation;
+no source alarm or manually forced source drain is used in that profile. Other
+notification timing and fallback recovery can change the number of handlers.
+Native real-clock alarm/eviction/latency behavior is checked separately by the
+[lifecycle suite](state-event-lifecycle-verification.md).
+
+Profiles omit ordinary ingress authentication, outbound Discord/Twitch APIs,
+grant/session renewal, initial widget snapshots, readable observer evaluation,
+log export, taxes and unrelated Cloudflare products. Requests and SQL text are
+aggregated without bindings, row values, group identities or credentials.
+State-only/event-only references also omit generic action/cooldown work.
 
 ## Observed core work
 
-Counts below precede the separately modeled alarm-storage and delayed-pruning
-allowances. RPC means an application HTTP binding call.
+These are native SQL counters before alarm-storage and delayed-cleanup allowances.
 
-| Scenario | SQL reads | SQL writes | RPCs | Alarm handlers |
+| Scenario | SQL reads | SQL writes | Binding requests | Alarm invocations |
 | --- | ---: | ---: | ---: | ---: |
-| First local acceptance | 1,188 | 84 | 2 | 0 |
-| First shared acceptance | 1,097 | 107 | 6 | 0 |
-| Local duplicate, before preparing again | 38 | 0 | 1 | 0 |
-| Shared duplicate | 27 | 0 | 1 | 0 |
-| First local offline append | 1,733 | 58 | 6 | 1 |
-| First shared offline append | 1,558 | 67 | 8 | 1 |
-| Warm local online cycle, through ACK/cleanup | 4,226 | 104 | 11 | 3 |
-| Warm shared/installed-health online cycle | 3,938 | 117 | 19 | 3 |
-| Installed-health clamped no-op cycle | 3,946 | 116 | 19 | 3 |
-| Existing health v1 publication plus ACK | 416 | 23 | 5 | 0 |
+| First local acceptance | 1,228 | 89 | 2 | 0 |
+| First shared acceptance | 1,131 | 112 | 6 | 0 |
+| Local / shared duplicate | 40 / 27 | 0 / 0 | 1 / 1 | 0 / 0 |
+| First local offline append | 2,018 | 58 | 3 | 1 |
+| First shared offline append | 1,737 | 67 | 4 | 1 |
+| Warm local complete cycle, alarm-only | 4,979 | 105 | 8 | 3 |
+| Warm local complete cycle, immediate | 4,689 | 105 | 8 | 1 |
+| Warm shared/health complete cycle, alarm-only | 4,440 | 118 | 14 | 3 |
+| Warm shared/health complete cycle, immediate | 4,208 | 118 | 14 | 1 |
+| Installed-health immediate clamped no-op | 4,225 | 117 | 14 | 1 |
+| First immediate local / shared complete cycle | 5,412 / 4,807 | 160 / 190 | 8 / 14 | 1 / 1 |
+| Warm immediate local / shared acceptance plus offline append | 2,366 / 2,143 | 77 / 90 | 5 / 10 | 0 / 0 |
+| Legacy health v1 publication plus ACK | 416 | 23 | 5 | 0 |
 | Existing bounded health-state mutation | 19 | 4 | 1 | 0 |
-| Six-stream local burst: acceptance / relay | 4,183 / 6,943 | 289 / 333 | 12 / 36 | 0 / 1 |
-| Six-stream shared burst: acceptance / relay | 3,882 / 6,549 | 342 / 387 | 36 / 48 | 0 / 1 |
-| Twelve scheduled destination failures | 9,855 | 84 | 14 | 12 |
-| Failed final expiry reconciliation | 1,198 | 9 | 1 | 1 |
+| Six-stream local burst: acceptance / six relay passes | 4,383 / 11,602 | 299 / 363 | 12 / 18 | 0 / 6 |
+| Six-stream shared burst: acceptance / six relay passes | 4,006 / 10,061 | 352 / 417 | 36 / 24 | 0 / 6 |
+| Twelve scheduled destination failures | 14,891 | 84 | 13 | 12 |
+| Failed final expiry reconciliation | 1,643 | 9 | 1 | 1 |
 
-The health cycle has twelve set-alarm calls, one delete-alarm call and one ACK.
-Its modeled immediate usage is therefore 130 writes and 22.05 Durable Object
-request units (19 RPCs + three alarms + one ACK/20). Ten-operation retention
-fixtures measure another 7.2–7.3 writes per accepted operation, including
-destination alarm scheduling; the model reserves eight. It also reserves 64
-read rows and 0.1 alarm request per command for that tail. The event-only
+The six-pass burst spends more scheduler reads/writes than the original
+single-invocation relay, while flattened publication halves its binding calls
+from 36/48 to 18/24. This buys bounded work and request lineage per invocation.
+The scheduler's queue-ticket write and finite receipt probe are included.
+
+An isolated absent/positive destination probe reads 22/38 SQL rows, writes none,
+performs one binding request and touches no alarm. A full lost-append-reply
+recovery uses 65/74 SQL writes and 4/6 requests for local/shared owners. Relative
+to matching healthy cold offline relay, that adds seven writes, 1/2 requests,
+two alarm reads and one alarm set. The probe is capped once per operation.
+
+Ten-operation retention fixtures measure another 7.2/7.3 written rows per local/
+shared accepted operation, including destination alarm scheduling. The scenario
+reserves eight writes, 64 reads and 0.1 alarm request per command. The event-only
 reference reserves three writes, 32 reads and the same 0.1 request; its measured
-tail is 2.0–2.1 writes. These are amortized ten-operation batch assumptions,
-not a promise that every sparse receipt expires in that batch size.
+tail is 2.0/2.1 writes. These are ten-operation batching assumptions, not sparse
+traffic or per-command ceilings. Smaller pruning batches amortize fixed work
+over fewer commands; a storage allowance can be raised explicitly through
+`measurementUsage` when modeling that workload.
 
-With one readable-state watcher, acceptance adds four SQL writes. Delivering its
-existing coalesced invalidation adds eight SQL writes and one observer RPC in
-the fixture. These costs are reported separately and are not intrinsic outbox
-costs. Observer reads, connections and renewals remain additional work.
+One readable watcher adds four SQL writes at acceptance. Its coalesced
+notification adds eight SQL writes, one alarm set and one observer request in
+the fixture. Observer reads, connections, registration and renewals remain
+additional work outside the core scenario.
 
-## Fixes established by the measurements
+## Bounded idle and failure work
 
-New admission previously woke already appended events. In the 25-event
-reproduction, the oldest event reached thirteen attempts despite a known append.
-Admission now wakes only pending, parked or gap-pending work. Both scopes retain
-one append attempt for every confirmed event as new commands arrive. ACK/
-capacity notifications still provide useful wakeups for terminal cleanup.
+The thirty-day offline profile records zero SQL, requests or alarms before the
+real retention deadline, then finite expiry/receipt cleanup (27 SQL writes, two
+requests and two alarms). A further simulated month records zero work. Capacity
+pressure likewise performs no periodic destination probe before reconnect.
 
-Combined delivery also creates both a combined authority receipt and an existing
-stream receipt. The latter previously used the ordinary unbatched expiry delete.
-Combined-stream maintenance now deletes at most twenty from each ledger per
-pass, including their accounting triggers. A 1,000-pair fixture observes 61 SQL
-row writes in one pass, removes exactly twenty pairs and preserves the shared
-budget. Existing event-only cleanup behavior is unchanged.
+The outage fixture makes twelve scheduled append attempts and one reserved
+expiry attempt. If the dependency remains unavailable it retains charged
+`gap_pending` metadata without a payload or scheduled retry loop. It does not
+discard uncertainty to obtain a zero balance. Other suites enforce twenty total
+attempts, leases, authority, useful-wakeup recovery and eventual cleanup.
 
-One earlier lease alarm can remain scheduled when the shared scheduler retains
-an already earlier wakeup. The offline fixtures measure that finite read-only
-wakeup explicitly. They then observe zero SQL, RPCs or alarms until an actual
-deadline, followed by finite expiry/receipt cleanup and zero further work over
-another thirty days. No consumer polling or inactive-owner scan is introduced.
+In the 25-event admission profile, every confirmed append retains one attempt
+while more commands arrive. A synthetic 1,000-pair destination-history fixture
+removes twenty receipts from each ledger in one pass using 61 SQL row writes.
+Adding 10,000 source receipts leaves duplicate reads unchanged (41), zero
+duplicate writes and a one-row increase in new-admission reads. Twelve independent
+groups incur traffic-related work without discovering or polling idle owners.
 
 ## Enforced operation budgets
 
-These regression limits allow modest implementation variation above measured
-work. A breach requires review of the implementation and this report, rather
-than silently widening an allowance.
+Budgets allow reviewed headroom above the measurements. No existing allowance
+is increased in this step; burst-request limits are tightened for flattened calls.
 
 | Boundary | Automated ceiling |
 | --- | --- |
 | First local/shared acceptance | 95 / 120 SQL writes. |
 | First local/shared deferred append | 70 / 80 SQL writes. |
-| Warm local/shared complete cycle | 120 / 135 SQL writes, 12 / 20 RPCs, 5,000 SQL reads, at most sixteen set-alarm calls. Installed bounded health allows 140 writes. |
-| Duplicate recovery | Zero writes or alarm scheduling, one RPC, at most 64 read rows. |
-| Six-stream burst acceptance and relay | Each phase at most 380 local / 440 shared writes; six relay invocations total at most 36 / 48 RPCs, with one physical append call at a time in this profile. |
-| Receipt pruning | Twenty rows per physical combined destination ledger per pass; 1,000-pair cleanup at most eighty SQL writes. Source pruning remains twenty terminal rows per pass. |
-| History growth | Adding 10,000 synthetic terminal receipts changes duplicate reads by zero; new admission permits at most 100 additional read rows and twenty writes. It does not scan the receipt history. |
-| Idle/offline | No work after finite lease/deadline cleanup; thirty-day simulation capped at four expiry-phase handlers. |
-| Retry outage | Twelve scheduled attempts, one reserved expiry attempt in the measured case, then charged gap-pending metadata with no payload or scheduled loop. Relay tests enforce twenty total attempts plus the tighter per-invocation remote-work/claim/publication limits. |
+| Alarm-only warm local/shared cycle | 120 / 135 SQL writes, 12 / 20 binding requests, 5,000 SQL reads, sixteen alarm sets. Installed bounded health allows 140 SQL writes. |
+| Immediate warm local/shared cycle, including installed health | 112 / 125 SQL writes, 9 / 15 binding requests, 5,000 SQL reads, fourteen alarm sets, one destination alarm and one ACK. |
+| Immediate first local/shared complete cycle | 180 / 210 SQL writes, excluding setup. |
+| Immediate local/shared append-only profile | Cold 160 / 190 and warm 85 / 100 SQL writes, 5 / 10 warm requests, five alarm sets, zero alarm invocations. |
+| Duplicate recovery | Zero writes/alarm scheduling, one request, at most 64 read rows. |
+| Six-stream burst | Each phase at most 380 local / 440 shared writes; six relay passes at most 24 / 32 requests and one physical append at a time in this profile. |
+| Receipt pruning | Twenty from each physical combined destination ledger per pass; 1,000-pair cleanup at most eighty writes. Source pruning remains twenty terminal rows per pass. |
+| History growth | At most 100 extra admission reads and twenty writes after 10,000 synthetic receipts; duplicate reads unchanged. |
+| Idle/offline | Zero work outside finite deadline maintenance; thirty-day simulation at most four expiry-phase alarms. |
 
-These bounds protect the combined path. They do not establish a new bound for
-all pre-existing event-only source-ledger queries or unrelated registry work.
+These are regression bounds for the measured paths, not new bounds on every
+existing event-only ledger query, observer or unrelated registry workload.
 
-The cleanup-lane correction on 2026-10-18 was also checked against all twenty
-native measurement cases. SQL calls/rows, writes/deletes, binding requests,
-incoming messages and peak append concurrency match the checked-in baseline;
-no budget or pricing-model allowance was increased. The new local/shared relay
-regressions separately hold a terminal cleanup lease through six further impacts
-and then recover all retained obligations. See [latency evidence](state-event-relay.md#delayed-cleanup-and-publication-latency).
+## Pricing assumptions and scenarios
 
-## Pricing assumptions and worked scenarios
-
-Checked against official
-[Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/),
+Checked against official [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/),
 [SQLite counters](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 and [Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/)
-on 2026-10-18:
+on **2026-10-20**. Rates are unchanged from the historical report.
 
 | Paid-plan dimension | Included monthly | Overage |
 | --- | ---: | ---: |
@@ -237,59 +189,64 @@ on 2026-10-18:
 | SQLite storage | 5 GB-month | $0.20/GB-month |
 | Worker requests / CPU | 10 million / 30 million ms | $0.30 / $0.02 per million |
 
-Subscription: $5. DO units use ceiling rounding after allowances; storage
-rounding is conservative. ACKs use 20:1 request weighting; outgoing messages are
-unmetered requests. Allowances are account-wide for the relevant product,
-not new allocations per feature. `incrementalBill(added, existing)` subtracts
-the existing account bill and avoids allocating another subscription.
+The subscription is $5. DO compute overage rounds upward to billing units; the
+calculator also conservatively rounds SQLite/storage units upward. Incoming
+ACKs use 20:1 request weighting; outgoing WebSocket messages incur no request
+charge. Included usage is shared account-wide for the relevant product.
+`incrementalBill(added, existing)` subtracts the existing account bill instead
+of assigning a second subscription or another set of allowances.
 
-The following calculator scenarios use 138 modeled writes per health command,
-50 ms aggregate object-active time, five Worker CPU ms and one Worker ingress
-request per command. Duration/CPU are explicit assumptions. Storage stays within
-its remaining allowance; watcher/setup costs are excluded.
+The following uses 50 ms **aggregate object-active time**, five Worker CPU ms
+and one Worker ingress per command, reused event connections and no readable
+watchers. Duration/CPU are assumptions. Storage is inside the remaining allowance.
+The independent state+event column sums infrastructure counters; both references
+use the same illustrative aggregate timing assumption.
 
-| Commands/month | Event-only reference | Combined health | Difference |
-| ---: | ---: | ---: | ---: |
-| 10,000 | $5.00 | $5.00 | $0.00 |
-| 100,000 | $5.00 | $5.30 | $0.30 |
-| 1,000,000 | $5.75 | $96.30 | $90.55 |
-| 10,000,000 | $263.05 | $1,383.69 | $1,120.64 |
+| Commands/month | Legacy event-only | Independent state + event | Health v2 immediate | Health v2 alarm-only |
+| ---: | ---: | ---: | ---: | ---: |
+| 10,000 | $5.00 | $5.00 | $5.00 | $5.00 |
+| 100,000 | $5.00 | $5.00 | $5.15 | $5.15 |
+| 1,000,000 | $5.75 | $5.90 | $97.25 | $100.55 |
+| 10,000,000 | $263.05 | $304.55 | $1,395.90 | $1,431.25 |
 
-Totals include the one $5 plan, with allowances otherwise unused. At one million
-health commands the combined model is $88 writes + $3.30 DO requests + $5 plan.
-If the write and DO-request allowances were already spent, the same added usage
-costs $141.45 incrementally instead. Unused allowances are not a per-command
-discount that can be claimed again by each feature.
+The one-million immediate-health total is $90 writes + $2.25 DO requests + $5
+plan. If write and DO-request allowances are already spent, adding that workload
+costs **$142.40 incrementally**, while the other allowances remain unused.
+Free-plan write capacity is 100,000 rows/day: at the 140-write batch assumption,
+about **714 commands/day** before other bot work. This does not establish that
+the complete bot fits Free or that sparse traffic has the same cleanup cost.
 
-Free-plan write capacity is 100,000 rows/day. At the conservative 138-write
-profile that is about 724 commands/day before other bot work; Free-plan limits
-fail closed when exhausted. This is not a claim that the complete bot fits Free.
+## Duration and storage sensitivity
 
-## Duration and storage limits of the estimate
+An application's five-second timeout bounds recovery decisions; it does not
+cancel every losing fetch or cap billed duration. Pending I/O, overlapping
+requests and hibernation eligibility determine actual provider-active time.
+Aggregate activity sums non-overlapping active intervals per object across all
+involved objects; a single request's local elapsed time is not that quantity.
 
-The five-second application timeout bounds recovery decisions. It does not
-cancel every losing fetch or prove a five-second billed-duration limit. Pending
-I/O can retain an object; actual billable activity depends on hibernation,
-overlap and platform behavior. For one million commands, assumed aggregate
-object activity of 0.05 / 1 / 5 / 900 seconds produces duration charges of
-$0 / $0 / $12.50 / $1,437.50 under the current rounded model. The 900-second case
-is a sensitivity example, not a measured outage duration or a maximum across
-multiple waiting objects. A production duration forecast needs actual aggregate
-active time; local callback spans cannot supply it.
+For one million immediate-health commands, keeping other assumptions fixed:
 
-Application byte caps exclude database/index/platform overhead. In the installed
-health fixture, first acceptance allocates another 98,304 SQLite bytes after
-grant setup, and a subsequent warmed cycle can reuse existing pages. Freed
-records need not shrink the database file. Source/stream schemas, retained
-receipts, abandoned authority and internal metadata contribute to fleet storage;
-add measured GB-month to the calculator rather than treating the source's
-512-KiB pending-payload cap as total storage.
+| Assumed aggregate active seconds/command | Duration charge | Total scenario |
+| ---: | ---: | ---: |
+| 0.05 | $0.00 | $97.25 |
+| 1 | $0.00 | $97.25 |
+| 5 | $12.50 | $109.75 |
+| 900 | $1,437.50 | $1,534.75 |
 
-The measured implementation satisfies the bounded-work gate after the two
-amplification fixes. It preserves hibernating transport and acceptance remains
-disabled. [Final author/operator guidance and release review](state-event-release.md)
-complete step 12; deployment remains with the operator.
+The 900-second case is a sensitivity example, not a measured delay or a bound
+on multiple waiting objects. Production duration forecasts require provider
+telemetry; local metered callback spans cannot supply it. Extra retained SQLite
+storage of 6 / 10 / 100 GB-month would add $0.20 / $1 / $19 respectively with
+the five-GB allowance otherwise unused, using conservative unit rounding.
 
-Private [latency diagnostics](state-event-diagnostics.md) default off. Enabled
-tracing adds bounded logs and relay inspection reads, but no diagnostic writes,
-RPCs or polling. The ordinary cost profile keeps this switch disabled.
+First installed-health acceptance allocates 106,496 additional native SQLite
+bytes after grant setup in the alarm-only fixture; warm cycles can reuse pages.
+Deleting records need not shrink the database file. Schemas, indexes, receipts,
+authority and hidden metadata contribute to fleet storage, beyond the source's
+512-KiB payload budget. Supply actual GB-month to the calculator.
+
+The measured implementation retains finite failure work and hibernating idle
+transport, with a substantial write premium for atomicity and recovery. There
+is no newly demonstrated cost blocker at modest traffic; high command volume
+and provider-active duration still require explicit budgeting. The remaining
+latency-roadmap step is the final release review (step 11).

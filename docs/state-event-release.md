@@ -159,16 +159,18 @@ referenced obligations are terminal plus a separate reviewed retirement change.
 
 ## Cost findings and remaining limits
 
-The installed warmed health cycle measures 117 native SQL writes, 19 application
-binding RPCs and three alarm handlers. Alarm storage and amortized delayed
-receipt cleanup bring the illustrative model to **138 row writes / 22.15 Durable
-Object request units per command**. The modeled legacy event-only reference is
-30 writes; four more model the ordinary state mutation. The remaining 104-write
-premium pays for atomic acceptance, recovery, relay, confirmation and retirement.
+Latency-roadmap step 10 refreshed these findings on 2026-10-20. The installed
+warmed health cycle with immediate activation measures 118 native SQL writes,
+14 application binding requests and one destination alarm through ACK/cleanup.
+Alarm storage and amortized delayed receipt cleanup bring the illustrative model
+to **140 row writes / 15.15 Durable Object request units per command**. The
+alarm-only equivalent models 143 writes / 17.15 request units. The legacy
+event-only reference is 30 writes; four more model the ordinary state mutation.
+The remaining 106-write premium covers atomic acceptance and recovery.
 
-Using the report's 2026-10-18 paid-plan prices and explicit timing assumptions,
+Using the report's prices checked on 2026-10-20 and explicit timing assumptions,
 unused shared allowances and no active query watchers, 100,000 commands/month
-model at $5.30 total and one million at $96.30. These are scenarios, not observed
+model at $5.15 total and one million at $97.25. These are scenarios, not observed
 invoices or ceilings. Active duration, watch re-evaluation, account usage, grant
 setup and fleet storage can change them. Logical five-second RPC deadlines do
 not cancel all losing fetches or cap billed object-active time. Reprice and

@@ -104,8 +104,9 @@ local/shared lost-reply recovery. Healthy operations send no new RPC; marker
 selection and schema/index checks add bounded SQL reads. Fault cases add at most
 one destination read and, for shared state, one registry request. Actual SQL and
 alarm counts are recorded by the native meter; those counters are not measured
-Cloudflare object duration or a production billing guarantee. The full report
-and billing refresh remain latency roadmap step 10.
+Cloudflare object duration or a production billing guarantee. The step-10
+[full cost report and billing refresh](state-event-costs.md) includes these
+profiles alongside complete immediate and fallback online cycles.
 
 Step-6 local native-meter results (2026-10-19; SQL counts include catalog/index reads):
 

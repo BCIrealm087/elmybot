@@ -48,6 +48,7 @@ function sqlStatements(query) {
 export function costMeter() {
   const objects = new Map();
   const sockets = [];
+  const background = new Set();
   let active = false, cursors = [], rpc = [], alarms = { reads: 0, writes: 0, deletes: 0, invocations: 0 }, handlers = [], incomingMessages = 0, appends = 0, peakAppends = 0;
   const databaseBytes = async () => (await Promise.all([...objects.values()].map(({ role, id }) =>
     runInDurableObject(env[role].get(id), (_i, state) => state.storage.sql.databaseSize)))).reduce((sum, value) => sum + value, 0);
@@ -85,6 +86,11 @@ export function costMeter() {
         } });
         const wrapped = new Proxy(state, { get(target, property) {
           if (property === "storage") return storage;
+          if (property === "waitUntil") return (task) => {
+            const tracked = Promise.resolve(task).finally(() => background.delete(tracked));
+            background.add(tracked);
+            return target.waitUntil(tracked);
+          };
           const value = Reflect.get(target, property, target);
           return typeof value === "function" ? value.bind(target) : value;
         } });
@@ -119,11 +125,18 @@ export function costMeter() {
       throw Error("Virtual alarm budget exceeded; possible idle scheduling loop");
     },
     trackSocket(socket) { sockets.push(socket); },
+    async settle() {
+      // Include finite immediate activation and its completion scheduling in
+      // the phase that started it, rather than leaking work into the next one.
+      for (let count = 0; background.size && count < 100; count++) await Promise.all([...background]);
+      if (background.size) throw Error("Background work did not settle within the measurement budget");
+    },
     async phase(run) {
+      await this.settle();
       const beforeBytes = await databaseBytes();
       cursors = []; rpc = []; handlers = []; alarms = { reads: 0, writes: 0, deletes: 0, invocations: 0 }; incomingMessages = 0; appends = 0; peakAppends = 0;
       active = true;
-      try { await run(); }
+      try { await run(); await this.settle(); }
       finally { active = false; }
       const afterBytes = await databaseBytes();
       const byRole = {}, bySubsystem = {}, byQuery = new Map();

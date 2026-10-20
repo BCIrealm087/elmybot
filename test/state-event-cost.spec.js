@@ -51,6 +51,17 @@ async function baseline(f, { featureId = "cost.baseline", streamId = "updates", 
   return { state, event };
 }
 
+function healthCommand(f) {
+  let source = 0;
+  return (operation = "damage", amount = 15) => {
+    const input = createCommandInvocation({ kind: "fun.health.impact.v2", args: { operation, amount }, sourceCreatedAtMs: Date.now(),
+      sourceEventId: `discord:health-cost:${++source}`,
+      origin: { group: f.group, actor: { platform: "discord", id: "moderator", claims: [] } } });
+    return executeAction(createActionRegistry(f.registry.actions), input,
+      { ...createFeatureServiceRuntime(f.testEnv, input, f.registry), authorize: async () => true });
+  };
+}
+
 afterEach(async () => { vi.restoreAllMocks(); await closeCostMeters(); await cleanupDeliveryFixtures(); });
 describe("measured state/event operation budgets", () => {
   it("calibrates native SQL counters for indexes, triggers and deletes", async ({ task }) => {
@@ -134,7 +145,7 @@ describe("measured state/event operation budgets", () => {
     expect(rows).toHaveLength(6); expect(rows.every((row) => row.state === "appended" && row.attempts === 1)).toBe(true);
     expect(accepted.rowsWritten).toBeLessThanOrEqual(shared ? 440 : 380);
     expect(drain.rowsWritten).toBeLessThanOrEqual(shared ? 440 : 380);
-    expect(drain.requests).toBeLessThanOrEqual(shared ? 48 : 36);
+    expect(drain.requests).toBeLessThanOrEqual(shared ? 32 : 24);
   });
   it("measures installed health v2, legacy v1 delivery and clamped no-ops", async ({ task }) => {
     const f = await measuredDeliveryFixture({ shared: true, extraFeatures: [healthFeature],
@@ -151,12 +162,8 @@ describe("measured state/event operation budgets", () => {
     }
     await state("get");
     const stateOnly = await f.meter.phase(() => state("decrement")); await state("set");
-    await f.connect(); let source = 0;
-    const command = (operation = "damage", amount = 15) => {
-      const input = createCommandInvocation({ kind: "fun.health.impact.v2", args: { operation, amount }, sourceCreatedAtMs: Date.now(), sourceEventId: `discord:health-cost:${++source}`,
-        origin: { group: f.group, actor: { platform: "discord", id: "moderator", claims: [] } } });
-      return executeAction(createActionRegistry(f.registry.actions), input, { ...createFeatureServiceRuntime(f.testEnv, input, f.registry), authorize: async () => true });
-    };
+    await f.connect();
+    const command = healthCommand(f);
     const coldAccept = await f.meter.phase(() => command());
     await f.drain(); await f.ack(); tick(clock); await f.streamAlarm(); await f.drain(false); tick(clock);
     const cycle = async (operation, amount) => { await command(operation, amount); await f.drain(); await f.ack(); tick(clock); await f.streamAlarm(); await f.drain(false); };
@@ -167,6 +174,39 @@ describe("measured state/event operation budgets", () => {
     expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
     task.meta.stateEventCost = { installedHealth: true, shared: true, eventOnly, stateOnly, coldAccept, warmOnline, clampedNoop };
   });
+  it.for([{ shared: false }, { shared: true }, { shared: true, installedHealth: true }])(
+    "measures immediate publication through ACK and cleanup (%j)", async ({ shared, installedHealth = false }, { task }) => {
+      const f = await measuredDeliveryFixture({ shared, immediate: true, ...(installedHealth ? {
+        extraFeatures: [healthFeature], featureStream: { featureId: "fun.health", streamId: "impacts", version: 2 }
+      } : {}) });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      await f.connect();
+      const command = installedHealth ? healthCommand(f) : () => f.commit();
+      const cycle = async (operation, amount) => {
+        await command(operation, amount); await f.meter.settle();
+        expect((await f.rows(f.ownerStub, "state_event_outbox"))[0]).toMatchObject({ state: "appended", destination_confirmed: 1, lease_token: null });
+        expect(await f.rows(f.streamStub, "durable_event_stream_events")).toHaveLength(1);
+        await f.ack(); tick(clock); await f.streamAlarm(); await f.meter.settle();
+        expect(await f.rows(f.ownerStub, "state_event_outbox")).toEqual([]);
+        expect(await f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
+      };
+      const coldOnline = await f.meter.phase(() => cycle()); tick(clock);
+      const warmOnline = await f.meter.phase(() => cycle());
+      expect(coldOnline.rowsWritten).toBeLessThanOrEqual(shared ? 210 : 180);
+      expect(warmOnline.rowsWritten).toBeLessThanOrEqual(shared ? 125 : 112);
+      expect(warmOnline.requests).toBeLessThanOrEqual(shared ? 15 : 9);
+      expect(warmOnline.rowsRead).toBeLessThanOrEqual(5000);
+      expect(warmOnline.alarms.writes).toBeLessThanOrEqual(14);
+      expect(warmOnline.alarms.invocations).toBe(1);
+      expect(warmOnline.incomingMessages).toBe(1);
+      let clampedNoop;
+      if (installedHealth) {
+        tick(clock); await cycle("heal", 100); tick(clock);
+        clampedNoop = await f.meter.phase(() => cycle("heal", 100));
+        expect(clampedNoop.rowsWritten).toBeLessThanOrEqual(125);
+      }
+      task.meta.stateEventCost = { immediate: true, installedHealth, shared, coldOnline, warmOnline, ...(clampedNoop ? { clampedNoop } : {}) };
+    });
   it("keeps command recovery and new admission independent of ten thousand historical receipts", async ({ task }) => {
     const f = await measuredDeliveryFixture(); const input = f.invocation(); await f.commit(input); await f.drain();
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1100);

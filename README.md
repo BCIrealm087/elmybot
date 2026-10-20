@@ -528,6 +528,7 @@ explicit catalog-regeneration action.
 - [Atomic state changes with durable events roadmap](docs/state-event-roadmap.md)
 - [Atomic state changes with durable events contract](docs/state-event-contract.md)
 - [State/event authoring, execution, and contributor tests](docs/state-event-authoring.md)
+- [State/event cost measurements, billing scenarios, and operation budgets](docs/state-event-costs.md)
 - [State/event release review, costs, and safe rollout](docs/state-event-release.md)
 - [Authoritative health v2 migration](docs/health-state-event-migration.md)
 - [Widget-data consumer and contributor guide](docs/widget-data.md)

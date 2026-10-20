@@ -181,5 +181,6 @@ npm run test:browser
 
 CI additionally checks JavaScript syntax and performs the non-deploying Wrangler
 build. No deployment, grant regeneration, data cleanup or schema migration is
-required by this verification step. Cost remeasurement and final release review
-remain latency roadmap steps 10 and 11 respectively.
+required by this verification step. [Cost remeasurement](state-event-costs.md)
+completed latency roadmap step 10 on 2026-10-20. Final release review remains
+step 11.

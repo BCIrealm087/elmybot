@@ -112,8 +112,9 @@ individual request path is safe. See [the investigation](state-event-latency-inv
 
 The cost suite now measures a six-stream burst over six relay invocations,
 including their scheduling passes. This bounds work per invocation at the cost
-of additional alarm/SQL scheduling work under backlog. Full report/pricing
-refresh remains latency roadmap step 10; CI exports current measurements.
+of additional alarm/SQL scheduling work under backlog. The step-10
+[cost refresh](state-event-costs.md) measures that tradeoff and updates the
+pricing scenarios; CI exports current raw measurements.
 
 ## Fair admission across publication and cleanup
 

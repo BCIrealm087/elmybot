@@ -122,8 +122,9 @@ per admission/claim, with ticket changes included in the existing outbox write.
 The claim write replaces the old per-stream last-served write; admission adds
 one schedule write.
 SQL reads and cold schema work also increase. Complete local cost profiles are
-recorded with the full suite; provider-duration/billing measurement remains
-roadmap step 10.
+recorded with the full suite; the step-10 [cost report](state-event-costs.md)
+refreshes the billing scenarios. Provider-active duration remains an explicit
+scenario assumption requiring production telemetry for an actual forecast.
 
 The final local healthy warm immediate profiles retain 5/10 binding requests,
 four alarm sets and seven alarm reads for local/shared owners. SQL writes are
