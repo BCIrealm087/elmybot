@@ -1,6 +1,7 @@
 import { scheduleStorageAlarmInTransaction, storageTableExists } from "../storage-alarm.js";
 import { canonicalJson, jsonBytes, recoveryError } from "./identity.js";
 
+export const STATE_EVENT_PUBLICATION_BURST = 3;
 export const STATE_EVENT_OUTBOX_LIMITS = Object.freeze({ rows: 100, bytes: 512 * 1024,
   partitions: 100, admissionsPerSecond: 10, retentionMs: 30 * 60 * 1000, batch: 20 });
 export function stateEventOutboxExists(state) { return storageTableExists(state, "state_event_outbox"); }
@@ -12,13 +13,16 @@ export function initializeStateEventOutbox(state) {
       operation_id TEXT PRIMARY KEY, partition_key TEXT NOT NULL, operation_sequence INTEGER NOT NULL,
       state TEXT NOT NULL, deadline_ms INTEGER NOT NULL, next_wakeup_at_ms INTEGER,
       intent_json TEXT NOT NULL, intent_bytes INTEGER NOT NULL, stream_route_id TEXT,
-      probe_state INTEGER NOT NULL DEFAULT 0, probe_fallback_ms INTEGER);
+      probe_state INTEGER NOT NULL DEFAULT 0, probe_fallback_ms INTEGER, relay_turn INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS state_event_outbox_due ON state_event_outbox(next_wakeup_at_ms);
     CREATE INDEX IF NOT EXISTS state_event_outbox_order ON state_event_outbox(partition_key, operation_sequence);
     CREATE TABLE IF NOT EXISTS state_event_outbox_budget (
       singleton INTEGER PRIMARY KEY CHECK(singleton = 1), rows INTEGER NOT NULL,
       bytes INTEGER NOT NULL, partitions INTEGER NOT NULL, rate_json TEXT NOT NULL);
     INSERT OR IGNORE INTO state_event_outbox_budget VALUES (1, 0, 0, 0, '[]');
+    CREATE TABLE IF NOT EXISTS state_event_relay_schedule (
+      singleton INTEGER PRIMARY KEY CHECK(singleton = 1), turn INTEGER NOT NULL, publication_streak INTEGER NOT NULL);
+    INSERT OR IGNORE INTO state_event_relay_schedule VALUES (1, 0, 0);
     CREATE TABLE IF NOT EXISTS state_event_source_streams (
       route_id TEXT PRIMARY KEY, gap_first INTEGER, gap_last INTEGER, blocked INTEGER NOT NULL DEFAULT 0,
       reset_id TEXT, reset_phase TEXT, checkpoint INTEGER NOT NULL DEFAULT 0, completed_reset TEXT);`);
@@ -31,6 +35,7 @@ export function initializeStateEventOutbox(state) {
     ["control_attempts", "INTEGER NOT NULL DEFAULT 0"], ["control_scheduled", "INTEGER NOT NULL DEFAULT 0"],
     ["lease_token", "TEXT"], ["lease_until_ms", "INTEGER"], ["destination_confirmed", "INTEGER NOT NULL DEFAULT 0"],
     ["probe_state", "INTEGER NOT NULL DEFAULT 0"], ["probe_fallback_ms", "INTEGER"],
+    ["relay_turn", "INTEGER NOT NULL DEFAULT 0"],
     ["last_error", "TEXT"], ["uncertain", "INTEGER NOT NULL DEFAULT 0"], ["owner_busy", "INTEGER NOT NULL DEFAULT 0"]
   ]) if (!columns.has(name)) state.storage.sql.exec(`ALTER TABLE state_event_outbox ADD COLUMN ${name} ${definition}`);
   const streamColumns = new Set(state.storage.sql.exec("PRAGMA table_info(state_event_source_streams)").toArray().map((column) => column.name));
@@ -87,11 +92,12 @@ export function enqueueStateEventIntent(state, intent) {
   state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = MIN(COALESCE(next_wakeup_at_ms, deadline_ms), ?), last_error = 'useful_wakeup'
     WHERE stream_route_id = ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) AND attempts < 19
       AND state IN ('pending', 'parked', 'gap_pending')`, intent.committedAtMs + 1000, intent.route.streamRouteId, intent.committedAtMs);
+  const turn = nextStateEventRelayTurn(state);
   state.storage.sql.exec(`INSERT INTO state_event_outbox
-    (operation_id, partition_key, operation_sequence, state, deadline_ms, next_wakeup_at_ms, intent_json, intent_bytes, stream_route_id)
-    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
+    (operation_id, partition_key, operation_sequence, state, deadline_ms, next_wakeup_at_ms, intent_json, intent_bytes, stream_route_id, relay_turn)
+    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
     intent.operationId, intent.partitionKey ?? intent.featureId, intent.stateEvent.operationSequence, intent.expiresAtMs,
-    intent.committedAtMs + 1000, json, bytes, intent.route.streamRouteId);
+    intent.committedAtMs + 1000, json, bytes, intent.route.streamRouteId, turn);
   state.storage.sql.exec("UPDATE state_event_outbox_budget SET rows = rows + 1, bytes = bytes + ?", bytes);
 }
 
@@ -117,4 +123,15 @@ export async function maintainStateEventOutbox(state, nowMs = Date.now(), operat
     await scheduleStorageAlarmInTransaction(state, { nowMs });
   });
   return { examined };
+}
+
+// Called only inside the caller's admission/claim transaction. Tickets put new
+// records behind already waiting work, including retryable failures. Persisted
+// claim turns survive eviction; time stamps cannot provide this under ties.
+export function nextStateEventRelayTurn(state, publication = null) {
+  const schedule = one(state, "SELECT turn FROM state_event_relay_schedule");
+  if (!Number.isSafeInteger(schedule.turn + 1)) throw recoveryError("sequence_exhausted", 409);
+  return one(state, `UPDATE state_event_relay_schedule SET turn = turn + 1,
+    publication_streak = CASE WHEN ? IS NULL THEN publication_streak WHEN ? THEN MIN(publication_streak + 1, ${STATE_EVENT_PUBLICATION_BURST}) ELSE 0 END
+    WHERE singleton = 1 RETURNING turn`, publication === null ? null : publication ? 1 : 0, publication ? 1 : 0).turn;
 }

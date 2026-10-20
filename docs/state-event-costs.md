@@ -53,9 +53,22 @@ verify lazy field/index addition separately. Current CI exports 26 profiles;
 these bounded counters do not measure Cloudflare object duration or refresh the
 historical billing model below.
 
+Step 7 adds [fair publication/cleanup scheduling](state-event-cleanup-fairness.md).
+The local meter retains 5/10 binding requests, four alarm sets and seven alarm
+reads for warm immediate local/shared acceptance plus append. SQL writes rise
+from 76/89 to 77/90, and reads from 2,317/2,102 to 2,366/2,143. Cold writes rise
+from 143/175 to 147/179 including lazy schedule setup. The complete installed
+health warm cycle records 118 writes, 4,440 reads, 14 requests and 16 alarm sets.
+Persisting a queue ticket adds one schedule write on admission; on claim the
+schedule write replaces the old last-served write. Mixed traffic can split
+terminal housekeeping into another bounded claim, adding SQL/continuation work
+while keeping cleanup plus publication within the existing 20-call allowance.
+All 26 cost profiles are exported. These counts do not refresh the historical
+pricing assumptions or measure provider object duration; that remains step 10.
+
 The design has finite offline maintenance and a measurable write premium for
-atomicity/recovery. The installed health command uses 117 native SQL row writes
-for a warmed online cycle. Including alarm calls and a conservative allowance
+atomicity/recovery. In the historical baseline, installed health used 117
+native SQL row writes for a warmed online cycle. Including alarm calls and a conservative allowance
 for later receipt pruning gives **138 modeled row writes per command**. The
 corresponding legacy event-only reference is 30. Adding the ordinary bounded
 state mutation accounts for four of the 108 additional writes; the remaining

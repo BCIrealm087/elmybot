@@ -1,11 +1,11 @@
 import { probeStateEventReceipt } from "./receipt-probe.js";
 import { configureStateEventDiagnostics, stateEventDiagnosticsEnabled, traceStateEvent, traceStateEventRow } from "./diagnostics.js";
-import { initializeStateEventOutbox, maintainStateEventOutbox, stateEventOutboxExists } from "./outbox.js";
+import { initializeStateEventOutbox, maintainStateEventOutbox, nextStateEventRelayTurn, STATE_EVENT_PUBLICATION_BURST, stateEventOutboxExists } from "./outbox.js";
 import { canonicalJson, recoveryError } from "./identity.js";
 import { scheduleStorageAlarmInTransaction } from "../storage-alarm.js";
 import { relayStreamRequest, boundedStateEventRequest, stateEventRetryDelay } from "./relay-client.js";
 import { retireStoredStateEventOwner } from "./storage.js";
-import { createStateEventWorkBudget, STATE_EVENT_WORK_LIMITS } from "./relay-work-budget.js";
+import { createStateEventWorkBudget, stateEventRecordRemoteCost, STATE_EVENT_WORK_LIMITS } from "./relay-work-budget.js";
 import { sourceDeliverySnapshot } from "./delivery-snapshot.js";
 
 export const STATE_EVENT_RELAY_LIMITS = Object.freeze({ batch: 20, concurrency: 4, workMs: 5000, leaseMs: 30_000,
@@ -41,7 +41,7 @@ async function interest(state, env, row, intent, deadline, work) {
   }, deadline, work);
   state.storage.sql.exec("UPDATE state_event_source_streams SET registered_epoch = ? WHERE route_id = ? AND interest_epoch = ?", stream.interest_epoch, row.stream_route_id, stream.interest_epoch);
 }
-async function cleanup(state, env, row, intent, deadline, work) {
+async function cleanup(state, env, row, intent, deadline, work, defer = false) {
   traceStateEventRow(env, "cleanup.start", row);
   // A gap is cached before confirmation. A crash at that boundary must not
   // retire its proof while the destination still holds an unprunable receipt.
@@ -64,6 +64,12 @@ async function cleanup(state, env, row, intent, deadline, work) {
       replaceIntent(state, active, intent);
       state.storage.sql.exec("UPDATE state_event_outbox SET state = 'retiring' WHERE operation_id = ?", row.operation_id);
     });
+  }
+  if (defer) {
+    // Confirmation and local retirement are durable before yielding remote
+    // housekeeping. Release this phase's lease; the charged retiring row and
+    // immediate durable due time provide the next bounded cleanup claim.
+    await finish(state, env, row, null, true); return;
   }
   if (intent.route.kind === "effective_shareable") {
     work.take("origin.retire");
@@ -88,51 +94,51 @@ async function cleanup(state, env, row, intent, deadline, work) {
   });
   traceStateEventRow(env, "cleanup.finish", row);
 }
-async function claim(state, env, budget, { onlyOperationId = null, manual = false, activation = false, nowMs = Date.now() } = {}) {
+async function claim(state, env, budget, { onlyOperationId = null, manual = false, activation = false, probeAllowed = false, nowMs = Date.now() } = {}) {
   return state.storage.transaction(async () => {
     const active = Number(one(state, "SELECT COUNT(*) AS total FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).total);
+    // Probe reads reuse a live lease. Normal claims still share the global
+    // four-record gate, including leases that changed state after publication.
     if (active >= STATE_EVENT_RELAY_LIMITS.concurrency) {
       const lease = Number(one(state, "SELECT MIN(lease_until_ms) AS due FROM state_event_outbox WHERE lease_until_ms > ?", nowMs).due);
       if (stateEventDiagnosticsEnabled(env)) {
         const blocker = one(state, "SELECT * FROM state_event_outbox WHERE lease_until_ms > ? ORDER BY lease_until_ms LIMIT 1", nowMs);
-        for (const row of state.storage.sql.exec("SELECT * FROM state_event_outbox WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) LIMIT 20", nowMs, nowMs).toArray()) {
+        for (const row of state.storage.sql.exec("SELECT * FROM state_event_outbox WHERE probe_state <> 1 AND next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) LIMIT 20", nowMs, nowMs).toArray()) {
           traceStateEventRow(env, "relay.blocked", row, { reason: "owner_capacity", activeLeases: active,
             blockerOperationId: blocker?.operation_id, blockerState: blocker?.state, leaseUntilMs: lease });
         }
       }
       state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 1,
         next_wakeup_at_ms = CASE WHEN state IN ('pending', 'parked') AND deadline_ms > ? THEN MIN(deadline_ms, ?) ELSE ? END
-        WHERE next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`, nowMs, lease, lease, nowMs, nowMs);
-      await scheduleStorageAlarmInTransaction(state, { nowMs });
-      return [];
+        WHERE probe_state <> 1 AND next_wakeup_at_ms <= ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?)`, nowMs, lease, lease, nowMs, nowMs);
     }
-    // A commit activation may start a never-attempted publication before its
-    // recovery alarm, prioritizing it over cleanup that could consume the whole
-    // reservation. Alarm/manual fairness stays unchanged. It cannot pull retries,
-    // coalesced wakeups or leased rows forward; head/reset checks still run.
+    const streak = one(state, "SELECT publication_streak FROM state_event_relay_schedule").publication_streak;
+    const preferCleanup = streak >= STATE_EVENT_PUBLICATION_BURST;
     const candidates = state.storage.sql.exec(`SELECT outbox.*, stream.wake_generation, stream.reset_id FROM state_event_outbox outbox
       JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
-      WHERE (outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?) AND outbox.probe_state <> 1
-        AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?
+      WHERE ((outbox.lease_until_ms IS NULL OR outbox.lease_until_ms <= ?) AND outbox.probe_state <> 1
+          OR (? AND outbox.probe_state = 1 AND outbox.uncertain = 1 AND outbox.state IN ('pending', 'parked', 'gap_pending')))
+        AND (outbox.next_wakeup_at_ms <= ? OR (? AND outbox.operation_id = ?)
           OR (? AND outbox.state = 'pending' AND outbox.attempts = 0))
-      ORDER BY CASE WHEN ? AND outbox.state = 'pending' AND outbox.attempts = 0 THEN 0 ELSE 1 END,
-        stream.last_served_ms, COALESCE(outbox.next_wakeup_at_ms, 0), outbox.operation_sequence LIMIT 100`,
-    nowMs, onlyOperationId, onlyOperationId, manual ? 1 : 0, nowMs, activation ? 1 : 0, activation ? 1 : 0).toArray();
-    const result = [], streams = new Set();
+      ORDER BY CASE WHEN (outbox.state IN ${cleanupStates}) = ? THEN 0 ELSE 1 END,
+        outbox.relay_turn, outbox.operation_sequence, outbox.operation_id LIMIT 100`,
+    nowMs, probeAllowed ? 1 : 0, nowMs, manual ? 1 : 0, onlyOperationId, activation ? 1 : 0, preferCleanup ? 1 : 0).toArray();
+    const eligible = [];
     for (const row of candidates) {
       if (row.reset_id) {
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = NULL WHERE operation_id = ?", row.operation_id);
         continue;
       }
-      const cleanup = cleanupLane(row), lane = `${row.stream_route_id}:${cleanup ? "cleanup" : "append"}`;
-      if (streams.has(lane)) continue;
+      if (row.probe_state === 1) { eligible.push({ ...row, probeOnly: true }); break; }
+      if (active >= STATE_EVENT_RELAY_LIMITS.concurrency) continue;
+      const cleanup = cleanupLane(row);
       if (row.deadline_ms > nowMs && ["pending", "parked"].includes(row.state)) {
         const head = one(state, `SELECT operation_id, state, lease_until_ms, next_wakeup_at_ms, deadline_ms FROM state_event_outbox WHERE stream_route_id = ?
           AND operation_sequence < ? AND state IN ('pending', 'parked', 'gap_pending') ORDER BY operation_sequence LIMIT 1`, row.stream_route_id, row.operation_sequence);
         if (head) {
           traceStateEventRow(env, "relay.blocked", row, { reason: "ordered_head", blockerOperationId: head.operation_id,
             blockerState: head.state, leaseUntilMs: head.lease_until_ms, nextWakeupAtMs: head.next_wakeup_at_ms });
-          if (manual) throw recoveryError("delivery_order", 409);
+          if (manual && row.operation_id === onlyOperationId) throw recoveryError("delivery_order", 409);
           state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", head.next_wakeup_at_ms ?? head.deadline_ms, row.operation_id);
           continue;
         }
@@ -156,33 +162,53 @@ async function claim(state, env, budget, { onlyOperationId = null, manual = fals
       }
       // Once automatic retries are exhausted, only a recorded useful wakeup,
       // explicit recovery or the original expiry may start another attempt.
-      if (!manual && scheduled >= 12 && (isControl || !expired) && row.last_error !== "useful_wakeup") {
+      if (!(manual && row.operation_id === onlyOperationId) && scheduled >= 12 && (isControl || !expired) && row.last_error !== "useful_wakeup") {
         traceStateEventRow(env, "relay.blocked", row, { reason: "automatic_budget" });
         state.storage.sql.exec("UPDATE state_event_outbox SET next_wakeup_at_ms = ? WHERE operation_id = ?", isControl ? null : row.deadline_ms, row.operation_id);
         continue;
       }
-      // Reserve a complete record before creating a lease or charging an
-      // attempt. No mutation of the invocation budget inside a retryable SQL
-      // transaction. Work executes serially; competing invocations still share
-      // the four-live-lease owner gate above.
-      const reason = budget.reason(row);
-      if (reason) {
-        traceStateEventRow(env, "relay.yield", row, { reason, reservedCalls: budget.reserved, remoteCallLimit: STATE_EVENT_WORK_LIMITS.remoteCalls });
-        continue;
-      }
-      state.storage.sql.exec("UPDATE state_event_source_streams SET last_served_ms = ? WHERE route_id = ?", nowMs, row.stream_route_id);
-      if (row.last_error === "useful_wakeup") state.storage.sql.exec("UPDATE state_event_source_streams SET last_wake_ms = ? WHERE route_id = ?", nowMs, row.stream_route_id);
-      const token = crypto.randomUUID();
-      state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 0, lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ?,
-        attempts = attempts + ?, scheduled_attempts = scheduled_attempts + ?, control_attempts = control_attempts + ?, control_scheduled = control_scheduled + ? WHERE operation_id = ?`,
-      token, nowMs + 30_000, nowMs + 30_000, isControl ? 0 : 1, !isControl && !manual ? 1 : 0, isControl ? 1 : 0, isControl && !manual ? 1 : 0, row.operation_id);
-      const claimed = { ...current(state, row.operation_id), wake_generation: row.wake_generation };
-      result.push(claimed); streams.add(lane);
-      traceStateEventRow(env, "relay.claim", claimed, { ownerId: state.id.toString(), activeLeases: active + result.length });
-      break;
+      eligible.push(row); break;
     }
+    // Prefer publication for a finite burst, then require an eligible cleanup
+    // turn. Do not let a cheaper opposite-lane row spend the preferred row's
+    // fresh reservation: persist a continuation and select it next invocation.
+    let row = eligible[0];
+    if (!row || onlyOperationId && row.operation_id !== onlyOperationId) {
+      await scheduleStorageAlarmInTransaction(state, { nowMs }); return [];
+    }
+    // A complete shared publication phase (without remote housekeeping) costs
+    // 14; an appended outcome/confirmation phase costs 6. They can share the
+    // existing 20-call pass instead of making every owed cleanup turn defer a
+    // fresh command to an alarm. Controls already retiring are indivisible.
+    const publication = candidates.find((candidate) => !cleanupLane(candidate) && !candidate.reset_id);
+    if (["appended", "gap_recorded"].includes(row.state) && publication &&
+        budget.reserved + stateEventRecordRemoteCost(row) + stateEventRecordRemoteCost({ ...publication, deferCleanup: true, probeOnly: publication.probe_state === 1 }) > STATE_EVENT_WORK_LIMITS.remoteCalls) {
+      row = { ...row, deferCleanup: true };
+    }
+    let reason = budget.reason(row);
+    if (reason === "remote_budget" && !["retiring", "reset_discarded"].includes(row.state)) {
+      const split = { ...row, deferCleanup: true };
+      if (!budget.reason(split)) { row = split; reason = null; }
+    }
+    if (reason) {
+      traceStateEventRow(env, "relay.yield", row, { reason, reservedCalls: budget.reserved, remoteCallLimit: STATE_EVENT_WORK_LIMITS.remoteCalls });
+      await scheduleStorageAlarmInTransaction(state, { nowMs }); return [];
+    }
+    const turn = nextStateEventRelayTurn(state, !cleanupLane(row));
+    if (row.probeOnly) {
+      state.storage.sql.exec(`UPDATE state_event_outbox SET probe_state = 2, relay_turn = ?,
+        next_wakeup_at_ms = probe_fallback_ms, probe_fallback_ms = NULL WHERE operation_id = ?`, turn, row.operation_id);
+      await scheduleStorageAlarmInTransaction(state, { recompute: true, nowMs }); return [row];
+    }
+    const isControl = control(row), token = crypto.randomUUID();
+    if (row.last_error === "useful_wakeup") state.storage.sql.exec("UPDATE state_event_source_streams SET last_wake_ms = ? WHERE route_id = ?", nowMs, row.stream_route_id);
+    state.storage.sql.exec(`UPDATE state_event_outbox SET owner_busy = 0, lease_token = ?, lease_until_ms = ?, next_wakeup_at_ms = ?, relay_turn = ?,
+      attempts = attempts + ?, scheduled_attempts = scheduled_attempts + ?, control_attempts = control_attempts + ?, control_scheduled = control_scheduled + ? WHERE operation_id = ?`,
+    token, nowMs + 30_000, nowMs + 30_000, turn, isControl ? 0 : 1, !isControl && !manual ? 1 : 0, isControl ? 1 : 0, isControl && !manual ? 1 : 0, row.operation_id);
+    const claimed = { ...current(state, row.operation_id), wake_generation: row.wake_generation, deferCleanup: row.deferCleanup };
+    traceStateEventRow(env, "relay.claim", claimed, { ownerId: state.id.toString(), activeLeases: active + 1 });
     await scheduleStorageAlarmInTransaction(state, { nowMs });
-    return result;
+    return [claimed];
   });
 }
 async function finish(state, env, row, error = null, terminalDelivery = false, probe = false) {
@@ -227,21 +253,14 @@ async function finish(state, env, row, error = null, terminalDelivery = false, p
     await scheduleStorageAlarmInTransaction(state);
   });
 }
-async function claimReceiptProbe(state, budget, options = {}, inline = null) {
+async function claimInlineReceiptProbe(state, original) {
   return state.storage.transaction(async () => {
-    const now = Date.now();
-    state.storage.sql.exec(`UPDATE state_event_outbox SET next_wakeup_at_ms = NULL WHERE probe_state = 1 AND next_wakeup_at_ms IS NOT NULL
-      AND EXISTS (SELECT 1 FROM state_event_source_streams WHERE route_id = stream_route_id AND reset_id IS NOT NULL)`);
     const row = one(state, `SELECT outbox.*, stream.wake_generation FROM state_event_outbox outbox
       JOIN state_event_source_streams stream ON stream.route_id = outbox.stream_route_id
-      WHERE outbox.probe_state = 1 AND outbox.uncertain = 1 AND stream.reset_id IS NULL
-        AND outbox.state IN ('pending', 'parked', 'gap_pending')
-        AND (? IS NULL OR outbox.operation_id = ?) AND (? OR outbox.next_wakeup_at_ms <= ?)
-      ORDER BY outbox.next_wakeup_at_ms, outbox.operation_sequence LIMIT 1`,
-    inline?.operation_id ?? options.onlyOperationId ?? null, inline?.operation_id ?? options.onlyOperationId ?? null, inline || options.onlyOperationId ? 1 : 0, now);
-    if (!row || inline && row.lease_token !== inline.lease_token) return null;
-    const claimed = { ...row, probeOnly: true };
-    if (!inline && budget.reason(claimed)) return null;
+      WHERE outbox.operation_id = ? AND outbox.probe_state = 1 AND outbox.uncertain = 1
+        AND stream.reset_id IS NULL AND outbox.state IN ('pending', 'parked', 'gap_pending')`, original.operation_id);
+    if (!row || row.lease_token !== original.lease_token) return null;
+    const claimed = { ...row, probeOnly: true, deferCleanup: original.deferCleanup };
     // Spend the marker before I/O, restoring the exact original fallback. A
     // crash/failure/absent read cannot start another probe or shorten the lease.
     state.storage.sql.exec(`UPDATE state_event_outbox SET probe_state = 2,
@@ -278,7 +297,7 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
         { leaseToken: row.lease_token, deadline, work: recordWork, fromProbe: true });
       cached = true;
       const active = current(state, row.operation_id);
-      if (active && result.terminal) await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork);
+      if (active && result.terminal) await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork, row.deferCleanup);
       else await finish(state, env, row);
       traceStateEventRow(env, "probe.finish", row, { reason: "positive" });
       return result;
@@ -301,7 +320,7 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
       if (env.DURABLE_EVENT_STREAMS_ENABLED !== "true" && row.deadline_ms > Date.now() && !control(row)) throw recoveryError("service_unavailable", 503);
       let result;
       if (control(row)) {
-        await cleanup(state, env, row, intent, deadline, recordWork);
+        await cleanup(state, env, row, intent, deadline, recordWork, row.deferCleanup);
         return row.state === "reset_discarded" ? { state: "reset_discarded", terminal: "reset", operationId: row.operation_id }
           : intent.delivery ?? { state: "retired" };
       }
@@ -310,13 +329,13 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
       result = await reconcile(state, env, owner, row.operation_id, row.stream_route_id, { leaseToken: row.lease_token, deadline, work: recordWork });
       const active = current(state, row.operation_id);
       if (active && result.terminal) {
-        await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork);
+        await cleanup(state, env, active, { ...JSON.parse(active.intent_json), delivery: result }, deadline, recordWork, row.deferCleanup);
       } else await finish(state, env, row);
       return result;
     } catch (error) {
       await finish(state, env, row, error, false, recordWork.appendStarted && Boolean(options.acceptOutcome));
       if (options.acceptOutcome && Date.now() < Math.min(deadline, started + 5000)) {
-        const candidate = await claimReceiptProbe(state, budget, options, row);
+        const candidate = await claimInlineReceiptProbe(state, row);
         if (candidate) {
           const result = await probe(candidate, recordWork, Math.min(deadline, started + 5000));
           if (result) return result;
@@ -327,16 +346,16 @@ export async function runStateEventRelay(state, env, reconcile, options = {}) {
     }
   };
   while (attempted < batch && Date.now() - started < 5000) {
-    const candidate = options.acceptOutcome ? await claimReceiptProbe(state, budget, options) : null;
-    if (candidate) {
+    const rows = await claim(state, env, budget, { ...options, probeAllowed: Boolean(options.acceptOutcome), manual: Boolean(options.onlyOperationId), nowMs: Date.now() });
+    if (!rows.length) break;
+    const candidate = rows[0];
+    if (candidate.probeOnly) {
       const result = await probe(candidate, budget.start(candidate), Math.min(Date.now() + 5000, started + 5000));
       attempted++; lastResult = result;
       if (options.onlyOperationId && result) return result;
       if (options.onlyOperationId && !result && Number(candidate.lease_until_ms) > Date.now()) throw recoveryError("attempt_in_progress", 409);
       continue;
     }
-    const rows = await claim(state, env, budget, { ...options, manual: Boolean(options.onlyOperationId), nowMs: Date.now() });
-    if (!rows.length) break;
     const outcomes = await Promise.allSettled(rows.slice(0, batch - attempted).map(work));
     attempted += outcomes.length;
     for (const outcome of outcomes) {

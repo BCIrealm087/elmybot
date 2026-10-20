@@ -61,11 +61,16 @@ event identity or original event lifetime is regenerated.
 
 ## Scheduling, budgets and old rows
 
-A local/shared pending attempt now reserves 8/19 conservative remote-call
+A full local/shared pending attempt reserves 8/19 conservative remote-call
 weights, including the possible 1/2-call probe. A deferred probe reserves 4/9,
 including confirmation and terminal cleanup. The owner invocation remains capped
 at 20 weights, two claimed records and one new publication; a standalone probe
-uses a record slot without consuming a publication attempt. Every probe RPC is
+uses a record slot without consuming a publication attempt. Deferred probes
+share the persisted [publication/cleanup schedule](state-event-cleanup-fairness.md).
+A selected phase can defer remote terminal housekeeping, reserving 7/14 for
+publication or 3/4 for a standalone probe; inline probes inherit that decision.
+The confirmed terminal result becomes a charged `retiring` row with its own
+subsequent cleanup claim. Every probe RPC is
 charged before transmission. The structural owner-rooted nesting bound remains
 two application calls, independent of Cloudflare's actual request-depth counter.
 
@@ -102,7 +107,7 @@ alarm counts are recorded by the native meter; those counters are not measured
 Cloudflare object duration or a production billing guarantee. The full report
 and billing refresh remain latency roadmap step 10.
 
-Local native-meter results (2026-10-19; SQL counts include catalog/index reads):
+Step-6 local native-meter results (2026-10-19; SQL counts include catalog/index reads):
 
 | Isolated destination read | Binding requests | SQL rows read | SQL rows written | Alarm operations |
 | --- | ---: | ---: | ---: | ---: |
@@ -126,11 +131,13 @@ Cold initialization adds one SQL write for the new partial index. These profiles
 exclude ACK cleanup and object-duration billing; the CI artifact retains all 26
 profiles, including finite outage and history-growth checks.
 
-CI also exposed an immediate-activation interaction: eligible ACK cleanup could
-consume the reservation before a fresh shared publication, or a running cleanup
-activation could suppress the independent commit's runner. Commit activations
-now prioritize first publication and use a separate local gate from useful
-wakeups. Two regressions retain the withheld-alarm check and hold origin
-retirement while accepting/delivering another command. Alarm/manual scheduling,
-all four owner-wide leases and per-invocation budgets still apply. This scoped
-correction does not claim the universal reservation/fairness work of step 7.
+Step-6 CI exposed an immediate-activation interaction: eligible ACK cleanup
+could consume the reservation before a fresh shared publication, or a running
+cleanup activation could suppress the independent commit's runner. Separate
+publication/useful-wakeup gates preserve independent commit activation. Step 7
+now bounds publication preference, rotates persisted record turns, and splits
+terminal housekeeping when needed to fit a cleanup phase plus publication into
+one pass. Native health tests deliver eight commands with alarms withheld;
+all four owner-wide leases, ordering and invocation limits still apply. See
+[cleanup fairness](state-event-cleanup-fairness.md) for the current policy and
+its explicit live-lease and dispatch limits.

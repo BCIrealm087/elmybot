@@ -29,8 +29,8 @@ alarm and explicit recovery handlers. Each physical stream has one ordered
 append head. Verified `appended` outcomes and terminal retirement use a separate
 cleanup lane: a delayed cleanup lease cannot hold a new append behind it. Claims
 within each lane still serialize, and both lanes share the same four-record
-owner limit. Independent streams use a persisted last-served marker for fair
-selection. A busy owner defers waiting work until a lease can recover; finishing
+owner limit. [Durable queue tickets and a finite publication burst](state-event-cleanup-fairness.md)
+arbitrate fair selection across both classes and independent streams. A busy owner defers waiting work until a lease can recover; finishing
 work releases those deferred rows promptly instead of spinning immediate alarms.
 
 Each invocation reserves at most twenty complete-path binding calls, claims at

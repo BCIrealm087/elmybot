@@ -26,10 +26,13 @@ is added. The existing durable alarm is installed before activation is requested
 
 Per-owner in-memory gates suppress redundant publication and useful-wakeup
 runners separately. An ACK cleanup runner cannot suppress an independent new
-commit activation. A commit pass prioritizes its never-attempted publication
-before eligible cleanup can consume its reservation; ordered-head and lease
-checks still apply. This is not a universal publication-slot reservation or a
-sustained cleanup-fairness guarantee (latency roadmap step 7). The gate is only
+commit activation. A commit pass can start a first publication before its
+fallback deadline, subject to the persisted [publication/cleanup fairness
+policy](state-event-cleanup-fairness.md). Publication has a finite three-claim
+burst preference. A cleanup phase and publication phase share the same pass
+when their complete reservations fit; remaining work retains its durable
+continuation. Ordering, leases and reset checks still
+apply. The gate is only
 an optimization; durable claims and lease tokens arbitrate concurrent alarms,
 explicit reconciliation, other requests and eviction. A suppressed activation
 does not cancel a persisted deadline. A pass runs once, with at most 20 reserved
@@ -83,7 +86,7 @@ RPC and alarm operations without pretending local elapsed time is billing time.
 Installed health tests retain native bindings and installed declarations, with
 only the activation flag configured on the tested owner/stream. They advance
 the application clock so normal fallback alarms lie two minutes in the native
-dispatcher's future, then deliver and ACK three sequential commands for both a
+dispatcher's future, then deliver and ACK eight sequential commands for both a
 standalone owner and a linked Discord/Twitch owner. No forwarding bindings,
 forced due dates, per-hop injection or manual relay drain are used in those
 paths. Existing recovery/cost tests select alarm-only mode to isolate that path.

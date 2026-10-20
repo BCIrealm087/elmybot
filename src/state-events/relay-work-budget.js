@@ -13,9 +13,12 @@ export function stateEventRecordRemoteCost(row) {
   const shared = JSON.parse(row.intent_json).route.kind === "effective_shareable";
   const cleanup = (shared ? STATE_EVENT_REMOTE_COST["origin.retire"] : 0) + STATE_EVENT_REMOTE_COST["interest-release"];
   const probe = STATE_EVENT_REMOTE_COST[shared ? "authority.probe" : "probe"];
-  if (row.probeOnly) return probe + STATE_EVENT_REMOTE_COST.confirm + cleanup;
-  if (controls.has(row.state)) return cleanup + (row.state === "gap_recorded" ? STATE_EVENT_REMOTE_COST.confirm : 0);
-  return STATE_EVENT_REMOTE_COST.interest + STATE_EVENT_REMOTE_COST.confirm + cleanup +
+  // A selected split phase persists terminal state and releases its lease before
+  // remote retirement/release. That housekeeping receives its own later claim.
+  const terminalCleanup = row.deferCleanup ? 0 : cleanup;
+  if (row.probeOnly) return probe + STATE_EVENT_REMOTE_COST.confirm + terminalCleanup;
+  if (controls.has(row.state)) return terminalCleanup + (row.state === "gap_recorded" ? STATE_EVENT_REMOTE_COST.confirm : 0);
+  return STATE_EVENT_REMOTE_COST.interest + STATE_EVENT_REMOTE_COST.confirm + terminalCleanup +
     (row.state === "appended" ? STATE_EVENT_REMOTE_COST.outcome : STATE_EVENT_REMOTE_COST[shared ? "authority.append" : "append"] + probe);
 }
 export function createStateEventWorkBudget() {

@@ -50,7 +50,14 @@ standalone deferred probe reserves 4/9 and uses a record slot without charging a
 new publication attempt. An appended row reserves 7/11. A recorded-gap cleanup
 reserves 3/7; a
 retiring/reset-discarded row reserves 1/5. These deliberately include stages
-that can already be complete. Changing authority, destination or origin paths
+that can already be complete. Step 7 can split remote terminal housekeeping
+from outcome/confirmation and publication when both classes need service.
+The selected local/shared phase then reserves 3/4 for a standalone probe,
+7/14 for publication, 6/6 for an appended outcome, or 2/2 for gap confirmation.
+The charged `retiring` row keeps the remote 1/5 housekeeping obligation for its
+next claim. Thus a shared appended phase (6) and publication phase (14) fit in
+one existing 20-call invocation. Full-path reservations remain the default when
+there is room. Changing authority, destination or origin paths
 requires updating both these weights and the enforced-call tests.
 
 ## Yield and recovery
@@ -104,3 +111,12 @@ The cost suite now measures a six-stream burst over six relay invocations,
 including their scheduling passes. This bounds work per invocation at the cost
 of additional alarm/SQL scheduling work under backlog. Full report/pricing
 refresh remains latency roadmap step 10; CI exports current measurements.
+
+## Fair admission across publication and cleanup
+
+Step 7 adds [persisted fair selection](state-event-cleanup-fairness.md). A
+preferred eligible row that cannot fit the remaining reservation causes a yield;
+cheaper opposite-class work cannot consume every fresh pass ahead of it. Claim
+preference and per-row queue tickets survive eviction and concurrent activations.
+All live leases still count together, including publication leases that become
+cleanup. No universal publication-slot reservation or wall-clock bound is claimed.

@@ -220,7 +220,7 @@ describe("immediate bounded state/event activation", () => {
     // Only the application clock moves. The native dispatcher cannot fire the
     // resulting fallback alarm two minutes in its real-clock future.
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
-    for (let index = 0; index < 3; index++) {
+    for (let index = 0; index < 8; index++) {
       const group = linked && index % 2 ? f.twitch : f.discord;
       const input = f.invocation(group); await f.command(input);
       try { await expect.poll(() => frames.length, { timeout: 4000 }).toBe(index + 1); }
@@ -239,7 +239,7 @@ describe("immediate bounded state/event activation", () => {
       await expect.poll(() => f.rows(f.streamStub, "durable_event_stream_events")).toEqual([]);
       clock.mockReturnValue(Date.now() + 1100);
     }
-    expect(await f.read()).toMatchObject({ state: "present", value: 97, stateEvent: { operationSequence: 3 } });
+    expect(await f.read()).toMatchObject({ state: "present", value: 92, stateEvent: { operationSequence: 8 } });
   });
 
   it("does not claim through an active reset and resumes after the reset releases", async () => {
