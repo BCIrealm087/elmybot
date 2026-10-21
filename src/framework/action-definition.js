@@ -24,6 +24,7 @@ const SUPPORTED_SERVICES = new Set([
   "shareableState",
   "state",
   "eventStreams",
+  "stateEvents",
   "random"
 ]);
 const COOLDOWN_SCOPES = new Set(["actor", "group"]);
@@ -59,7 +60,7 @@ function normalizeUses(value = {}) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError("Action uses must be an object.");
   }
-  const allowed = new Set(["routes", "effects", "services"]);
+  const allowed = new Set(["routes", "effects", "services", "stateEvents"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) throw new TypeError(`Unsupported action uses field: \`${key}\`.`);
   }
@@ -71,10 +72,21 @@ function normalizeUses(value = {}) {
   ) {
     throw new TypeError("Action uses.services is invalid.");
   }
+  let stateEvents;
+  if (services.includes("stateEvents") || value.stateEvents !== undefined) {
+    if (!services.includes("stateEvents") || !Array.isArray(value.stateEvents) ||
+        value.stateEvents.length < 1 || value.stateEvents.length > 20 ||
+        value.stateEvents.some((id) => typeof id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(id)) ||
+        new Set(value.stateEvents).size !== value.stateEvents.length) {
+      throw new TypeError("Action uses.stateEvents must list 1–20 unique operations with the stateEvents service.");
+    }
+    stateEvents = Object.freeze([...value.stateEvents]);
+  }
   return Object.freeze({
     routes: requireVersionedKinds(value.routes ?? [], "Action uses.routes"),
     effects: requireVersionedKinds(value.effects ?? [], "Action uses.effects"),
-    services: Object.freeze([...services])
+    services: Object.freeze([...services]),
+    ...(stateEvents ? { stateEvents } : {})
   });
 }
 
@@ -302,11 +314,14 @@ export function isBoundFeatureActionDefinition(value) {
   return isFrameworkDefinition(value, BOUND_ACTION_TYPE);
 }
 
-export function bindFeatureActionDefinition(action, featureId) {
+export function bindFeatureActionDefinition(action, featureId, stateEventOperations = null) {
   if (!isFeatureActionDefinition(action)) {
     throw new TypeError("Feature actions must be created with defineAction().");
   }
-  return markFrameworkDefinition({ ...action, featureId }, BOUND_ACTION_TYPE);
+  return markFrameworkDefinition({
+    ...action, featureId,
+    ...(stateEventOperations ? { stateEventOperations } : {})
+  }, BOUND_ACTION_TYPE);
 }
 
 export function validateFeatureActionCapability(action) {

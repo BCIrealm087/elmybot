@@ -1,3 +1,4 @@
+import { formatStateEventCommandError } from "../../state-events/command-errors.js";
 import { ActionRegistryError } from "../../actions/index.js";
 import { formatCommandInputError } from "../../framework/command-input-error.js";
 import {
@@ -35,6 +36,8 @@ function nativeContext(event, messageId) {
 function userFacingError(error, definition, capability = null) {
   const inputError = formatCommandInputError(error, definition);
   if (inputError !== null) return inputError;
+  const stateEventError = formatStateEventCommandError(error);
+  if (stateEventError !== null) return stateEventError;
   const commandName = definition.name;
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
     if (
@@ -57,7 +60,7 @@ export function compileTwitchFeatureCommands(definitions, actions = {}) {
     compiled[definition.name] = Object.freeze({
       description: definition.description,
       actionKind: definition.actionKind,
-      exec: async (event, env, { messageId, argsText }) => {
+      exec: async (event, env, { messageId, argsText, messageTimestamp }) => {
         const capability = definition.mode === "action-command"
           ? actions[definition.actionKind]?.capability ?? null
           : definition.capability;
@@ -71,6 +74,7 @@ export function compileTwitchFeatureCommands(definitions, actions = {}) {
               parsed,
               {
                 env,
+                messageTimestamp,
                 authorize: ({ capability, invocation }) =>
                   twitchCapabilityAllowed(capability, invocation.origin.actor.claims)
               }

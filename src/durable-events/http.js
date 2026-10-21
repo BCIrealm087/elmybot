@@ -362,7 +362,7 @@ export async function handleDurableEventRequest(
 ) {
   const url = new URL(request.url);
   try {
-    if (["app.js", "client.js", "ui.js", "browser.css"].some(
+    if (["app.js", "client.js", "correlation.js", "state-event.js", "ui.js", "browser.css"].some(
       (name) => url.pathname === `/event-stream/${name}`
     )) {
       return await env.BROWSER_ASSETS.fetch(request);

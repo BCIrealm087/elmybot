@@ -1,0 +1,6394 @@
+{
+  "schemaVersion": 2,
+  "measuredAt": "2026-10-20T22:44:29.045Z",
+  "sourceCommit": "9d18a93fca55b929603768c04791576ec792bf08",
+  "priceDate": "2026-10-20",
+  "priceSources": [
+    "https://developers.cloudflare.com/durable-objects/platform/pricing/",
+    "https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/",
+    "https://developers.cloudflare.com/workers/platform/pricing/"
+  ],
+  "runtime": {
+    "node": "24.19.0",
+    "vitest": "4.1.0",
+    "workerd": "1.20260825.1"
+  },
+  "measurements": [
+    {
+      "name": "bounds a real six-stream admission burst and relay batch (shared=false)",
+      "shared": false,
+      "burstSize": 6,
+      "accepted": {
+        "sqlCalls": 678,
+        "rowsRead": 4383,
+        "rowsWritten": 299,
+        "alarms": {
+          "reads": 6,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 12,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 6,
+          "/internal/state-events/command/invoke": 6
+        },
+        "databaseBytes": 602112,
+        "databaseBytesDelta": 98304,
+        "handlerSpanMs": 176,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 678,
+            "rowsRead": 4383,
+            "rowsWritten": 299
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 3377,
+            "rowsWritten": 256
+          },
+          "existingState": {
+            "rowsRead": 64,
+            "rowsWritten": 43
+          },
+          "schemaAndOther": {
+            "rowsRead": 936,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 6,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 66,
+            "rowsRead": 2386,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 24,
+            "rowsRead": 936,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 30,
+            "rowsRead": 18,
+            "rowsWritten": 72
+          }
+        ]
+      },
+      "drain": {
+        "sqlCalls": 1781,
+        "rowsRead": 11602,
+        "rowsWritten": 363,
+        "alarms": {
+          "reads": 43,
+          "writes": 42,
+          "deletes": 0,
+          "invocations": 6
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 18,
+        "requestPaths": {
+          "/internal/events/combined/interest": 6,
+          "/internal/events/combined/append": 6,
+          "/internal/events/combined/confirm": 6
+        },
+        "databaseBytes": 1339392,
+        "databaseBytesDelta": 737280,
+        "handlerSpanMs": 183,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 1289,
+            "rowsRead": 9658,
+            "rowsWritten": 99
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 492,
+            "rowsRead": 1944,
+            "rowsWritten": 264
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 9788,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 1639,
+            "rowsWritten": 261
+          },
+          "stateQuery": {
+            "rowsRead": 43,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 132,
+            "rowsWritten": 102
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 250,
+            "rowsRead": 9788,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 12,
+            "rowsRead": 396,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 6,
+            "rowsRead": 198,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "bounds a real six-stream admission burst and relay batch (shared=true)",
+      "shared": true,
+      "burstSize": 6,
+      "accepted": {
+        "sqlCalls": 903,
+        "rowsRead": 4006,
+        "rowsWritten": 352,
+        "alarms": {
+          "reads": 6,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 36,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 6,
+          "/shareable-state/resolve": 6,
+          "/internal/state-events/command/invoke": 6,
+          "/state-events/commit": 6,
+          "/internal/shareable-state/realm/state-event-commit": 6,
+          "/internal/shareable-state/realm/state-event-confirm": 6
+        },
+        "databaseBytes": 708608,
+        "databaseBytesDelta": 135168,
+        "handlerSpanMs": 600,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 252,
+            "rowsRead": 1402,
+            "rowsWritten": 104
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 180,
+            "rowsRead": 478,
+            "rowsWritten": 43
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 471,
+            "rowsRead": 2126,
+            "rowsWritten": 205
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 2700,
+            "rowsWritten": 307
+          },
+          "schemaAndOther": {
+            "rowsRead": 1170,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 18,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 18,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 100,
+            "rowsWritten": 45
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 66,
+            "rowsRead": 1762,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 30,
+            "rowsRead": 1170,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 30,
+            "rowsRead": 18,
+            "rowsWritten": 72
+          }
+        ]
+      },
+      "drain": {
+        "sqlCalls": 1840,
+        "rowsRead": 10062,
+        "rowsWritten": 417,
+        "alarms": {
+          "reads": 43,
+          "writes": 45,
+          "deletes": 0,
+          "invocations": 6
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 24,
+        "requestPaths": {
+          "/internal/events/combined/interest": 6,
+          "/state-events/append": 6,
+          "/internal/events/combined/append": 6,
+          "/internal/events/combined/confirm": 6
+        },
+        "databaseBytes": 1454080,
+        "databaseBytesDelta": 745472,
+        "handlerSpanMs": 282,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 1246,
+            "rowsRead": 8076,
+            "rowsWritten": 99
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 510,
+            "rowsRead": 1950,
+            "rowsWritten": 282
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 84,
+            "rowsRead": 36,
+            "rowsWritten": 36
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 8248,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 1676,
+            "rowsWritten": 297
+          },
+          "event": {
+            "rowsRead": 138,
+            "rowsWritten": 120
+          },
+          "stateQuery": {
+            "rowsRead": 0,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 250,
+            "rowsRead": 8248,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 12,
+            "rowsRead": 396,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 6,
+            "rowsRead": 198,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "bounds both physical receipt ledgers during a large combined-stream cleanup",
+      "syntheticExpiredReceiptPairs": 1000,
+      "cleanup": {
+        "sqlCalls": 14,
+        "rowsRead": 1322,
+        "rowsWritten": 61,
+        "alarms": {
+          "reads": 0,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 60,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 933888,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 3,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 14,
+            "rowsRead": 1322,
+            "rowsWritten": 61
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 99,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 137,
+            "rowsWritten": 21
+          },
+          "event": {
+            "rowsRead": 1086,
+            "rowsWritten": 40
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT MIN(deadline) AS deadline FROM ( SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_events UNION ALL SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_receipts UNION ALL SELECT MIN(expires_at_ms) AS deadlin",
+            "calls": 1,
+            "rowsRead": 983,
+            "rowsWritten": 0
+          },
+          {
+            "query": "DELETE FROM durable_event_stream_receipts WHERE event_id IN ( SELECT event_id FROM durable_event_stream_receipts WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20)",
+            "calls": 1,
+            "rowsRead": 100,
+            "rowsWritten": 40
+          },
+          {
+            "query": "DELETE FROM state_event_destination_records WHERE operation_id IN ( SELECT operation_id FROM state_event_destination_records WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20) RETURNING metadata_bytes",
+            "calls": 1,
+            "rowsRead": 100,
+            "rowsWritten": 20
+          }
+        ]
+      }
+    },
+    {
+      "name": "calibrates native SQL counters for indexes, triggers and deletes",
+      "calibration": {
+        "written": 3,
+        "deleted": 1,
+        "batchWritten": 3,
+        "measuredBatchWritten": 6
+      }
+    },
+    {
+      "name": "caps a sustained destination outage and makes the expiry outcome explicit",
+      "outage": {
+        "sqlCalls": 1680,
+        "rowsRead": 14891,
+        "rowsWritten": 84,
+        "alarms": {
+          "reads": 73,
+          "writes": 36,
+          "deletes": 0,
+          "invocations": 12
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 13,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 12
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 40960,
+        "handlerSpanMs": 123,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 1661,
+            "rowsRead": 14874,
+            "rowsWritten": 64
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 19,
+            "rowsRead": 17,
+            "rowsWritten": 20
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 14118,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 697,
+            "rowsWritten": 83
+          },
+          "stateQuery": {
+            "rowsRead": 73,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 1
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 353,
+            "rowsRead": 14118,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(next_attempt_at_ms) AS due FROM state_query_grant_invalidation_outbox",
+            "calls": 73,
+            "rowsRead": 73,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(next_wakeup_at_ms) AS due FROM state_event_outbox",
+            "calls": 73,
+            "rowsRead": 73,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "leaseWake": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "quiet": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "expiry": {
+        "sqlCalls": 171,
+        "rowsRead": 1643,
+        "rowsWritten": 9,
+        "alarms": {
+          "reads": 8,
+          "writes": 2,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/events/combined/append": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 29,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 171,
+            "rowsRead": 1643,
+            "rowsWritten": 9
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1520,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 71,
+            "rowsWritten": 9
+          },
+          "stateQuery": {
+            "rowsRead": 52,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 38,
+            "rowsRead": 1520,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'state_query_source_watchers'",
+            "calls": 1,
+            "rowsRead": 40,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(next_wakeup_at_ms) AS due FROM state_event_outbox",
+            "calls": 8,
+            "rowsRead": 13,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "attempts": 13
+    },
+    {
+      "name": "compares independent primitives with the complete online cycle (shared=false)",
+      "shared": false,
+      "stateOnly": {
+        "sqlCalls": 4,
+        "rowsRead": 25,
+        "rowsWritten": 2,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/framework/state/increment": 1
+        },
+        "databaseBytes": 606208,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 3,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 4,
+            "rowsRead": 25,
+            "rowsWritten": 2
+          }
+        },
+        "bySubsystem": {
+          "stateQuery": {
+            "rowsRead": 22,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 3,
+            "rowsWritten": 2
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'state_query_source_watchers'",
+            "calls": 1,
+            "rowsRead": 22,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO framework_feature_values (value_kind, feature_id, value_key, value_json, updated_at_ms) VALUES ('state', ?, ?, ?, ?) ON CONFLICT(value_kind, feature_id, value_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = ",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 1
+          },
+          {
+            "query": "INSERT INTO framework_feature_state_versions (feature_id, mutation_version) VALUES (?, 1) ON CONFLICT(feature_id) DO UPDATE SET mutation_version = mutation_version + 1",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "eventOnly": {
+        "sqlCalls": 53,
+        "rowsRead": 309,
+        "rowsWritten": 20,
+        "alarms": {
+          "reads": 0,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/durable-events/publications/prepare": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 606208,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 11,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 11,
+            "rowsWritten": 4
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 43,
+            "rowsRead": 298,
+            "rowsWritten": 16
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 43,
+            "rowsWritten": 20
+          },
+          "schemaAndOther": {
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 90,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 8,
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 22,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "coldAccept": {
+        "sqlCalls": 127,
+        "rowsRead": 1233,
+        "rowsWritten": 86,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 712704,
+        "databaseBytesDelta": 73728,
+        "handlerSpanMs": 11,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 127,
+            "rowsRead": 1233,
+            "rowsWritten": 86
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1067,
+            "rowsWritten": 81
+          },
+          "existingState": {
+            "rowsRead": 9,
+            "rowsWritten": 5
+          },
+          "schemaAndOther": {
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 326,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "calls": 1,
+            "rowsRead": 38,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "append": {
+        "sqlCalls": 306,
+        "rowsRead": 2049,
+        "rowsWritten": 42,
+        "alarms": {
+          "reads": 8,
+          "writes": 5,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 720896,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 39,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 219,
+            "rowsRead": 1694,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 87,
+            "rowsRead": 355,
+            "rowsWritten": 28
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1796,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 220,
+            "rowsWritten": 25
+          },
+          "stateQuery": {
+            "rowsRead": 8,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 25,
+            "rowsWritten": 17
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 46,
+            "rowsRead": 1796,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "ackAndCleanup": {
+        "sqlCalls": 288,
+        "rowsRead": 2425,
+        "rowsWritten": 29,
+        "alarms": {
+          "reads": 7,
+          "writes": 10,
+          "deletes": 1,
+          "invocations": 2
+        },
+        "deleteRowsWritten": 3,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 720896,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 37,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 96,
+            "rowsRead": 806,
+            "rowsWritten": 7
+          },
+          "CONFIG": {
+            "sqlCalls": 192,
+            "rowsRead": 1619,
+            "rowsWritten": 22
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 45,
+            "rowsWritten": 3
+          },
+          "schemaAndOther": {
+            "rowsRead": 1862,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 511,
+            "rowsWritten": 26
+          },
+          "stateQuery": {
+            "rowsRead": 7,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 49,
+            "rowsRead": 1862,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 7,
+            "rowsRead": 231,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 3,
+            "rowsRead": 120,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 695,
+        "rowsRead": 4979,
+        "rowsWritten": 105,
+        "alarms": {
+          "reads": 15,
+          "writes": 16,
+          "deletes": 1,
+          "invocations": 3
+        },
+        "deleteRowsWritten": 4,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 8,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 729088,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 82,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 512,
+            "rowsRead": 3811,
+            "rowsWritten": 72
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 183,
+            "rowsRead": 1168,
+            "rowsWritten": 33
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1214,
+            "rowsWritten": 79
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 3660,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 15,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 79,
+            "rowsWritten": 20
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 95,
+            "rowsRead": 3660,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 560,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "compares independent primitives with the complete online cycle (shared=true)",
+      "shared": true,
+      "stateOnly": {
+        "sqlCalls": 8,
+        "rowsRead": 21,
+        "rowsWritten": 2,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/shareable-state/realm/increment": 1
+        },
+        "databaseBytes": 675840,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 8,
+            "rowsRead": 21,
+            "rowsWritten": 2
+          }
+        },
+        "bySubsystem": {
+          "existingState": {
+            "rowsRead": 6,
+            "rowsWritten": 2
+          },
+          "stateQuery": {
+            "rowsRead": 15,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'state_query_source_watchers'",
+            "calls": 1,
+            "rowsRead": 15,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO shareable_state_realm_values (feature_id, namespace_id, value_key, value_json, updated_at_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT(feature_id, namespace_id, value_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms ",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 1
+          },
+          {
+            "query": "UPDATE shareable_state_realm_namespaces SET mutation_version = mutation_version + 1, updated_at_ms = ? WHERE feature_id = ? AND namespace_id = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "eventOnly": {
+        "sqlCalls": 84,
+        "rowsRead": 416,
+        "rowsWritten": 23,
+        "alarms": {
+          "reads": 1,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 5,
+        "requestPaths": {
+          "/shareable-state/resolve": 1,
+          "/internal/durable-events/publications/prepare": 1,
+          "/durable-events/append": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 675840,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 15,
+        "byRole": {
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 29,
+            "rowsRead": 105,
+            "rowsWritten": 2
+          },
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 11,
+            "rowsWritten": 4
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 45,
+            "rowsRead": 300,
+            "rowsWritten": 17
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 243,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 29,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 54,
+            "rowsWritten": 23
+          },
+          "combined": {
+            "rowsRead": 90,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 9,
+            "rowsRead": 243,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "WITH next_maintenance(next_at_ms) AS (VALUES ((SELECT MIN(expires_at_ms) FROM integration_invitations WHERE status IN ('invited', 'pending'))), ((SELECT MIN(reservation_expires_at_ms) FROM integration_invitations WHERE status = 'reserved'))",
+            "calls": 1,
+            "rowsRead": 24,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "coldAccept": {
+        "sqlCalls": 165,
+        "rowsRead": 1136,
+        "rowsWritten": 107,
+        "alarms": {
+          "reads": 2,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 815104,
+        "databaseBytesDelta": 106496,
+        "handlerSpanMs": 41,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 42,
+            "rowsRead": 252,
+            "rowsWritten": 24
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 30,
+            "rowsRead": 83,
+            "rowsWritten": 13
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 93,
+            "rowsRead": 801,
+            "rowsWritten": 70
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 920,
+            "rowsWritten": 102
+          },
+          "schemaAndOther": {
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 15,
+            "rowsWritten": 5
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 262,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 5,
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_budget ADD COLUMN terminal_reserve_bytes INTEGER NOT NULL DEFAULT 0",
+            "calls": 2,
+            "rowsRead": 49,
+            "rowsWritten": 2
+          }
+        ]
+      },
+      "append": {
+        "sqlCalls": 314,
+        "rowsRead": 1769,
+        "rowsWritten": 49,
+        "alarms": {
+          "reads": 8,
+          "writes": 5,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 4,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 827392,
+        "databaseBytesDelta": 12288,
+        "handlerSpanMs": 42,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 211,
+            "rowsRead": 1406,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 89,
+            "rowsRead": 357,
+            "rowsWritten": 29
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 14,
+            "rowsRead": 6,
+            "rowsWritten": 6
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1516,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 226,
+            "rowsWritten": 31
+          },
+          "event": {
+            "rowsRead": 27,
+            "rowsWritten": 18
+          },
+          "stateQuery": {
+            "rowsRead": 0,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 46,
+            "rowsRead": 1516,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "ackAndCleanup": {
+        "sqlCalls": 282,
+        "rowsRead": 2138,
+        "rowsWritten": 29,
+        "alarms": {
+          "reads": 7,
+          "writes": 10,
+          "deletes": 1,
+          "invocations": 2
+        },
+        "deleteRowsWritten": 3,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 4,
+        "requestPaths": {
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 827392,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 35,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 96,
+            "rowsRead": 806,
+            "rowsWritten": 7
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 176,
+            "rowsRead": 1272,
+            "rowsWritten": 18
+          },
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 60,
+            "rowsWritten": 4
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 45,
+            "rowsWritten": 3
+          },
+          "schemaAndOther": {
+            "rowsRead": 1617,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 476,
+            "rowsWritten": 26
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 49,
+            "rowsRead": 1617,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 7,
+            "rowsRead": 231,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 3,
+            "rowsRead": 85,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 737,
+        "rowsRead": 4440,
+        "rowsWritten": 118,
+        "alarms": {
+          "reads": 16,
+          "writes": 16,
+          "deletes": 1,
+          "invocations": 3
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 827392,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 94,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 453,
+            "rowsRead": 2816,
+            "rowsWritten": 51
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 185,
+            "rowsRead": 1170,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1059,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 84,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 97,
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "counts existing watcher mutation and delivery work separately (shared=false)",
+      "shared": false,
+      "watcherCount": 1,
+      "withoutWatcher": {
+        "sqlCalls": 108,
+        "rowsRead": 661,
+        "rowsWritten": 39,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 626688,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 10,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 108,
+            "rowsRead": 661,
+            "rowsWritten": 39
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 489,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "withWatcher": {
+        "sqlCalls": 110,
+        "rowsRead": 800,
+        "rowsWritten": 43,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 659456,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 7,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 110,
+            "rowsRead": 800,
+            "rowsWritten": 43
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 589,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 12,
+            "rowsWritten": 10
+          },
+          "schemaAndOther": {
+            "rowsRead": 196,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 539,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 196,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "notify": {
+        "sqlCalls": 26,
+        "rowsRead": 216,
+        "rowsWritten": 8,
+        "alarms": {
+          "reads": 2,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-query/notifications/deliver": 1
+        },
+        "databaseBytes": 798720,
+        "databaseBytesDelta": 139264,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 15,
+            "rowsRead": 208,
+            "rowsWritten": 3
+          },
+          "STATE_QUERY_OBSERVER": {
+            "sqlCalls": 11,
+            "rowsRead": 8,
+            "rowsWritten": 5
+          }
+        },
+        "bySubsystem": {
+          "stateQuery": {
+            "rowsRead": 19,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 196,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 196,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_query_observer_notifications (notification_id, watcher_id, source_kind, source_key, feature_id, namespace_id, source_revision, committed_at_ms, received_at_ms, binding_status, binding_source_key, binding_reason) VALUES (?,",
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          {
+            "query": "UPDATE state_query_notification_outbox SET attempt_count = attempt_count + 1, next_attempt_at_ms = ? WHERE notification_id = ? AND next_attempt_at_ms <= ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "counts existing watcher mutation and delivery work separately (shared=true)",
+      "shared": true,
+      "watcherCount": 1,
+      "withoutWatcher": {
+        "sqlCalls": 147,
+        "rowsRead": 660,
+        "rowsWritten": 45,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 31,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 43,
+            "rowsRead": 233,
+            "rowsWritten": 17
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 32,
+            "rowsRead": 155,
+            "rowsWritten": 6
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 72,
+            "rowsRead": 272,
+            "rowsWritten": 22
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 363,
+            "rowsWritten": 39
+          },
+          "schemaAndOther": {
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 307,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 6,
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "withWatcher": {
+        "sqlCalls": 149,
+        "rowsRead": 720,
+        "rowsWritten": 49,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 770048,
+        "databaseBytesDelta": 16384,
+        "handlerSpanMs": 37,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 43,
+            "rowsRead": 233,
+            "rowsWritten": 17
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 32,
+            "rowsRead": 155,
+            "rowsWritten": 6
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 74,
+            "rowsRead": 332,
+            "rowsWritten": 26
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 388,
+            "rowsWritten": 39
+          },
+          "schemaAndOther": {
+            "rowsRead": 306,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 5,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 18,
+            "rowsWritten": 10
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 331,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 6,
+            "rowsRead": 306,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "notify": {
+        "sqlCalls": 25,
+        "rowsRead": 183,
+        "rowsWritten": 8,
+        "alarms": {
+          "reads": 2,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-query/notifications/deliver": 1
+        },
+        "databaseBytes": 909312,
+        "databaseBytesDelta": 139264,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 14,
+            "rowsRead": 175,
+            "rowsWritten": 3
+          },
+          "STATE_QUERY_OBSERVER": {
+            "sqlCalls": 11,
+            "rowsRead": 8,
+            "rowsWritten": 5
+          }
+        },
+        "bySubsystem": {
+          "stateQuery": {
+            "rowsRead": 18,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 164,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 164,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_query_observer_notifications (notification_id, watcher_id, source_kind, source_key, feature_id, namespace_id, source_revision, committed_at_ms, received_at_ms, binding_status, binding_source_key, binding_reason) VALUES (?,",
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 4
+          },
+          {
+            "query": "UPDATE state_query_notification_outbox SET attempt_count = attempt_count + 1, next_attempt_at_ms = ? WHERE notification_id = ? AND next_attempt_at_ms <= ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 2
+          }
+        ]
+      }
+    },
+    {
+      "name": "does not wake confirmed offline events when more commands arrive (shared=false)",
+      "shared": false,
+      "acceptedWith25Appended": {
+        "sqlCalls": 108,
+        "rowsRead": 685,
+        "rowsWritten": 39,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 757760,
+        "databaseBytesDelta": 4096,
+        "handlerSpanMs": 5,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 108,
+            "rowsRead": 685,
+            "rowsWritten": 39
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 513,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "UPDATE state_event_outbox SET next_wakeup_at_ms = MIN(COALESCE(next_wakeup_at_ms, deadline_ms), ?), last_error = 'useful_wakeup' WHERE stream_route_id = ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) AND attempts < 19 AND state IN ('",
+            "calls": 1,
+            "rowsRead": 25,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "does not wake confirmed offline events when more commands arrive (shared=true)",
+      "shared": true,
+      "acceptedWith25Appended": {
+        "sqlCalls": 147,
+        "rowsRead": 684,
+        "rowsWritten": 45,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 897024,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 34,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 43,
+            "rowsRead": 233,
+            "rowsWritten": 17
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 32,
+            "rowsRead": 155,
+            "rowsWritten": 6
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 72,
+            "rowsRead": 296,
+            "rowsWritten": 22
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 387,
+            "rowsWritten": 39
+          },
+          "schemaAndOther": {
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 307,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 6,
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          {
+            "query": "UPDATE state_event_outbox SET next_wakeup_at_ms = MIN(COALESCE(next_wakeup_at_ms, deadline_ms), ?), last_error = 'useful_wakeup' WHERE stream_route_id = ? AND (lease_until_ms IS NULL OR lease_until_ms <= ?) AND attempts < 19 AND state IN ('",
+            "calls": 1,
+            "rowsRead": 25,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "keeps command recovery and new admission independent of ten thousand historical receipts",
+      "historyRows": 10000,
+      "before": {
+        "sqlCalls": 108,
+        "rowsRead": 661,
+        "rowsWritten": 39,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 626688,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 7,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 108,
+            "rowsRead": 661,
+            "rowsWritten": 39
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 489,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "after": {
+        "sqlCalls": 108,
+        "rowsRead": 662,
+        "rowsWritten": 39,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 1347584,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 8,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 108,
+            "rowsRead": 662,
+            "rowsWritten": 39
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 490,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "duplicateBefore": {
+        "sqlCalls": 2,
+        "rowsRead": 41,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1
+        },
+        "databaseBytes": 626688,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 1,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 2,
+            "rowsRead": 41,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 41,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 1,
+            "rowsRead": 40,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT * FROM state_event_records WHERE record_key = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "duplicateAfter": {
+        "sqlCalls": 2,
+        "rowsRead": 41,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1
+        },
+        "databaseBytes": 1347584,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 1,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 2,
+            "rowsRead": 41,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 41,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 1,
+            "rowsRead": 40,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT * FROM state_event_records WHERE record_key = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures delayed receipt deletes as well as immediate delivery (shared=false)",
+      "shared": false,
+      "retiredOperations": 10,
+      "warmAccept": {
+        "sqlCalls": 108,
+        "rowsRead": 660,
+        "rowsWritten": 39,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 757760,
+        "databaseBytesDelta": 4096,
+        "handlerSpanMs": 7,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 108,
+            "rowsRead": 660,
+            "rowsWritten": 39
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 488,
+            "rowsWritten": 33
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "warmEvent": {
+        "sqlCalls": 53,
+        "rowsRead": 365,
+        "rowsWritten": 21,
+        "alarms": {
+          "reads": 0,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/durable-events/publications/prepare": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 753664,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 8,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 35,
+            "rowsWritten": 4
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 43,
+            "rowsRead": 330,
+            "rowsWritten": 17
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 99,
+            "rowsWritten": 21
+          },
+          "schemaAndOther": {
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 90,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 8,
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(deadline) AS deadline FROM ( SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_events UNION ALL SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_receipts UNION ALL SELECT MIN(expires_at_ms) AS deadlin",
+            "calls": 2,
+            "rowsRead": 24,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "sourcePrune": {
+        "sqlCalls": 148,
+        "rowsRead": 719,
+        "rowsWritten": 79,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 21,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 729088,
+        "databaseBytesDelta": -28672,
+        "handlerSpanMs": 7,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 148,
+            "rowsRead": 719,
+            "rowsWritten": 79
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 547,
+            "rowsWritten": 73
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 160,
+            "rowsWritten": 0
+          },
+          {
+            "query": "UPDATE state_event_budget SET rows = rows - 1, metadata_bytes = metadata_bytes - ?, pending_rows = pending_rows - ?, pending_bytes = pending_bytes - ? WHERE singleton = 1",
+            "calls": 20,
+            "rowsRead": 20,
+            "rowsWritten": 20
+          }
+        ]
+      },
+      "destinationPrune": {
+        "sqlCalls": 17,
+        "rowsRead": 246,
+        "rowsWritten": 31,
+        "alarms": {
+          "reads": 0,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 30,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 729088,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 17,
+            "rowsRead": 246,
+            "rowsWritten": 31
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 99,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 88,
+            "rowsWritten": 11
+          },
+          "event": {
+            "rowsRead": 59,
+            "rowsWritten": 20
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 3,
+            "rowsRead": 99,
+            "rowsWritten": 0
+          },
+          {
+            "query": "DELETE FROM durable_event_stream_receipts WHERE event_id IN ( SELECT event_id FROM durable_event_stream_receipts WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20)",
+            "calls": 1,
+            "rowsRead": 50,
+            "rowsWritten": 20
+          },
+          {
+            "query": "DELETE FROM state_event_destination_records WHERE operation_id IN ( SELECT operation_id FROM state_event_destination_records WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20) RETURNING metadata_bytes",
+            "calls": 1,
+            "rowsRead": 50,
+            "rowsWritten": 10
+          }
+        ]
+      },
+      "eventPrune": {
+        "sqlCalls": 53,
+        "rowsRead": 332,
+        "rowsWritten": 41,
+        "alarms": {
+          "reads": 0,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 22,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/durable-events/publications/prepare": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 720896,
+        "databaseBytesDelta": -8192,
+        "handlerSpanMs": 8,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 28,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 43,
+            "rowsRead": 304,
+            "rowsWritten": 27
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 66,
+            "rowsWritten": 41
+          },
+          "schemaAndOther": {
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 90,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 8,
+            "rowsRead": 176,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 22,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "cleanupAllowance": {
+        "combinedRowsPerOperation": 7.2,
+        "eventRowsPerOperation": 2
+      }
+    },
+    {
+      "name": "measures delayed receipt deletes as well as immediate delivery (shared=true)",
+      "shared": true,
+      "retiredOperations": 10,
+      "warmAccept": {
+        "sqlCalls": 147,
+        "rowsRead": 659,
+        "rowsWritten": 45,
+        "alarms": {
+          "reads": 2,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 872448,
+        "databaseBytesDelta": 4096,
+        "handlerSpanMs": 29,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 43,
+            "rowsRead": 233,
+            "rowsWritten": 17
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 32,
+            "rowsRead": 155,
+            "rowsWritten": 6
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 72,
+            "rowsRead": 271,
+            "rowsWritten": 22
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 362,
+            "rowsWritten": 39
+          },
+          "schemaAndOther": {
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 307,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 6,
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO state_event_records VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(record_key) DO UPDATE SET metadata_json = excluded.metadata_json, metadata_bytes = excluded.metadata_bytes, request_json = excluded.request_json, request_bytes = exclu",
+            "calls": 5,
+            "rowsRead": 3,
+            "rowsWritten": 12
+          }
+        ]
+      },
+      "warmEvent": {
+        "sqlCalls": 86,
+        "rowsRead": 548,
+        "rowsWritten": 24,
+        "alarms": {
+          "reads": 1,
+          "writes": 3,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 5,
+        "requestPaths": {
+          "/shareable-state/resolve": 1,
+          "/internal/durable-events/publications/prepare": 1,
+          "/durable-events/append": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 868352,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 16,
+        "byRole": {
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 31,
+            "rowsRead": 181,
+            "rowsWritten": 2
+          },
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 35,
+            "rowsWritten": 4
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 45,
+            "rowsRead": 332,
+            "rowsWritten": 18
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 318,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 91,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 29,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 110,
+            "rowsWritten": 24
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 10,
+            "rowsRead": 318,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(deadline) AS deadline FROM ( SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_events UNION ALL SELECT MIN(expires_at_ms) AS deadline FROM durable_event_stream_receipts UNION ALL SELECT MIN(expires_at_ms) AS deadlin",
+            "calls": 2,
+            "rowsRead": 24,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "sourcePrune": {
+        "sqlCalls": 187,
+        "rowsRead": 717,
+        "rowsWritten": 86,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 23,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 835584,
+        "databaseBytesDelta": -36864,
+        "handlerSpanMs": 34,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 63,
+            "rowsRead": 262,
+            "rowsWritten": 37
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 32,
+            "rowsRead": 155,
+            "rowsWritten": 7
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 92,
+            "rowsRead": 300,
+            "rowsWritten": 42
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 420,
+            "rowsWritten": 79
+          },
+          "schemaAndOther": {
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 1
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 307,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 6,
+            "rowsRead": 274,
+            "rowsWritten": 0
+          },
+          {
+            "query": "UPDATE state_event_budget SET rows = rows - 1, metadata_bytes = metadata_bytes - ?, pending_rows = pending_rows - ?, pending_bytes = pending_bytes - ? WHERE singleton = 1",
+            "calls": 20,
+            "rowsRead": 20,
+            "rowsWritten": 20
+          }
+        ]
+      },
+      "destinationPrune": {
+        "sqlCalls": 17,
+        "rowsRead": 246,
+        "rowsWritten": 31,
+        "alarms": {
+          "reads": 0,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 30,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 835584,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 17,
+            "rowsRead": 246,
+            "rowsWritten": 31
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 99,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 88,
+            "rowsWritten": 11
+          },
+          "event": {
+            "rowsRead": 59,
+            "rowsWritten": 20
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 3,
+            "rowsRead": 99,
+            "rowsWritten": 0
+          },
+          {
+            "query": "DELETE FROM durable_event_stream_receipts WHERE event_id IN ( SELECT event_id FROM durable_event_stream_receipts WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20)",
+            "calls": 1,
+            "rowsRead": 50,
+            "rowsWritten": 20
+          },
+          {
+            "query": "DELETE FROM state_event_destination_records WHERE operation_id IN ( SELECT operation_id FROM state_event_destination_records WHERE expires_at_ms <= ? ORDER BY expires_at_ms LIMIT 20) RETURNING metadata_bytes",
+            "calls": 1,
+            "rowsRead": 50,
+            "rowsWritten": 10
+          }
+        ]
+      },
+      "eventPrune": {
+        "sqlCalls": 88,
+        "rowsRead": 513,
+        "rowsWritten": 45,
+        "alarms": {
+          "reads": 0,
+          "writes": 3,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 22,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 5,
+        "requestPaths": {
+          "/shareable-state/resolve": 1,
+          "/internal/durable-events/publications/prepare": 1,
+          "/durable-events/append": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 827392,
+        "databaseBytesDelta": -8192,
+        "handlerSpanMs": 18,
+        "byRole": {
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 33,
+            "rowsRead": 179,
+            "rowsWritten": 3
+          },
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 28,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 45,
+            "rowsRead": 306,
+            "rowsWritten": 28
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 318,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 91,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 29,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 75,
+            "rowsWritten": 45
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 10,
+            "rowsRead": 318,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "WITH next_maintenance(next_at_ms) AS (VALUES ((SELECT MIN(expires_at_ms) FROM integration_invitations WHERE status IN ('invited', 'pending'))), ((SELECT MIN(reservation_expires_at_ms) FROM integration_invitations WHERE status = 'reserved'))",
+            "calls": 1,
+            "rowsRead": 24,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "cleanupAllowance": {
+        "combinedRowsPerOperation": 7.3,
+        "eventRowsPerOperation": 2.1
+      }
+    },
+    {
+      "name": "measures immediate command delivery without an extra relay request (shared=false)",
+      "shared": false,
+      "immediate": true,
+      "cold": {
+        "sqlCalls": 423,
+        "rowsRead": 3085,
+        "rowsWritten": 147,
+        "alarms": {
+          "reads": 8,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 5,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 114688,
+        "handlerSpanMs": 21,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 341,
+            "rowsRead": 2761,
+            "rowsWritten": 103
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 82,
+            "rowsRead": 324,
+            "rowsWritten": 44
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1292,
+            "rowsWritten": 122
+          },
+          "existingState": {
+            "rowsRead": 4,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 1759,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 8,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 22,
+            "rowsWritten": 17
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 45,
+            "rowsRead": 1759,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 326,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warm": {
+        "sqlCalls": 394,
+        "rowsRead": 2366,
+        "rowsWritten": 77,
+        "alarms": {
+          "reads": 7,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 5,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 626688,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 16,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 314,
+            "rowsRead": 2048,
+            "rowsWritten": 50
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 80,
+            "rowsRead": 318,
+            "rowsWritten": 27
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 718,
+            "rowsWritten": 53
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 1605,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 7,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 25,
+            "rowsWritten": 18
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 41,
+            "rowsRead": 1605,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 440,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures immediate command delivery without an extra relay request (shared=true)",
+      "shared": true,
+      "immediate": true,
+      "cold": {
+        "sqlCalls": 473,
+        "rowsRead": 2737,
+        "rowsWritten": 179,
+        "alarms": {
+          "reads": 8,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 2,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 10,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 151552,
+        "handlerSpanMs": 108,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 42,
+            "rowsRead": 252,
+            "rowsWritten": 24
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 44,
+            "rowsRead": 89,
+            "rowsWritten": 19
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 302,
+            "rowsRead": 2071,
+            "rowsWritten": 89
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 85,
+            "rowsRead": 325,
+            "rowsWritten": 47
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1152,
+            "rowsWritten": 149
+          },
+          "schemaAndOther": {
+            "rowsRead": 1546,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 26,
+            "rowsWritten": 20
+          },
+          "existingState": {
+            "rowsRead": 10,
+            "rowsWritten": 10
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 46,
+            "rowsRead": 1546,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 263,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warm": {
+        "sqlCalls": 443,
+        "rowsRead": 2143,
+        "rowsWritten": 90,
+        "alarms": {
+          "reads": 7,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 4,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 10,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 62,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 43,
+            "rowsRead": 233,
+            "rowsWritten": 17
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 272,
+            "rowsRead": 1429,
+            "rowsWritten": 33
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 82,
+            "rowsRead": 320,
+            "rowsWritten": 28
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 598,
+            "rowsWritten": 65
+          },
+          "schemaAndOther": {
+            "rowsRead": 1495,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 30,
+            "rowsWritten": 19
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 43,
+            "rowsRead": 1495,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 307,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures immediate publication through ACK and cleanup ({\"shared\":false})",
+      "immediate": true,
+      "installedHealth": false,
+      "shared": false,
+      "coldOnline": {
+        "sqlCalls": 712,
+        "rowsRead": 5412,
+        "rowsWritten": 160,
+        "alarms": {
+          "reads": 14,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 3,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 8,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 81920,
+        "handlerSpanMs": 55,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 527,
+            "rowsRead": 4217,
+            "rowsWritten": 125
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 185,
+            "rowsRead": 1195,
+            "rowsWritten": 35
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1797,
+            "rowsWritten": 132
+          },
+          "existingState": {
+            "rowsRead": 4,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 3527,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 14,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 70,
+            "rowsWritten": 20
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 92,
+            "rowsRead": 3527,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 446,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 685,
+        "rowsRead": 4689,
+        "rowsWritten": 105,
+        "alarms": {
+          "reads": 13,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 4,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 8,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 626688,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 45,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 500,
+            "rowsRead": 3487,
+            "rowsWritten": 72
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 185,
+            "rowsRead": 1202,
+            "rowsWritten": 33
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1213,
+            "rowsWritten": 79
+          },
+          "existingState": {
+            "rowsRead": 11,
+            "rowsWritten": 6
+          },
+          "schemaAndOther": {
+            "rowsRead": 3373,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 13,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 79,
+            "rowsWritten": 20
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 88,
+            "rowsRead": 3373,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 560,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures immediate publication through ACK and cleanup ({\"shared\":true,\"installedHealth\":true})",
+      "immediate": true,
+      "installedHealth": true,
+      "shared": true,
+      "coldOnline": {
+        "sqlCalls": 758,
+        "rowsRead": 4807,
+        "rowsWritten": 190,
+        "alarms": {
+          "reads": 14,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 5,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 118784,
+        "handlerSpanMs": 92,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 52,
+            "rowsRead": 312,
+            "rowsWritten": 28
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 44,
+            "rowsRead": 89,
+            "rowsWritten": 19
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 475,
+            "rowsRead": 3209,
+            "rowsWritten": 107
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 187,
+            "rowsRead": 1197,
+            "rowsWritten": 36
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1622,
+            "rowsWritten": 159
+          },
+          "schemaAndOther": {
+            "rowsRead": 3097,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 75,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 10,
+            "rowsWritten": 10
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 93,
+            "rowsRead": 3097,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 348,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 731,
+        "rowsRead": 4208,
+        "rowsWritten": 118,
+        "alarms": {
+          "reads": 13,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 94,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 445,
+            "rowsRead": 2550,
+            "rowsWritten": 51
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 187,
+            "rowsRead": 1204,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1058,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 84,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 90,
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "clampedNoop": {
+        "sqlCalls": 730,
+        "rowsRead": 4225,
+        "rowsWritten": 117,
+        "alarms": {
+          "reads": 13,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 741376,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 111,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 444,
+            "rowsRead": 2549,
+            "rowsWritten": 50
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 187,
+            "rowsRead": 1222,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1058,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 102,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 16,
+            "rowsWritten": 5
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 90,
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures immediate publication through ACK and cleanup ({\"shared\":true})",
+      "immediate": true,
+      "installedHealth": false,
+      "shared": true,
+      "coldOnline": {
+        "sqlCalls": 756,
+        "rowsRead": 4807,
+        "rowsWritten": 190,
+        "alarms": {
+          "reads": 14,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 5,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 118784,
+        "handlerSpanMs": 111,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 52,
+            "rowsRead": 312,
+            "rowsWritten": 28
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 44,
+            "rowsRead": 89,
+            "rowsWritten": 19
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 473,
+            "rowsRead": 3209,
+            "rowsWritten": 107
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 187,
+            "rowsRead": 1197,
+            "rowsWritten": 36
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1622,
+            "rowsWritten": 159
+          },
+          "schemaAndOther": {
+            "rowsRead": 3097,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 75,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 10,
+            "rowsWritten": 10
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 93,
+            "rowsRead": 3097,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 348,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 729,
+        "rowsRead": 4208,
+        "rowsWritten": 118,
+        "alarms": {
+          "reads": 13,
+          "writes": 13,
+          "deletes": 1,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/events/combined/interest": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 73,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 443,
+            "rowsRead": 2550,
+            "rowsWritten": 51
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 187,
+            "rowsRead": 1204,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1058,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 84,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 90,
+            "rowsRead": 3046,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "measures installed health v2, legacy v1 delivery and clamped no-ops",
+      "installedHealth": true,
+      "shared": true,
+      "eventOnly": {
+        "sqlCalls": 84,
+        "rowsRead": 416,
+        "rowsWritten": 23,
+        "alarms": {
+          "reads": 1,
+          "writes": 4,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 1,
+        "peakAppends": 0,
+        "requests": 5,
+        "requestPaths": {
+          "/shareable-state/resolve": 1,
+          "/internal/durable-events/publications/prepare": 1,
+          "/durable-events/append": 1,
+          "/internal/events/append": 1,
+          "/internal/durable-events/publications/finalize": 1
+        },
+        "databaseBytes": 675840,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 16,
+        "byRole": {
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 29,
+            "rowsRead": 105,
+            "rowsWritten": 2
+          },
+          "CONFIG": {
+            "sqlCalls": 10,
+            "rowsRead": 11,
+            "rowsWritten": 4
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 45,
+            "rowsRead": 300,
+            "rowsWritten": 17
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 243,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 29,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 54,
+            "rowsWritten": 23
+          },
+          "combined": {
+            "rowsRead": 90,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 9,
+            "rowsRead": 243,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 44,
+            "rowsWritten": 0
+          },
+          {
+            "query": "WITH next_maintenance(next_at_ms) AS (VALUES ((SELECT MIN(expires_at_ms) FROM integration_invitations WHERE status IN ('invited', 'pending'))), ((SELECT MIN(reservation_expires_at_ms) FROM integration_invitations WHERE status = 'reserved'))",
+            "calls": 1,
+            "rowsRead": 24,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "stateOnly": {
+        "sqlCalls": 9,
+        "rowsRead": 19,
+        "rowsWritten": 4,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/shareable-state/realm/bounded-counter": 1
+        },
+        "databaseBytes": 675840,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 9,
+            "rowsRead": 19,
+            "rowsWritten": 4
+          }
+        },
+        "bySubsystem": {
+          "existingState": {
+            "rowsRead": 4,
+            "rowsWritten": 4
+          },
+          "stateQuery": {
+            "rowsRead": 15,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'state_query_source_watchers'",
+            "calls": 1,
+            "rowsRead": 15,
+            "rowsWritten": 0
+          },
+          {
+            "query": "INSERT INTO shareable_state_realm_values (feature_id, namespace_id, value_key, value_json, updated_at_ms) VALUES (?, ?, ?, ?, ?) ON CONFLICT(feature_id, namespace_id, value_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms ",
+            "calls": 1,
+            "rowsRead": 0,
+            "rowsWritten": 3
+          },
+          {
+            "query": "UPDATE shareable_state_realm_namespaces SET mutation_version = mutation_version + 1, updated_at_ms = ? WHERE feature_id = ? AND namespace_id = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "coldAccept": {
+        "sqlCalls": 167,
+        "rowsRead": 1136,
+        "rowsWritten": 107,
+        "alarms": {
+          "reads": 2,
+          "writes": 2,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 815104,
+        "databaseBytesDelta": 106496,
+        "handlerSpanMs": 40,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 42,
+            "rowsRead": 252,
+            "rowsWritten": 24
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 30,
+            "rowsRead": 83,
+            "rowsWritten": 13
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 95,
+            "rowsRead": 801,
+            "rowsWritten": 70
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 920,
+            "rowsWritten": 102
+          },
+          "schemaAndOther": {
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 15,
+            "rowsWritten": 5
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 262,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 5,
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_budget ADD COLUMN terminal_reserve_bytes INTEGER NOT NULL DEFAULT 0",
+            "calls": 2,
+            "rowsRead": 49,
+            "rowsWritten": 2
+          }
+        ]
+      },
+      "warmOnline": {
+        "sqlCalls": 739,
+        "rowsRead": 4440,
+        "rowsWritten": 118,
+        "alarms": {
+          "reads": 16,
+          "writes": 16,
+          "deletes": 1,
+          "invocations": 3
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 827392,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 158,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 455,
+            "rowsRead": 2816,
+            "rowsWritten": 51
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 185,
+            "rowsRead": 1170,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1059,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 84,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 17,
+            "rowsWritten": 6
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 97,
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "clampedNoop": {
+        "sqlCalls": 738,
+        "rowsRead": 4448,
+        "rowsWritten": 117,
+        "alarms": {
+          "reads": 16,
+          "writes": 16,
+          "deletes": 1,
+          "invocations": 3
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 1,
+        "peakAppends": 1,
+        "requests": 14,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1,
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/outcome": 1,
+          "/internal/state-events/origin/retire": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 835584,
+        "databaseBytesDelta": 8192,
+        "handlerSpanMs": 126,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 53,
+            "rowsRead": 293,
+            "rowsWritten": 21
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 46,
+            "rowsRead": 161,
+            "rowsWritten": 12
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 454,
+            "rowsRead": 2815,
+            "rowsWritten": 50
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 185,
+            "rowsRead": 1179,
+            "rowsWritten": 34
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1059,
+            "rowsWritten": 91
+          },
+          "schemaAndOther": {
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 93,
+            "rowsWritten": 21
+          },
+          "existingState": {
+            "rowsRead": 16,
+            "rowsWritten": 5
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 97,
+            "rowsRead": 3277,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 14,
+            "rowsRead": 392,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 9,
+            "rowsRead": 297,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "parks capacity pressure until a useful reconnect and drains without periodic probes",
+      "pressure": "synthetic full retained-count boundary",
+      "parked": {
+        "sqlCalls": 207,
+        "rowsRead": 1533,
+        "rowsWritten": 29,
+        "alarms": {
+          "reads": 7,
+          "writes": 3,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 40960,
+        "handlerSpanMs": 22,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 166,
+            "rowsRead": 1436,
+            "rowsWritten": 9
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 41,
+            "rowsRead": 97,
+            "rowsWritten": 20
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1424,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 92,
+            "rowsWritten": 28
+          },
+          "stateQuery": {
+            "rowsRead": 7,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 10,
+            "rowsWritten": 1
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 36,
+            "rowsRead": 1424,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(next_attempt_at_ms) AS due FROM state_query_grant_invalidation_outbox",
+            "calls": 7,
+            "rowsRead": 7,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT MIN(next_wakeup_at_ms) AS due FROM state_event_outbox",
+            "calls": 7,
+            "rowsRead": 7,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "leaseWake": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "quiet": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "reconnect": {
+        "sqlCalls": 473,
+        "rowsRead": 3413,
+        "rowsWritten": 47,
+        "alarms": {
+          "reads": 10,
+          "writes": 11,
+          "deletes": 0,
+          "invocations": 2
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 7,
+        "requestPaths": {
+          "/internal/events/grants/issue": 1,
+          "/internal/state-events/delivery/status": 2,
+          "/internal/events/socket": 1,
+          "/internal/state-events/delivery/wake": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 57,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 160,
+            "rowsRead": 1088,
+            "rowsWritten": 33
+          },
+          "CONFIG": {
+            "sqlCalls": 313,
+            "rowsRead": 2325,
+            "rowsWritten": 14
+          }
+        },
+        "bySubsystem": {
+          "event": {
+            "rowsRead": 72,
+            "rowsWritten": 22
+          },
+          "schemaAndOther": {
+            "rowsRead": 2827,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 504,
+            "rowsWritten": 25
+          },
+          "stateQuery": {
+            "rowsRead": 10,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 74,
+            "rowsRead": 2827,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 7,
+            "rowsRead": 231,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "performs no offline polling across thirty days and clears finite retained work",
+      "offlineDays": 30,
+      "accept": {
+        "sqlCalls": 128,
+        "rowsRead": 1228,
+        "rowsWritten": 89,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 577536,
+        "databaseBytesDelta": 73728,
+        "handlerSpanMs": 9,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 128,
+            "rowsRead": 1228,
+            "rowsWritten": 89
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1067,
+            "rowsWritten": 81
+          },
+          "existingState": {
+            "rowsRead": 4,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 326,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "calls": 1,
+            "rowsRead": 38,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "append": {
+        "sqlCalls": 301,
+        "rowsRead": 2018,
+        "rowsWritten": 58,
+        "alarms": {
+          "reads": 8,
+          "writes": 5,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 40960,
+        "handlerSpanMs": 137,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 219,
+            "rowsRead": 1694,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 82,
+            "rowsRead": 324,
+            "rowsWritten": 44
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1763,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 225,
+            "rowsWritten": 41
+          },
+          "stateQuery": {
+            "rowsRead": 8,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 22,
+            "rowsWritten": 17
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 45,
+            "rowsRead": 1763,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "leaseWake": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "quiet": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      },
+      "expiry": {
+        "sqlCalls": 253,
+        "rowsRead": 2197,
+        "rowsWritten": 27,
+        "alarms": {
+          "reads": 8,
+          "writes": 4,
+          "deletes": 2,
+          "invocations": 2
+        },
+        "deleteRowsWritten": 6,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/events/combined/outcome": 1,
+          "/internal/events/combined/interest-release": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 26,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 195,
+            "rowsRead": 1784,
+            "rowsWritten": 18
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 58,
+            "rowsRead": 413,
+            "rowsWritten": 9
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1784,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 336,
+            "rowsWritten": 22
+          },
+          "stateQuery": {
+            "rowsRead": 52,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 25,
+            "rowsWritten": 5
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 46,
+            "rowsRead": 1784,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 3,
+            "rowsRead": 120,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 3,
+            "rowsRead": 99,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "anotherMonth": {
+        "sqlCalls": 0,
+        "rowsRead": 0,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 0,
+        "requestPaths": {},
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 0,
+        "byRole": {},
+        "bySubsystem": {},
+        "topQueries": []
+      }
+    },
+    {
+      "name": "records actual command, duplicate and offline-delivery work (shared=false)",
+      "shared": false,
+      "accepted": {
+        "sqlCalls": 128,
+        "rowsRead": 1228,
+        "rowsWritten": 89,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 2,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/internal/state-events/command/invoke": 1
+        },
+        "databaseBytes": 577536,
+        "databaseBytesDelta": 73728,
+        "handlerSpanMs": 16,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 128,
+            "rowsRead": 1228,
+            "rowsWritten": 89
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 1067,
+            "rowsWritten": 81
+          },
+          "existingState": {
+            "rowsRead": 4,
+            "rowsWritten": 8
+          },
+          "schemaAndOther": {
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 326,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 4,
+            "rowsRead": 156,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "calls": 1,
+            "rowsRead": 38,
+            "rowsWritten": 1
+          }
+        ]
+      },
+      "duplicate": {
+        "sqlCalls": 2,
+        "rowsRead": 40,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1
+        },
+        "databaseBytes": 577536,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 1,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 2,
+            "rowsRead": 40,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 40,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 1,
+            "rowsRead": 39,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT * FROM state_event_records WHERE record_key = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "append": {
+        "sqlCalls": 301,
+        "rowsRead": 2018,
+        "rowsWritten": 58,
+        "alarms": {
+          "reads": 8,
+          "writes": 6,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 3,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 40960,
+        "handlerSpanMs": 44,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 219,
+            "rowsRead": 1694,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 82,
+            "rowsRead": 324,
+            "rowsWritten": 44
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1763,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 225,
+            "rowsWritten": 41
+          },
+          "stateQuery": {
+            "rowsRead": 8,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 22,
+            "rowsWritten": 17
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 45,
+            "rowsRead": 1763,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "records actual command, duplicate and offline-delivery work (shared=true)",
+      "shared": true,
+      "accepted": {
+        "sqlCalls": 168,
+        "rowsRead": 1131,
+        "rowsWritten": 112,
+        "alarms": {
+          "reads": 1,
+          "writes": 1,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1,
+          "/shareable-state/resolve": 1,
+          "/internal/state-events/command/invoke": 1,
+          "/state-events/commit": 1,
+          "/internal/shareable-state/realm/state-event-commit": 1,
+          "/internal/shareable-state/realm/state-event-confirm": 1
+        },
+        "databaseBytes": 679936,
+        "databaseBytesDelta": 106496,
+        "handlerSpanMs": 57,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 42,
+            "rowsRead": 252,
+            "rowsWritten": 24
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 30,
+            "rowsRead": 83,
+            "rowsWritten": 13
+          },
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 96,
+            "rowsRead": 796,
+            "rowsWritten": 75
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 920,
+            "rowsWritten": 102
+          },
+          "schemaAndOther": {
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          "stateQuery": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "existingState": {
+            "rowsRead": 10,
+            "rowsWritten": 10
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 11,
+            "rowsRead": 262,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 5,
+            "rowsRead": 195,
+            "rowsWritten": 0
+          },
+          {
+            "query": "ALTER TABLE state_event_budget ADD COLUMN terminal_reserve_bytes INTEGER NOT NULL DEFAULT 0",
+            "calls": 2,
+            "rowsRead": 49,
+            "rowsWritten": 2
+          }
+        ]
+      },
+      "duplicate": {
+        "sqlCalls": 2,
+        "rowsRead": 27,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/state-events/command/lookup": 1
+        },
+        "databaseBytes": 679936,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 2,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 2,
+            "rowsRead": 27,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "combined": {
+            "rowsRead": 27,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'state_event_records'",
+            "calls": 1,
+            "rowsRead": 26,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT * FROM state_event_records WHERE record_key = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        ]
+      },
+      "append": {
+        "sqlCalls": 310,
+        "rowsRead": 1737,
+        "rowsWritten": 67,
+        "alarms": {
+          "reads": 8,
+          "writes": 5,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 4,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 45056,
+        "handlerSpanMs": 44,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 211,
+            "rowsRead": 1406,
+            "rowsWritten": 14
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 85,
+            "rowsRead": 325,
+            "rowsWritten": 47
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 14,
+            "rowsRead": 6,
+            "rowsWritten": 6
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1483,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 231,
+            "rowsWritten": 47
+          },
+          "event": {
+            "rowsRead": 23,
+            "rowsWritten": 20
+          },
+          "stateQuery": {
+            "rowsRead": 0,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 45,
+            "rowsRead": 1483,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "recovers a lost reply in the original pass, clears authority and preserves identity (shared=false)",
+      "receiptProbeRecovery": true,
+      "shared": false,
+      "measured": {
+        "sqlCalls": 329,
+        "rowsRead": 2390,
+        "rowsWritten": 65,
+        "alarms": {
+          "reads": 10,
+          "writes": 7,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 4,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/internal/events/combined/append": 1,
+          "/internal/events/combined/probe": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 40960,
+        "handlerSpanMs": 56,
+        "byRole": {
+          "CONFIG": {
+            "sqlCalls": 240,
+            "rowsRead": 2028,
+            "rowsWritten": 21
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 89,
+            "rowsRead": 362,
+            "rowsWritten": 44
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 2116,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 240,
+            "rowsWritten": 48
+          },
+          "stateQuery": {
+            "rowsRead": 10,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 24,
+            "rowsWritten": 17
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 54,
+            "rowsRead": 2116,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "recovers a lost reply in the original pass, clears authority and preserves identity (shared=true)",
+      "receiptProbeRecovery": true,
+      "shared": true,
+      "measured": {
+        "sqlCalls": 338,
+        "rowsRead": 2123,
+        "rowsWritten": 74,
+        "alarms": {
+          "reads": 10,
+          "writes": 7,
+          "deletes": 0,
+          "invocations": 1
+        },
+        "deleteRowsWritten": 1,
+        "incomingMessages": 0,
+        "peakAppends": 1,
+        "requests": 6,
+        "requestPaths": {
+          "/internal/events/combined/interest": 1,
+          "/state-events/append": 1,
+          "/internal/events/combined/append": 1,
+          "/state-events/probe": 1,
+          "/internal/events/combined/probe": 1,
+          "/internal/events/combined/confirm": 1
+        },
+        "databaseBytes": 724992,
+        "databaseBytesDelta": 45056,
+        "handlerSpanMs": 65,
+        "byRole": {
+          "SHAREABLE_STATE_REALM": {
+            "sqlCalls": 230,
+            "rowsRead": 1682,
+            "rowsWritten": 21
+          },
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 92,
+            "rowsRead": 363,
+            "rowsWritten": 47
+          },
+          "INTEGRATION_REGISTRY": {
+            "sqlCalls": 16,
+            "rowsRead": 78,
+            "rowsWritten": 6
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 1851,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 247,
+            "rowsWritten": 54
+          },
+          "event": {
+            "rowsRead": 25,
+            "rowsWritten": 20
+          },
+          "stateQuery": {
+            "rowsRead": 0,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 55,
+            "rowsRead": 1851,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_records'",
+            "calls": 2,
+            "rowsRead": 66,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT name FROM sqlite_master WHERE name = 'state_event_destination_budget'",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "scales independent groups with traffic rather than discovering idle owners",
+      "groups": 12,
+      "measurements": [
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        },
+        {
+          "rowsRead": 1228,
+          "rowsWritten": 89,
+          "requests": 2
+        }
+      ]
+    },
+    {
+      "name": "the destination probe leaves storage and alarms unchanged (positive=false)",
+      "destinationReceiptProbe": true,
+      "positive": false,
+      "measured": {
+        "sqlCalls": 1,
+        "rowsRead": 22,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/events/combined/probe": 1
+        },
+        "databaseBytes": 577536,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 1,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 1,
+            "rowsRead": 22,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 22,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 1,
+            "rowsRead": 22,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "the destination probe leaves storage and alarms unchanged (positive=true)",
+      "destinationReceiptProbe": true,
+      "positive": true,
+      "measured": {
+        "sqlCalls": 7,
+        "rowsRead": 38,
+        "rowsWritten": 0,
+        "alarms": {
+          "reads": 0,
+          "writes": 0,
+          "deletes": 0,
+          "invocations": 0
+        },
+        "deleteRowsWritten": 0,
+        "incomingMessages": 0,
+        "peakAppends": 0,
+        "requests": 1,
+        "requestPaths": {
+          "/internal/events/combined/probe": 1
+        },
+        "databaseBytes": 618496,
+        "databaseBytesDelta": 0,
+        "handlerSpanMs": 1,
+        "byRole": {
+          "DURABLE_EVENT_STREAM": {
+            "sqlCalls": 7,
+            "rowsRead": 38,
+            "rowsWritten": 0
+          }
+        },
+        "bySubsystem": {
+          "schemaAndOther": {
+            "rowsRead": 33,
+            "rowsWritten": 0
+          },
+          "combined": {
+            "rowsRead": 3,
+            "rowsWritten": 0
+          },
+          "event": {
+            "rowsRead": 2,
+            "rowsWritten": 0
+          }
+        },
+        "topQueries": [
+          {
+            "query": "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            "calls": 1,
+            "rowsRead": 33,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT owner_json FROM state_event_destination",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          },
+          {
+            "query": "SELECT * FROM state_event_destination_records WHERE operation_id = ?",
+            "calls": 1,
+            "rowsRead": 1,
+            "rowsWritten": 0
+          }
+        ]
+      }
+    }
+  ],
+  "scenarios": {
+    "assumptions": {
+      "objectSeconds": 0.05,
+      "workerCpuMs": 5,
+      "storageGbMonth": 0,
+      "combinedCleanup": {
+        "receiptRowsRead": 64,
+        "receiptRowsWritten": 8,
+        "receiptRequests": 0.1
+      },
+      "eventCleanup": {
+        "receiptRowsRead": 32,
+        "receiptRowsWritten": 3,
+        "receiptRequests": 0.1
+      }
+    },
+    "profiles": {
+      "eventOnly": {
+        "perCommand": {
+          "rowsRead": 449,
+          "rowsWritten": 30,
+          "doRequests": 5.1499999999999995,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.75,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.75
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 7.6499999999999995,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 250,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 263.05
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 30.9
+      },
+      "independentStateAndEvent": {
+        "perCommand": {
+          "rowsRead": 468,
+          "rowsWritten": 34,
+          "doRequests": 6.1499999999999995,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.8999999999999999,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.9
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 9.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 290,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 304.55
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 35.05
+      },
+      "localAlarm": {
+        "perCommand": {
+          "rowsRead": 5058,
+          "rowsWritten": 130,
+          "doRequests": 11.15,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.15
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 1.65,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 80,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 86.65
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 16.65,
+              "doGbSeconds": 0,
+              "rowsRead": 25.580000000000002,
+              "rowsWritten": 1250,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1297.63
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 131.8
+      },
+      "sharedAlarm": {
+        "perCommand": {
+          "rowsRead": 4520,
+          "rowsWritten": 143,
+          "doRequests": 17.150000000000002,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.15
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 2.55,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 93,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 100.55
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 25.65,
+              "doGbSeconds": 0,
+              "rowsRead": 20.2,
+              "rowsWritten": 1380,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1431.25
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 145.7
+      },
+      "localImmediate": {
+        "perCommand": {
+          "rowsRead": 4766,
+          "rowsWritten": 127,
+          "doRequests": 9.15,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 1.3499999999999999,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 77,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 83.35
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 13.65,
+              "doGbSeconds": 0,
+              "rowsRead": 22.66,
+              "rowsWritten": 1220,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1261.71
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 128.5
+      },
+      "sharedImmediate": {
+        "perCommand": {
+          "rowsRead": 4285,
+          "rowsWritten": 140,
+          "doRequests": 15.15,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.15
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 2.25,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 90,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 97.25
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 22.65,
+              "doGbSeconds": 0,
+              "rowsRead": 17.85,
+              "rowsWritten": 1350,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1395.9
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 142.4
+      },
+      "healthAlarm": {
+        "perCommand": {
+          "rowsRead": 4520,
+          "rowsWritten": 143,
+          "doRequests": 17.150000000000002,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.15
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 2.55,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 93,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 100.55
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 25.65,
+              "doGbSeconds": 0,
+              "rowsRead": 20.2,
+              "rowsWritten": 1380,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1431.25
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 145.7
+      },
+      "healthImmediate": {
+        "perCommand": {
+          "rowsRead": 4285,
+          "rowsWritten": 140,
+          "doRequests": 15.15,
+          "doGbSeconds": 0.0064,
+          "workerRequests": 1,
+          "workerCpuMs": 5,
+          "storageGbMonth": 0
+        },
+        "monthly": [
+          {
+            "commands": 10000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5
+            }
+          },
+          {
+            "commands": 100000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 0.15,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 0,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 5.15
+            }
+          },
+          {
+            "commands": 1000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 2.25,
+              "doGbSeconds": 0,
+              "rowsRead": 0,
+              "rowsWritten": 90,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0,
+              "total": 97.25
+            }
+          },
+          {
+            "commands": 10000000,
+            "bill": {
+              "subscription": 5,
+              "doRequests": 22.65,
+              "doGbSeconds": 0,
+              "rowsRead": 17.85,
+              "rowsWritten": 1350,
+              "storageGbMonth": 0,
+              "workerRequests": 0,
+              "workerCpuMs": 0.4,
+              "total": 1395.9
+            }
+          }
+        ],
+        "incrementalOneMillionWithWriteAndRequestAllowancesSpent": 142.4
+      }
+    },
+    "durationSensitivity": [
+      {
+        "objectSeconds": 0.05,
+        "bill": {
+          "subscription": 5,
+          "doRequests": 2.25,
+          "doGbSeconds": 0,
+          "rowsRead": 0,
+          "rowsWritten": 90,
+          "storageGbMonth": 0,
+          "workerRequests": 0,
+          "workerCpuMs": 0,
+          "total": 97.25
+        }
+      },
+      {
+        "objectSeconds": 1,
+        "bill": {
+          "subscription": 5,
+          "doRequests": 2.25,
+          "doGbSeconds": 0,
+          "rowsRead": 0,
+          "rowsWritten": 90,
+          "storageGbMonth": 0,
+          "workerRequests": 0,
+          "workerCpuMs": 0,
+          "total": 97.25
+        }
+      },
+      {
+        "objectSeconds": 5,
+        "bill": {
+          "subscription": 5,
+          "doRequests": 2.25,
+          "doGbSeconds": 12.5,
+          "rowsRead": 0,
+          "rowsWritten": 90,
+          "storageGbMonth": 0,
+          "workerRequests": 0,
+          "workerCpuMs": 0,
+          "total": 109.75
+        }
+      },
+      {
+        "objectSeconds": 900,
+        "bill": {
+          "subscription": 5,
+          "doRequests": 2.25,
+          "doGbSeconds": 1437.5,
+          "rowsRead": 0,
+          "rowsWritten": 90,
+          "storageGbMonth": 0,
+          "workerRequests": 0,
+          "workerCpuMs": 0,
+          "total": 1534.75
+        }
+      }
+    ]
+  }
+}

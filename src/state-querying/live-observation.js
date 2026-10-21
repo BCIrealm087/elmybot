@@ -1,3 +1,4 @@
+import { stateEventDiagnosticsEnabled, traceStateEvent } from "../state-events/diagnostics.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import { recordStateQueryMetric } from "./operations.js";
 import { featureRegistry } from "../features/index.js";
@@ -369,6 +370,11 @@ async function authorizedEvaluation(env, grantId, query, reason) {
       authorizeStateQueryBinding(grant, binding, argumentsValue),
     maxResultBytes: grant.limits.maxResultBytes
   });
+  if (stateEventDiagnosticsEnabled(env)) for (const cell of Object.values(result.envelope.data ?? {})) {
+    if (cell?.stateEvent) traceStateEvent(env, "read.evaluate", {
+      scopeToken: cell.stateEvent.scopeToken, sequence: cell.stateEvent.operationSequence, stateRevision: cell.stateEvent.stateRevision
+    });
+  }
   const descriptors = result.envelope.status === "ready"
     ? descriptorsFromEvaluation(result)
     : await bindingDescriptorsForPlan(env, plan);

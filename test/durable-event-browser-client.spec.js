@@ -104,6 +104,37 @@ function event(character = "a", sequence = 1, payload = { data: "play-intro" }) 
 }
 
 describe("durable-event browser client", () => {
+  it("traces receipt, handler completion and ACK without exposing payload or changing delivery", async () => {
+    const records = [];
+    const { client, connections } = harness({ onDiagnostic: (record) => { records.push(record); throw Error("diagnostic sink failed"); } });
+    let finish;
+    const handled = new Promise((resolve) => { finish = resolve; });
+    client.subscribe(() => handled);
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1)); ready(connections[0]);
+    connections[0].serverMessage(event("a", 1, { data: "private-payload" }));
+    await vi.waitFor(() => expect(records.map((row) => row.stage)).toEqual(["event.receive"]));
+    expect(connections[0].sent).toHaveLength(1);
+    finish();
+    await vi.waitFor(() => expect(records.map((row) => row.stage)).toEqual(["event.receive", "event.handled", "event.ack"]));
+    expect(connections[0].sent).toHaveLength(2);
+    expect(JSON.stringify(records)).not.toMatch(/private-payload|cursor|payload/);
+  });
+  it.each([true, false])("validates optional combined correlation before handling/acknowledgement (valid=%s)", async (valid) => {
+    const { client, connections } = harness(), handler = vi.fn(), statuses = vi.fn();
+    client.subscribe(handler, { onStatus: statuses });
+    await vi.waitFor(() => expect(connections[0]?.sent).toHaveLength(1)); ready(connections[0]);
+    const message = JSON.parse(event()); message.stateEvent = { version: valid ? 1 : 2, scopeToken: "ses1." + "a".repeat(22), operationSequence: 1, stateRevision: 1, operationId: "seo1." + "b".repeat(43) };
+    connections[0].serverMessage(JSON.stringify(message));
+    if (valid) {
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+      expect(handler.mock.calls[0][0].stateEvent).toEqual(message.stateEvent);
+      await vi.waitFor(() => expect(connections[0].sent.some((item) => item.includes('"ack"'))).toBe(true));
+    } else {
+      await vi.waitFor(() => expect(statuses).toHaveBeenCalledWith(expect.objectContaining({ state: "ended", code: "client_protocol_error" })));
+      expect(handler).not.toHaveBeenCalled(); expect(connections[0].sent).toHaveLength(1);
+    }
+  });
+
   it("registers without URL credentials and acknowledges only after async handling", async () => {
     const { client, connections } = harness();
     let finish;
@@ -259,7 +290,7 @@ describe("durable-event browser client", () => {
       expect(response.headers.get("referrer-policy")).toBe("no-referrer");
       expect(await response.text()).not.toContain("state-query/app.js");
     }
-    for (const path of ["app.js", "client.js", "ui.js", "browser.css"]) {
+    for (const path of ["app.js", "client.js", "correlation.js", "state-event.js", "ui.js", "browser.css"]) {
       const response = await SELF.fetch(
         `https://elmybot-worker.cutelmy.workers.dev/event-stream/${path}`
       );

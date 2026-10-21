@@ -448,7 +448,24 @@ describe("hibernating state-query WebSockets", () => {
       }));
       await new Promise((resolve) => setTimeout(resolve, 20));
 
-      await drainMutation(target, await setCount(target, 2));
+      const intermediateScope = await setCount(target, 2);
+      await drainMutation(target, intermediateScope);
+      // Establish a distinct durable replacement before changing state again.
+      // Otherwise source/evaluation coalescing can legitimately produce only
+      // sequence 2 with value 3, which never exercises socket backpressure.
+      await vi.waitFor(async () => {
+        await drainMutation(target, intermediateScope, 1);
+        await runInDurableObject(observerStub(target), async (_instance, state) => {
+          const intermediate = state.storage.sql.exec(
+            `SELECT sequence, payload_json FROM state_query_stream_history
+             WHERE subscription_id = ? ORDER BY sequence DESC LIMIT 1`,
+            initial.event.payload.subscriptionId
+          ).one();
+          expect(intermediate.sequence).toBeGreaterThan(initial.event.sequence);
+          expect(JSON.parse(intermediate.payload_json)
+            .results[0].result.data.deaths.value).toBe(2);
+        });
+      }, { timeout: 3_000 });
       const finalScope = await setCount(target, 3);
       await drainMutation(target, finalScope);
       await vi.waitFor(async () => {

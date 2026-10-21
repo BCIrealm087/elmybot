@@ -32,7 +32,7 @@ function unique(label) {
   return `${label}-${Date.now()}-${uniqueSequence}`;
 }
 
-function fixture() {
+function fixture({ combined = false } = {}) {
   const feature = defineFeature({
     apiVersion: frameworkApiVersion,
     id: "test.events",
@@ -44,6 +44,7 @@ function fixture() {
       description: "Test updates.",
       platforms: ["discord", "twitch"],
       scope: { kind: "group_local" },
+      ...(combined ? { publication: { kind: "state_event", source: { kind: "group_local" } } } : {}),
       access: { kind: "operator_grant" },
       payload: {
         schema: {
@@ -113,6 +114,30 @@ async function publish(registry, invocationValue, data) {
 }
 
 describe("durable event publication", () => {
+  it("rejects combined streams through ordinary publication and internal append without writing an event", async () => {
+    const registry = fixture({ combined: true });
+    const action = invocation(unique("combined-guild"));
+    const { route, stub } = await configuredStream(registry, action);
+    await expect(publish(registry, action, "must-not-append")).rejects.toMatchObject({
+      code: DURABLE_EVENT_CODES.serviceUnavailable, status: 503
+    });
+    const payload = '{"data":"must-not-append"}';
+    const response = await stub.fetch(`https://durable-event-stream${DURABLE_EVENT_APPEND_PATH}`, {
+      method: "POST", headers: { "content-type": "application/json", ...durableEventInternalHeaders },
+      body: JSON.stringify({
+        eventId: await durableEventId({ featureId: "test.events", streamId: "updates", version: 1,
+          originGroupKey: action.origin.group.key, sourceEventId: action.sourceEventId }),
+        fingerprint: await sha256Hex(payload), featureId: "test.events", streamId: "updates", version: 1,
+        route, payload
+      })
+    });
+    expect(response.status).toBe(503);
+    await runInDurableObject(stub, async (_instance, state) => {
+      expect(Number(state.storage.sql.exec("SELECT COUNT(*) AS total FROM durable_event_stream_events").one().total)).toBe(0);
+      expect(Number(state.storage.sql.exec("SELECT COUNT(*) AS total FROM durable_event_stream_receipts").one().total)).toBe(0);
+    });
+  });
+
   it("derives stable opaque event identities from the frozen tuple", async () => {
     const input = {
       featureId: "test.events",

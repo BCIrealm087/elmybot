@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - master
-      - codex-querying-experiment
+      - codex-state-ironing
   pull_request:
   workflow_dispatch:
 
@@ -35,7 +35,17 @@ jobs:
         run: npm ci
 
       - name: Run test suite
-        run: npm test -- --run
+        run: npm test -- --run --reporter=default --reporter=./scripts/state-event-cost-reporter.js
+        env:
+          STATE_EVENT_COST_OUTPUT: state-event-cost-ci.json
+
+      - name: Save state-event cost measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: state-event-cost-measurements
+          path: state-event-cost-ci.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run linter
         run: npm run lint

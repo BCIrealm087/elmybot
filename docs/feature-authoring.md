@@ -11,6 +11,11 @@ The normative API shapes remain in
 The supported entry point, compatibility rules, and deprecation lifecycle are
 defined in [`framework-api.md`](framework-api.md).
 
+For explicit state-plus-event declarations, see
+[`state-event-authoring.md`](state-event-authoring.md). Atomic command execution, receipt recovery, bounded offline delivery and pure
+previews are implemented. Checked-in environments now enable fresh acceptance; see
+[release controls and review evidence](state-event-release.md).
+
 The contributor framework is intentionally a build-time JavaScript API.
 Features are reviewed, tested, explicitly installed, and bundled with the
 Worker. They may live directly under `src/features/` or in a private npm
@@ -279,6 +284,8 @@ facilities:
 | Readable-state snapshot/watch | `runtime.query.snapshot(query)` and `runtime.query.watch(query)` |
 | Durable-event consumer | `runtime.eventStreams.connect({ group, stream })` |
 | Durable-event transport cases | `publish()`, `restart()`, `expire()`, and `handoff()` on `runtime.eventStreams` |
+| Combined-operation calculation | `runtime.stateEvents.preview({ operation, input, before?, config? })` |
+| Combined command simulation | `createFeatureTestRuntime(feature, { stateEventsEnabled: true })` |
 | Feature logs | `runtime.logs.all()` |
 
 Command and trigger results expose `reply`, `output`, `effects`, `schedules`,
@@ -842,10 +849,10 @@ system: retention and capacity are bounded, and a crash between applying an
 effect and acknowledging it can replay the event. Deduplicate with `eventId`
 when repeating an effect is unsafe.
 
-A feature may deliberately declare both transports, but its responsibilities
-stay explicit. Put state mutation and event publication in separate actions and
-test the snapshot/watch surface independently from the receive/acknowledge
-surface. Registry composition rejects an event-publishing action that also
+A feature may deliberately declare both transports. For independent state and
+event behavior, use separate actions and test snapshot/watch independently from
+receive/acknowledge. For one atomic state change and corresponding event, declare
+[`stateEvents`](state-event-authoring.md) instead. Registry composition rejects an event-publishing action that also
 requests state, routes, or effects, so one command cannot accidentally
 dual-publish through ambiguous dependencies.
 

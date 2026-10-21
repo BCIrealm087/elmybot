@@ -20,7 +20,7 @@ export function isRecognizedTwitchCommandNotification(payload) {
 	return typeof messageText === "string" && commandFromMessage(messageText) !== null;
 }
 
-export async function processTwitchChatNotification(payload, env, messageId) {
+export async function processTwitchChatNotification(payload, env, messageId, messageTimestamp) {
 	if (payload.subscription?.type !== "channel.chat.message") return;
 
 	const messageText = payload.event?.message?.text;
@@ -32,6 +32,7 @@ export async function processTwitchChatNotification(payload, env, messageId) {
 	try {
 		const reply = await Promise.resolve(command.definition.exec(payload.event, env, {
 			messageId,
+			messageTimestamp,
 			argsText: command.argsText
 		}));
 		if (typeof reply !== "string" || reply.length === 0) return;
@@ -50,6 +51,6 @@ export async function processTwitchChatNotification(payload, env, messageId) {
 	}
 }
 
-export function handleTwitchChatNotification(payload, env, ctx, messageId) {
-	ctx.waitUntil(processTwitchChatNotification(payload, env, messageId));
+export function handleTwitchChatNotification(payload, env, ctx, messageId, messageTimestamp) {
+	ctx.waitUntil(processTwitchChatNotification(payload, env, messageId, messageTimestamp));
 }

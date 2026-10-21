@@ -1,3 +1,4 @@
+import { GroupConfig as GroupConfigBackend } from "./group-configuration.js";
 import { handleDiscordRequest } from "./platforms/discord/index.js";
 import { handleTwitchRequest } from "./platforms/twitch/index.js";
 import { discordSchedulingHandlers } from "./platforms/discord/commands.js";
@@ -75,7 +76,9 @@ export class DurableEventStream extends DurableEventStreamBackend {
     super(state, env, featureRegistry);
   }
 }
-export { GroupConfig } from "./group-configuration.js";
+export class GroupConfig extends GroupConfigBackend {
+  constructor(state, env) { super(state, env, featureRegistry); }
+}
 export { TwitchAppAuth } from "./platforms/twitch/app-auth.js";
 export { TwitchAuth } from "./platforms/twitch/auth.js";
 export {

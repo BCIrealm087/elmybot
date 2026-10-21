@@ -284,7 +284,8 @@ export function createCommandInvocation({
   origin,
   args = {},
   sourceEventId,
-  correlationId = sourceEventId
+  correlationId = sourceEventId,
+  sourceCreatedAtMs
 }) {
   const normalizedOrigin = normalizeOrigin(origin, "Command origin", {
     actorRequired: true
@@ -295,7 +296,12 @@ export function createCommandInvocation({
     normalizedOrigin.group.platform
   );
 
+  if (sourceCreatedAtMs !== undefined && (!Number.isSafeInteger(sourceCreatedAtMs) || sourceCreatedAtMs < 0)) {
+    fail("Command source creation time", "must be a nonnegative safe integer.");
+  }
+
   return Object.freeze({
+    ...(sourceCreatedAtMs === undefined ? {} : { sourceCreatedAtMs }),
     schemaVersion: INTEGRATION_CONTRACT_SCHEMA_VERSION,
     kind: requireVersionedKind(kind, "Command kind"),
     origin: normalizedOrigin,

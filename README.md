@@ -452,7 +452,7 @@ wrangler.jsonc                     Bindings, environments, and append-only migra
 ## Testing and CI
 
 GitHub Actions runs the complete suite for pushes to `master` and
-`codex-querying-experiment`, pull requests, and manual dispatches. CI:
+`codex-state-ironing`, pull requests, and manual dispatches. CI:
 
 1. installs dependencies with `npm ci`;
 2. runs the complete Vitest suite;
@@ -462,6 +462,14 @@ GitHub Actions runs the complete suite for pushes to `master` and
 6. performs a non-deploying Wrangler dry run.
 
 The CI Wrangler dry run is the authoritative clean build/configuration check.
+
+Vitest runs at most two Worker runtimes concurrently and gives each test a
+15-second default harness deadline for setup and multistep integration work.
+Explicit delivery-latency and protocol-budget assertions remain separate.
+File isolation and concurrent operations inside tests remain enabled. Run one
+full suite at a time when checking timings; the
+[lifecycle verification notes](docs/state-event-lifecycle-verification.md)
+explain the separation between real-clock tests and manually driven fault tests.
 
 ## Writing features
 
@@ -517,6 +525,12 @@ explicit catalog-regeneration action.
 - [Durable-event browser client, setup, and OBS widget](docs/durable-event-browser.md)
 - [Durable-event transport contract](docs/durable-event-contract.md)
 - [Durable-event transport implementation roadmap](docs/durable-event-transport-roadmap.md)
+- [Atomic state changes with durable events roadmap](docs/state-event-roadmap.md)
+- [Atomic state changes with durable events contract](docs/state-event-contract.md)
+- [State/event authoring, execution, and contributor tests](docs/state-event-authoring.md)
+- [State/event cost measurements, billing scenarios, and operation budgets](docs/state-event-costs.md)
+- [State/event release review, costs, and safe rollout](docs/state-event-release.md)
+- [Authoritative health v2 migration](docs/health-state-event-migration.md)
 - [Widget-data consumer and contributor guide](docs/widget-data.md)
 - [Shareable feature-state lifecycle contract](docs/shareable-state-lifecycle.md)
 - [Shareable-state collision discovery](docs/shareable-state-discovery.md)

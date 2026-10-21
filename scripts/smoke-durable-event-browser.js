@@ -64,7 +64,7 @@ const server = createServer(async (request, response) => {
       response.end(await page.text());
       return;
     }
-    if (["app.js", "client.js", "ui.js", "browser.css"].some(
+    if (["app.js", "client.js", "correlation.js", "state-event.js", "ui.js", "browser.css"].some(
       (name) => url.pathname === `/event-stream/${name}`
     )) {
       response.writeHead(200, {

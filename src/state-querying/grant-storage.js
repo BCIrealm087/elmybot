@@ -1,3 +1,4 @@
+import { recoverStorageAlarm } from "../storage-alarm.js";
 import { canonicalStateQueryJson } from "./query.js";
 import { logError } from "../common.js";
 import { stateQueryErrorForLog } from "./operations.js";
@@ -260,12 +261,6 @@ function revokeGrant(state, input) {
   return { status: "revoked" };
 }
 
-function tableExists(sql, name) {
-  return Boolean(sql.exec(
-    `SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?`,
-    name
-  ).toArray()[0]);
-}
 
 async function scheduleGrantInvalidationAlarm(
   state,
@@ -275,36 +270,7 @@ async function scheduleGrantInvalidationAlarm(
     "DELETE FROM state_query_grant_invalidation_outbox WHERE expires_at_ms <= ?",
     nowMs
   );
-  const candidates = [];
-  if (immediate) candidates.push(nowMs);
-  const grantDue = state.storage.sql.exec(
-    `SELECT MIN(next_attempt_at_ms) AS next_at
-     FROM state_query_grant_invalidation_outbox`
-  ).toArray()[0]?.next_at;
-  if (grantDue !== null && grantDue !== undefined) candidates.push(Number(grantDue));
-  if (tableExists(state.storage.sql, "state_query_notification_outbox")) {
-    const notificationDue = state.storage.sql.exec(
-      `SELECT MIN(next_at) AS next_at FROM (
-         SELECT MIN(next_attempt_at_ms) AS next_at
-         FROM state_query_notification_outbox
-         UNION ALL
-         SELECT MIN(lease_expires_at_ms) AS next_at
-         FROM state_query_source_watchers
-       ) WHERE next_at IS NOT NULL`
-    ).toArray()[0]?.next_at;
-    if (notificationDue !== null && notificationDue !== undefined) {
-      candidates.push(Number(notificationDue));
-    }
-  }
-  const nextAlarm = candidates.length > 0
-    ? Math.max(nowMs, Math.min(...candidates))
-    : null;
-  const current = await state.storage.getAlarm();
-  if (nextAlarm === null) {
-    if (current !== null) await state.storage.deleteAlarm();
-  } else if (current === null || current > nextAlarm) {
-    await state.storage.setAlarm(nextAlarm);
-  }
+  await recoverStorageAlarm(state, { candidate: immediate ? nowMs : null, nowMs });
 }
 
 export async function recoverStateQueryGrantInvalidations(state) {

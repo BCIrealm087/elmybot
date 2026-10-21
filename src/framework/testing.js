@@ -1,3 +1,4 @@
+import { registerStateEventRuntime } from "../state-events/runtime-capability.js";
 import { ActionRegistryError, createActionRegistry, executeAction } from "../actions/registry.js";
 import {
   createCommandInvocation,
@@ -16,6 +17,7 @@ import { formatCommandInputError } from "./command-input-error.js";
 import { isRegisteredCapability } from "./access.js";
 import { FEATURE_RUNTIME_SERVICES } from "./service-runtime.js";
 import { parseTwitchCommandText } from "./twitch-command-text.js";
+import { calculatePreparedStateEvent, previewStateEventOperation } from "./state-event-operation.js";
 import { evaluateStateQuery } from "../state-querying/evaluator.js";
 import {
   DURABLE_EVENT_CODES,
@@ -431,6 +433,15 @@ function createMemoryServices(clock, registry) {
   const shareableState = new Map();
   const cooldowns = new Map();
   const revisions = new Map();
+  const operationMarkers = new Map();
+  function watermark(storeKind, owner, featureId) {
+    const key = revisionKey(storeKind, owner, featureId);
+    if (!operationMarkers.has(key)) {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      operationMarkers.set(key, { version: 1, scopeToken: "ses1." + btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""), operationSequence: 0 });
+    }
+    return { ...operationMarkers.get(key), stateRevision: revisions.get(key) ?? 0 };
+  }
   const counterSubjects = new Map();
   const changeListeners = new Set();
   const storageKey = (ownerKey, featureId, key) =>
@@ -569,7 +580,7 @@ function createMemoryServices(clock, registry) {
     });
   }
 
-  function readableSource(map, storeKind, owner, featureId, bindingKey) {
+  function readableSource(map, storeKind, owner, featureId, bindingKey, combined = false) {
     const counterValue = (name, subject, options = {}) => {
       const initial = options.initial ?? options.min ?? 0;
       return map.get(storageKey(
@@ -580,6 +591,10 @@ function createMemoryServices(clock, registry) {
     };
     return Object.freeze({
       bindingKey,
+      async observe() {
+        return { mutationVersion: revisions.get(revisionKey(storeKind, owner, featureId)) ?? 0,
+          ...(combined ? { stateEvent: watermark(storeKind, owner, featureId) } : {}) };
+      },
       async revision() {
         return revisions.get(revisionKey(storeKind, owner, featureId)) ?? 0;
       },
@@ -628,6 +643,8 @@ function createMemoryServices(clock, registry) {
         const cacheKey = `${featureId}\u0000${definition.scope.kind}\u0000` +
           `${definition.scope.namespace ?? ""}`;
         if (sources.has(cacheKey)) return sources.get(cacheKey);
+        const combined = Object.values(registry.stateEvents).some((entry) => entry.featureId === featureId && entry.definition.scope.kind === definition.scope.kind &&
+          (definition.scope.kind === "group_local" || entry.definition.scope.namespace === definition.scope.namespace));
         let source;
         if (definition.scope.kind === "group_local") {
           source = readableSource(
@@ -635,7 +652,7 @@ function createMemoryServices(clock, registry) {
             "group-local",
             group.key,
             featureId,
-            `group-local\u0000${group.key}\u0000${featureId}`
+            `group-local\u0000${group.key}\u0000${featureId}`, combined
           );
         } else {
           const targetPlatform = group.platform === "discord" ? "twitch" : "discord";
@@ -655,7 +672,7 @@ function createMemoryServices(clock, registry) {
               owner,
               featureId,
               definition.scope.namespace
-            ].join("\u0000")
+            ].join("\u0000"), combined
           );
         }
         sources.set(cacheKey, source);
@@ -735,6 +752,22 @@ function createMemoryServices(clock, registry) {
           return { allowed: true, retryAfterSeconds: 0 };
         }
       });
+    },
+    combinedView(group, featureId, definition, targetPlatform, resolveDefaultLink) {
+      const local = definition.scope.kind === "group_local", link = local ? null : resolveDefaultLink(targetPlatform);
+      const storeKind = local ? "group-local" : "shareable", map = local ? state : shareableState;
+      const owner = local ? group.key : `${link ? `integration:${link.integration.id}` : `standalone:${group.key}:g1`}\u0000${definition.scope.namespace}`;
+      const keyFor = (m) => storageKey(owner, featureId, m.kind === "bounded_counter" ? `bounded-counter\u0000${m.name}\u0000${m.subject}` : m.key);
+      return { read: (m) => map.get(keyFor(m)), apply(m, result) {
+        if (m.kind === "delete" || m.kind === "bounded_counter" && m.operation === "reset") {
+          map.delete(keyFor(m));
+          if (m.kind === "bounded_counter") counterSubjects.delete(counterSubjectKey(storeKind, owner, featureId, m.name, m.subject));
+        } else if (m.kind !== "bounded_counter" || map.has(keyFor(m)) || result.after !== m.initial) map.set(keyFor(m), freezeJson(result.after));
+        const marker = watermark(storeKind, owner, featureId);
+        operationMarkers.set(revisionKey(storeKind, owner, featureId), { ...marker, operationSequence: marker.operationSequence + 1 });
+        touch(storeKind, owner, featureId);
+        return watermark(storeKind, owner, featureId);
+      } };
     },
     sourceRuntime,
     subscribe(listener) {
@@ -816,7 +849,8 @@ function createMemoryEventStreams({
   registry,
   resolveDefaultLink,
   replaceDefaultLink,
-  nextSourceId
+  nextSourceId,
+  combinedEnabled = false
 }) {
   const streams = new Map();
 
@@ -828,12 +862,18 @@ function createMemoryEventStreams({
         { code: "feature_test_event_stream_not_found" }
       );
     }
+    if (stream.definition.publication && !combinedEnabled) {
+      throw new FeatureTestRuntimeError("Combined command simulation is disabled; opt in with stateEventsEnabled: true, or use stateEvents.preview for pure calculations.", {
+        code: "state_event_not_implemented"
+      });
+    }
     return stream;
   }
 
   function declarationFor(featureId, streamId) {
     const matches = Object.values(registry.eventStreams).filter((entry) =>
-      entry.featureId === featureId && entry.definition.id === streamId
+      entry.featureId === featureId && entry.definition.id === streamId &&
+      !entry.definition.publication
     );
     if (matches.length !== 1) {
       throw new FeatureTestRuntimeError(
@@ -1071,7 +1111,7 @@ function createMemoryEventStreams({
     return expired;
   }
 
-  async function publishTo(record, group, sourceEventId, payload) {
+  async function publishTo(record, group, sourceEventId, payload, combined = null) {
     const normalized = serializeDurableEventPayload(
       payload,
       record.definition.payload.schema
@@ -1097,7 +1137,7 @@ function createMemoryEventStreams({
     if (record.moved) {
       throw durableEventError(DURABLE_EVENT_CODES.transition, { status: 409 });
     }
-    if (!record.activeConnection?.connected) {
+    if (!combined && !record.activeConnection?.connected) {
       throw durableEventError(DURABLE_EVENT_CODES.consumerUnavailable, { status: 409 });
     }
     const nowMs = clock.now().getTime();
@@ -1109,8 +1149,9 @@ function createMemoryEventStreams({
     ) {
       throw durableEventError(DURABLE_EVENT_CODES.streamFull, { status: 429 });
     }
+    if (combined && [...streams.values()].filter((entry) => entry.definition.publication && entry.route.owner === record.route.owner)
+      .reduce((total, entry) => total + entry.events.length, 0) >= 100) throw Object.assign(Error("Source outbox capacity reached."), { code: "state_event_outbox_capacity" });
     const sequence = record.nextSequence;
-    record.nextSequence += 1;
     const cursor = `dec1.${await sha256Base64Url(JSON.stringify([
       "elmybot.test-durable-event-cursor.v1",
       record.route.key,
@@ -1119,6 +1160,8 @@ function createMemoryEventStreams({
     ]))}`;
     const acceptedAt = new Date(nowMs).toISOString();
     const expiresAtMs = nowMs + DURABLE_EVENT_LIMITS.retentionMs;
+    const stateEvent = combined ? { ...combined.apply(), operationId: combined.operationId } : null;
+    record.nextSequence += 1;
     const frozenPayload = freezeJson(JSON.parse(normalized.serialized));
     const frame = Object.freeze({
       protocol: DURABLE_EVENT_SOCKET_PROTOCOL,
@@ -1129,7 +1172,8 @@ function createMemoryEventStreams({
       cursor,
       acceptedAt,
       expiresAt: new Date(expiresAtMs).toISOString(),
-      payload: frozenPayload
+      payload: frozenPayload,
+      ...(stateEvent ? { stateEvent } : {})
     });
     const event = Object.freeze({
       eventId,
@@ -1147,7 +1191,7 @@ function createMemoryEventStreams({
     record.retainedBytes += normalized.bytes;
     record.acceptedTimes.push(nowMs);
     deliver(record.activeConnection);
-    return Object.freeze({ accepted: true, eventId });
+    return Object.freeze({ accepted: true, eventId, ...(stateEvent ? { stateEvent } : {}) });
   }
 
   function connect(selector) {
@@ -1168,6 +1212,7 @@ function createMemoryEventStreams({
     sourceEventId
   }) {
     const { group, entry } = normalizedSelector({ group: groupInput, stream: identity });
+    if (entry.definition.publication) throw new FeatureTestRuntimeError("Combined streams require a declared atomic operation.", { code: "state_event_operation_required" });
     return await publishTo(
       streamFor(group, entry),
       group,
@@ -1252,7 +1297,11 @@ function createMemoryEventStreams({
     restart,
     expire,
     handoff,
-    service
+    service,
+    combined(invocation, entry, targetPlatform, payload, operationId, apply) {
+      return publishTo(streamFor(invocation.origin.group, { featureId: entry.featureId, definition: entry.streamDefinition }, targetPlatform),
+        invocation.origin.group, invocation.sourceEventId, payload, { operationId, apply });
+    }
   });
 }
 
@@ -1294,6 +1343,7 @@ function scheduleUnix(timing, clock, randomInteger) {
 
 export function createFeatureTestRuntime(featureOrFeatures, {
   initialTime,
+  stateEventsEnabled = false,
   defaultLinks = [],
   routes = [],
   randomInteger = ({ min }) => min
@@ -1361,8 +1411,42 @@ export function createFeatureTestRuntime(featureOrFeatures, {
     registry,
     resolveDefaultLink,
     replaceDefaultLink,
-    nextSourceId
+    nextSourceId,
+    combinedEnabled: stateEventsEnabled
   });
+  const combinedOrigins = new Map();
+  let combinedQueue = Promise.resolve();
+  function combinedService(invocation) {
+    const open = async (featureId, targetPlatform, operationId) => {
+      const entry = registry.stateEvents[`${featureId}:${operationId}`];
+      const commitPrepared = (prepare) => {
+        const run = async () => {
+          const action = registry.actions[invocation.kind], args = action.input.parse(invocation.args);
+          const key = JSON.stringify([featureId, invocation.origin.group.key, invocation.sourceEventId]);
+          const caller = JSON.stringify([invocation.kind, args, operationId, invocation.origin.actor]);
+          const previous = combinedOrigins.get(key);
+          if (previous) {
+            if (previous.caller !== caller) throw Object.assign(Error("Source conflict."), { code: "state_event_source_conflict" });
+            return previous.receipt;
+          }
+          const request = await prepare();
+          const view = memory.combinedView(invocation.origin.group, featureId, entry.definition, targetPlatform,
+            (platform) => resolveDefaultLink(invocation.origin.group, platform));
+          const calculation = calculatePreparedStateEvent(request, entry.streamDefinition, view.read(request.mutation));
+          const claim = await memory.runtime(invocation.origin.group, () => null).claimFeatureCooldown({ featureId, actionKind: invocation.kind,
+            scopeKey: invocation.origin.group.key, seconds: action.cooldown.seconds });
+          if (!claim.allowed) throw Object.assign(Error("Cooldown active."), { code: "state_event_cooldown", retryAfterSeconds: claim.retryAfterSeconds });
+          const acceptedOperationId = "seo1." + await sha256Base64Url(JSON.stringify(["elmybot.state-event-operation.v1", "test", featureId, invocation.kind, invocation.origin.group.key, invocation.sourceEventId]));
+          const accepted = await eventStreams.combined(invocation, entry, targetPlatform, calculation.payload, acceptedOperationId, () => view.apply(request.mutation, calculation.result));
+          const receipt = Object.freeze({ ...accepted, operationId: acceptedOperationId, result: calculation.result });
+          combinedOrigins.set(key, { caller, receipt }); return receipt;
+        };
+        const result = combinedQueue.then(run); combinedQueue = result.catch(() => {}); return result;
+      };
+      return { commitPrepared, commit: (request) => commitPrepared(async () => request) };
+    };
+    return registerStateEventRuntime({ local: (featureId, id) => open(featureId, null, id), current: open });
+  }
 
   function routeSet(inputRoutes) {
     return inputRoutes === undefined ? configuredRoutes : inputRoutes;
@@ -1380,6 +1464,7 @@ export function createFeatureTestRuntime(featureOrFeatures, {
       featureServices: Object.freeze({
         ...memoryRuntime.featureServices,
         eventStreams: eventStreams.service(invocation),
+        ...(stateEventsEnabled ? { stateEvents: combinedService(invocation) } : {}),
         links: Object.freeze({
           async default(_featureId, targetPlatform) {
             return resolveInvocationDefaultLink(targetPlatform);
@@ -1802,6 +1887,16 @@ export function createFeatureTestRuntime(featureOrFeatures, {
       restart: eventStreams.restart,
       expire: eventStreams.expire,
       handoff: eventStreams.handoff
+    }),
+    stateEvents: Object.freeze({
+      preview({ feature: featureId, operation, input, before, config } = {}) {
+        const selectedFeature = featureId ?? (features.length === 1 ? features[0].id : null);
+        const entry = registry.stateEvents[`${selectedFeature}:${operation}`];
+        if (!entry) throw new FeatureTestRuntimeError("Select a declared feature and state/event operation.", {
+          code: "feature_state_event_operation_undeclared"
+        });
+        return previewStateEventOperation(entry.definition, entry.streamDefinition, input, { before, config });
+      }
     }),
     query: Object.freeze({
       snapshot: querySnapshot,

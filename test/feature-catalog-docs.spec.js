@@ -28,6 +28,13 @@ describe("Generated feature catalog", () => {
     expect(markdown).toContain("## Shareable state declarations");
     expect(markdown).toContain("## Readable state exports");
     expect(markdown).toContain("## Durable event streams");
+    const healthRows = markdown.split("\n").filter((line) => line.startsWith("| fun.health | `impacts`"));
+    expect(healthRows).toHaveLength(2);
+    expect(healthRows[0]).toContain("| 1 | discord, twitch |");
+    expect(healthRows[0]).toMatch(/\| event_only \|$/);
+    expect(healthRows[1]).toContain("| 2 | discord, twitch |");
+    expect(healthRows[1]).toMatch(/\| state_event; implemented \|$/);
+    expect(markdown).toContain("not environment enablement");
     expect(markdown).toContain("## Platform event triggers");
     expect(markdown).toContain("## Workspace packages");
     expect(markdown).toContain("`@elmybot/feature-alive` | `core.alive` | yes");

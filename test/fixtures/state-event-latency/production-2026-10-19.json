@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 1,
+  "captureDateUtc": "2026-10-19",
+  "referenceUtc": "07:00:00.000",
+  "baselineCommit": "45c8ed9be7c37299868c06d215e90b382cf7d19d",
+  "provenance": "Allowlisted timing summary of supplied production Worker and browser logs; no raw capture, private IDs, headers, payloads or credentials.",
+  "clockPolicy": "Worker offsets share one timestamp domain; browser intervals use only browser timestamps. No browser/server offset inferred.",
+  "operations": [
+    {
+      "operationSequence": 43,
+      "eventSequence": 43,
+      "commitOffsetMs": 25859,
+      "firstClaimOffsetMs": 48443,
+      "acceptOffsetMs": 48551,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 44,
+      "eventSequence": 44,
+      "commitOffsetMs": 35303,
+      "firstClaimOffsetMs": 48634,
+      "acceptOffsetMs": 48699,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 45,
+      "eventSequence": 45,
+      "commitOffsetMs": 44539,
+      "firstClaimOffsetMs": 48783,
+      "acceptOffsetMs": 108576,
+      "uncertainAttempts": 1
+    },
+    {
+      "operationSequence": 46,
+      "eventSequence": 46,
+      "commitOffsetMs": 54035,
+      "firstClaimOffsetMs": 108668,
+      "acceptOffsetMs": 108751,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 47,
+      "eventSequence": 47,
+      "commitOffsetMs": 123044,
+      "firstClaimOffsetMs": 168457,
+      "acceptOffsetMs": 168568,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 48,
+      "eventSequence": 48,
+      "commitOffsetMs": 143248,
+      "firstClaimOffsetMs": 168653,
+      "acceptOffsetMs": 168716,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 49,
+      "eventSequence": 49,
+      "commitOffsetMs": 153897,
+      "firstClaimOffsetMs": 168803,
+      "acceptOffsetMs": 168861,
+      "uncertainAttempts": 2
+    },
+    {
+      "operationSequence": 50,
+      "eventSequence": 50,
+      "commitOffsetMs": 162602,
+      "firstClaimOffsetMs": 168925,
+      "acceptOffsetMs": 228601,
+      "uncertainAttempts": 1
+    },
+    {
+      "operationSequence": 51,
+      "eventSequence": 51,
+      "commitOffsetMs": 170499,
+      "firstClaimOffsetMs": 228687,
+      "acceptOffsetMs": 228781,
+      "uncertainAttempts": 0
+    },
+    {
+      "operationSequence": 52,
+      "eventSequence": 52,
+      "commitOffsetMs": 197712,
+      "firstClaimOffsetMs": 228864,
+      "acceptOffsetMs": 228935,
+      "uncertainAttempts": 1
+    },
+    {
+      "operationSequence": 53,
+      "eventSequence": 53,
+      "commitOffsetMs": 200015,
+      "firstClaimOffsetMs": 228995,
+      "acceptOffsetMs": 288550,
+      "uncertainAttempts": 1
+    }
+  ],
+  "lateAlarmObservations": [
+    {
+      "selectedOffsetMs": 19210,
+      "startedOffsetMs": 48443,
+      "lagMs": 29233
+    },
+    {
+      "selectedOffsetMs": 49840,
+      "startedOffsetMs": 108452,
+      "lagMs": 58612
+    },
+    {
+      "selectedOffsetMs": 112863,
+      "startedOffsetMs": 168457,
+      "lagMs": 55594
+    },
+    {
+      "selectedOffsetMs": 171499,
+      "startedOffsetMs": 228465,
+      "lagMs": 56966
+    },
+    {
+      "selectedOffsetMs": 229864,
+      "startedOffsetMs": 288474,
+      "lagMs": 58610
+    },
+    {
+      "selectedOffsetMs": 289793,
+      "startedOffsetMs": 348481,
+      "lagMs": 58688
+    }
+  ],
+  "runtimeDepthFailureRecords": 7,
+  "unknownRpcFailures": [
+    {
+      "offsetMs": 48840,
+      "rpc": "authority.append",
+      "durationMs": 57
+    },
+    {
+      "offsetMs": 168925,
+      "rpc": "confirm",
+      "durationMs": 25
+    },
+    {
+      "offsetMs": 168947,
+      "rpc": "authority.append",
+      "durationMs": 22
+    },
+    {
+      "offsetMs": 228982,
+      "rpc": "origin.retire",
+      "durationMs": 27
+    },
+    {
+      "offsetMs": 228995,
+      "rpc": "confirm",
+      "durationMs": 23
+    },
+    {
+      "offsetMs": 229017,
+      "rpc": "authority.append",
+      "durationMs": 22
+    }
+  ],
+  "browserEffectDurations": [
+    {
+      "eventSequence": 42,
+      "handlerEffectMs": 458
+    },
+    {
+      "eventSequence": 43,
+      "handlerEffectMs": 6424
+    },
+    {
+      "eventSequence": 44,
+      "handlerEffectMs": 460
+    },
+    {
+      "eventSequence": 45,
+      "handlerEffectMs": 2956
+    },
+    {
+      "eventSequence": 46,
+      "handlerEffectMs": 449
+    },
+    {
+      "eventSequence": 47,
+      "handlerEffectMs": 3268
+    },
+    {
+      "eventSequence": 48,
+      "handlerEffectMs": 564
+    },
+    {
+      "eventSequence": 49,
+      "handlerEffectMs": 552
+    },
+    {
+      "eventSequence": 50,
+      "handlerEffectMs": 553
+    },
+    {
+      "eventSequence": 51,
+      "handlerEffectMs": 547
+    },
+    {
+      "eventSequence": 52,
+      "handlerEffectMs": 463
+    },
+    {
+      "eventSequence": 53,
+      "handlerEffectMs": 443
+    }
+  ],
+  "unknowns": [
+    "Actual platform request-depth counter and full causal nesting",
+    "Cause of delayed platform dispatch",
+    "Cause of prolonged browser animation completion"
+  ]
+}

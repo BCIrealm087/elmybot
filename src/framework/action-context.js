@@ -5,6 +5,7 @@ import {
 } from "../integrations/contracts.js";
 import { frameworkApiVersion } from "./api-version.js";
 import { isRegisteredCapability } from "./access.js";
+import { prepareStateEventOperation, stateEventConfigKeys } from "./state-event-operation.js";
 
 export class FeatureContextError extends Error {
   constructor(message, { code = "feature_context_unavailable" } = {}) {
@@ -547,6 +548,54 @@ function logger(runtimeContext, action, invocation) {
 }
 
 export function createFeatureActionContext(action, invocation, runtimeContext = {}) {
+  let stateEventAttempted = false;
+  async function stateEventHandle(method, targetPlatform, operationId) {
+    requireDeclaredService(action, "stateEvents");
+    requireFeatureKey(operationId);
+    const entry = action.stateEventOperations?.[operationId];
+    if (!entry || !action.uses.stateEvents.includes(operationId)) {
+      throw new FeatureContextError("The action did not declare this state/event operation.", {
+        code: "feature_state_event_operation_undeclared"
+      });
+    }
+    if (runtimeContext.triggerKind && runtimeContext.triggerKind !== "command") {
+      throw new FeatureContextError("Combined operations support commands only.", {
+        code: "feature_state_event_trigger_invalid"
+      });
+    }
+    const expected = method === "local" ? "group_local" : "effective_shareable";
+    if (entry.definition.scope.kind !== expected) {
+      throw new FeatureContextError("The combined operation accessor has the wrong scope.", {
+        code: "feature_state_event_scope_invalid"
+      });
+    }
+    if (method === "current") requireEventStreamTarget(invocation, targetPlatform);
+    const implementation = runtimeContext.featureServices?.stateEvents?.[method];
+    if (typeof implementation !== "function") return unavailable("stateEvents")();
+    const handle = method === "local"
+      ? await implementation(action.featureId, operationId)
+      : await implementation(action.featureId, targetPlatform, operationId);
+    if (!handle || typeof handle.commit !== "function") {
+      throw new FeatureContextError("Combined operation resolution returned an invalid handle.", {
+        code: "feature_state_event_result_invalid"
+      });
+    }
+    return Object.freeze({ async commit(input) {
+      if (stateEventAttempted) throw new FeatureContextError("Only one combined commit attempt is allowed per invocation.", {
+        code: "feature_state_event_multiple_commits"
+      });
+      stateEventAttempted = true;
+      const prepare = async () => {
+        const keys = stateEventConfigKeys(entry.definition);
+        if (keys.length) requireDeclaredService(action, "config");
+        const get = runtimeContext.featureServices?.config?.get;
+        if (keys.length && typeof get !== "function") return unavailable("config")();
+        const config = Object.fromEntries(await Promise.all(keys.map(async (key) => [key, await get(action.featureId, key)])));
+        return prepareStateEventOperation(entry.definition, input, config);
+      };
+      return typeof handle.commitPrepared === "function" ? handle.commitPrepared(prepare) : handle.commit(await prepare());
+    } });
+  }
   const clockNow = typeof runtimeContext.clock?.now === "function"
     ? runtimeContext.clock.now.bind(runtimeContext.clock)
     : () => new Date();
@@ -619,6 +668,10 @@ export function createFeatureActionContext(action, invocation, runtimeContext = 
         requireEventStreamTarget(invocation, targetPlatform),
         requireFeatureKey(streamId)
       )
+    }),
+    stateEvents: Object.freeze({
+      local: (operationId) => stateEventHandle("local", null, operationId),
+      current: (targetPlatform, operationId) => stateEventHandle("current", targetPlatform, operationId)
     }),
     routes: routed.routes,
     effects: routed.effects,

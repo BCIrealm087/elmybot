@@ -21,6 +21,11 @@ services does not require new OAuth setup or secrets.
   credentials, or OAuth requirements from the PR. Mark inapplicable steps as
   such rather than repeating environment setup.
 
+For combined state/event features, use the [release and drain guide](state-event-release.md)
+and [health v2 transition](health-state-event-migration.md). Keep acceptance
+separate from transport enablement; a disabled acceptance switch does not restore
+the retired health v1 command. Rollback must retain recovery-capable code.
+
 ## Configure and deploy
 
 - [ ] Select the test or production environment and its matching bot/application
