@@ -46,7 +46,7 @@ export function twitchCapabilityAllowed(capability, actorClaims) {
   return false;
 }
 
-export function createTwitchActionInvocation(event, messageId, kind, args = {}) {
+export function createTwitchActionInvocation(event, messageId, kind, args = {}, messageTimestamp) {
   const sourceEventId = `twitch:eventsub:${messageId}`;
   return createCommandInvocation({
     kind,
@@ -64,6 +64,7 @@ export function createTwitchActionInvocation(event, messageId, kind, args = {}) 
     },
     args,
     sourceEventId,
+    ...(messageTimestamp === undefined ? {} : { sourceCreatedAtMs: Date.parse(messageTimestamp) }),
     correlationId: sourceEventId
   });
 }
@@ -75,7 +76,7 @@ export async function executeTwitchAction(
   args = {},
   context = {}
 ) {
-  const invocation = createTwitchActionInvocation(event, messageId, kind, args);
+  const invocation = createTwitchActionInvocation(event, messageId, kind, args, context.messageTimestamp);
   const result = await executeAction(
     actionRegistry,
     invocation,

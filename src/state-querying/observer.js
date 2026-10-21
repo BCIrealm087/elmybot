@@ -1,3 +1,4 @@
+import { traceStateEvent } from "../state-events/diagnostics.js";
 import { jsonResponse, logError } from "../common.js";
 import { createPlatformGroupRef } from "../integrations/contracts.js";
 import {
@@ -575,6 +576,8 @@ export class StateQueryObserverBackend {
       }
       if (url.pathname === DELIVERY_PATH) {
         const result = receiveNotification(this.state, input);
+        traceStateEvent(this.env, "read.notify.receive", { ownerId: this.state.id.toString(), notificationId: input.id,
+          stateRevision: input.revision, committedAtMs: input.committedAtMs });
         await scheduleLiveObservationAlarm(this.state);
         return noStoreJson(result);
       }

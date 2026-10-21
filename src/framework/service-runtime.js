@@ -1,3 +1,4 @@
+import { createStateEventCommandRuntime } from "../state-events/command-runtime.js";
 import {
   FEATURE_STORAGE_PATH_PREFIX,
   INTEGRATION_FEATURE_STATE_PATH_PREFIX
@@ -29,6 +30,7 @@ export const FEATURE_RUNTIME_SERVICES = Object.freeze([
   "shareableState",
   "state",
   "eventStreams",
+  "stateEvents",
   "random"
 ]);
 
@@ -429,6 +431,9 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
         async queryRead(featureId, scope, key) {
           return await shareableRequest(featureId, scope, "query-read", { key });
         },
+        async queryRevision(featureId, scope, stateEvent = false) {
+          return await shareableRequest(featureId, scope, "revision", { stateEvent });
+        },
         async revision(featureId, scope) {
           const result = await shareableRequest(featureId, scope, "revision", {});
           return result.mutationVersion;
@@ -472,6 +477,7 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
         }
       }),
       eventStreams: createDurableEventStreamRuntime(env, invocation, registry),
+      stateEvents: createStateEventCommandRuntime(env, invocation, registry),
       state: Object.freeze({
         async get(featureId, key) {
           const result = await storageRequest(
@@ -489,6 +495,9 @@ export function createFeatureServiceRuntime(env, invocation, registry = null) {
             "state/query-read",
             input(featureId, { key })
           );
+        },
+        async queryRevision(featureId, stateEvent = false) {
+          return await storageRequest(env, invocation, "state/revision", input(featureId, { stateEvent }));
         },
         async revision(featureId) {
           const result = await storageRequest(

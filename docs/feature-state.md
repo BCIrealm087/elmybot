@@ -26,6 +26,7 @@ Use this decision table before adding state:
 | --- | --- | --- |
 | Each Discord guild or Twitch channel has its own count, settings, or collection | The origin group | Use `ctx.state` or `ctx.config` |
 | One group remembers local data and sends notifications or effects to linked groups | The origin group | Keep local state and use declared routes/effects for delivery |
+| One command must atomically save state and queue its event | One origin-local partition or one effective shareable namespace | Declare `stateEvents` and use its `local()` or `current()` handle; see [combined authoring](state-event-authoring.md) |
 | New state must work standalone and become authoritative through the selected relationship | The effective standalone or integration realm | Declare the namespace and use `ctx.shareableState.current(otherPlatform, namespaceId)` |
 
 “Works on Discord and Twitch” means the behavior is available on both

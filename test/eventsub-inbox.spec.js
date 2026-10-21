@@ -64,7 +64,7 @@ async function inboxRow(broadcasterUserId, messageId) {
 		twitchEventSubInboxStub(env, broadcasterUserId),
 		async (_instance, state) => state.storage.sql.exec(
 			`SELECT message_id, status, attempts, next_attempt_at_ms,
-			        completed_at_ms, last_error
+			        completed_at_ms, last_error, message_timestamp
 			 FROM eventsub_inbox WHERE message_id = ?`,
 			messageId
 		).toArray()[0]
@@ -119,6 +119,7 @@ describe("Twitch EventSub durable inbox", () => {
 			broadcasterUserId,
 			{ ...original, messageTimestamp: new Date(Date.now() + 1).toISOString() }
 		)).toEqual({ accepted: false, duplicate: true, status: "pending" });
+		expect((await inboxRow(broadcasterUserId, messageId)).message_timestamp).toBe(original.messageTimestamp);
 		await expect(enqueueTwitchEventSubMessage(
 			eventSubEnv,
 			broadcasterUserId,

@@ -120,3 +120,10 @@ The lower-level grant/session routes are documented in
 [`durable-event-http.md`](durable-event-http.md), and the normative frames and
 delivery semantics remain in
 [`durable-event-contract.md`](durable-event-contract.md#websocket-protocol).
+
+For temporary latency investigation, `createDurableEventClient` accepts an
+optional synchronous `onDiagnostic(record)` callback for `event.receive`,
+`event.handled` and `event.ack`. Records contain IDs, sequence and timestamps,
+never payload/cursor/credentials. Callback exceptions cannot affect handling or
+ACK. The callback owns any output budget; the shipped health widget applies its
+own opt-in cap. See [state/event diagnostics](state-event-diagnostics.md).

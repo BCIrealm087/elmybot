@@ -12,6 +12,18 @@ This policy covers the JavaScript API used by reviewed feature modules bundled
 with Elmybot. It does not make runtime-loaded third-party code safe, and it does
 not turn Worker internals into supported extension points.
 
+The [state-and-event contract](state-event-contract.md) now has additive
+declaration and pure preview support, plus private recovery and local/shareable
+atomic storage with lifecycle authority, private deferred admission and
+[gap/reset reconciliation](state-event-delivery.md), and the private
+[bounded relay and producer wakeups](state-event-relay.md), plus
+[readable/browser correlation](state-event-browser.md).
+Combined command execution and the [health v2 migration](health-state-event-migration.md)
+are implemented behind `STATE_EVENT_OPERATIONS_ENABLED` plus the event master
+switch. Checked-in Wrangler environments now enable both switches; existing
+independent state/event service guards remain in force. See [state/event authoring](state-event-authoring.md)
+and [the implementation roadmap](state-event-roadmap.md).
+
 ## Supported entry points
 
 Production feature modules import only from:
@@ -47,6 +59,8 @@ surface consists of:
   `ReadableStateDefinitionError`;
 - durable-event helpers: `defineDurableEventStream` and
   `DurableEventStreamDefinitionError`;
+- combined-operation declarations: `defineStateEventOperation` and
+  `StateEventOperationDefinitionError`;
 - action and routing helpers: `defineAction`, `defineRoute`,
   `defineEventAction`, and `defineScheduledAction`;
 - validation and access helpers: `schema`, `SchemaValidationError`, `access`,
@@ -105,7 +119,7 @@ consumer state. See the normative
 [`durable-event-contract.md`](durable-event-contract.md).
 
 Actions may explicitly request the controlled `authorization`, `config`,
-`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, and
+`integrationState`, `links`, `shareableState`, `state`, `eventStreams`, `stateEvents`, and
 `random` context services.
 `authorization` delegates conditional
 checks to the same platform-owned capability policy used for whole actions; it
@@ -257,6 +271,24 @@ or changing full-result replacement semantics requires a new protocol version.
 Transport cursors are opaque and may expire; resynchronization remains guaranteed.
 Internal operational controls and diagnostics are not feature or test-kit exports.
 See [release and migration guidance](state-query-release.md).
+
+## Combined-operation test helpers
+
+`createFeatureTestRuntime(feature, { stateEventsEnabled: true })` opts into
+in-memory combined command behavior. The default is disabled. The additive
+`runtime.stateEvents.preview({ operation, input, before?, config?, feature? })`
+uses production declaration validation/calculation without accepting, persisting
+or retaining an operation. `feature` disambiguates a multi-feature runtime.
+
+The opted-in simulator shares current state with query helpers, creates event
+correlation and original same-source receipts, permits basic bounded offline
+acceptance, and rejects direct publication to combined streams. It does not model
+SQLite rollback/crashes, durable authority fencing, relay scheduling, receipt
+pruning or production billing. Use [native verification](state-event-verification.md)
+for those guarantees. [Authoring](state-event-authoring.md) documents command
+handles, errors and contributor cases; [release guidance](state-event-release.md)
+covers enablement and safe retirement. Internal recovery/relay bindings remain
+unsupported private interfaces; this addition does not expose raw transactions.
 
 ## Manifest compatibility
 

@@ -1,3 +1,8 @@
+import { probeWithStateEventBindingAuthority, appendWithStateEventBindingAuthority } from "../state-events/delivery-authority.js";
+import { STATE_EVENT_SOURCE_SNAPSHOT_HEADER } from "../state-events/delivery-snapshot.js";
+import { commitWithStateEventBindingAuthority, recoverLifecycleStateEvents } from "../state-events/binding-authority.js";
+import { STATE_EVENT_ORIGIN_HEADER } from "../state-events/shareable-commit.js";
+import { recoveryError, StateEventRecoveryError } from "../state-events/identity.js";
 import { jsonResponse, logError } from "../common.js";
 import { alarmDrainTimeRemaining } from "../alarm-drain.js";
 import {
@@ -532,34 +537,21 @@ export class IntegrationRegistry {
     return revision;
   }
 
-  async appendDurableEvent(input) {
+  async withBindingAuthority(operation) {
     const previous = this.durableEventAppendTail;
     let release;
-    const current = new Promise((resolve) => {
-      release = resolve;
-    });
+    const current = new Promise((resolve) => { release = resolve; });
     this.durableEventAppendTail = previous.then(() => current);
     await previous;
-    try {
-      return await appendWithDurableEventBindingAuthority(this, input);
-    } finally {
-      release();
-    }
+    try { return await operation(); } finally { release(); }
+  }
+
+  async appendDurableEvent(input) {
+    return this.withBindingAuthority(() => appendWithDurableEventBindingAuthority(this, input));
   }
 
   async issueDurableEventGrant(input) {
-    const previous = this.durableEventAppendTail;
-    let release;
-    const current = new Promise((resolve) => {
-      release = resolve;
-    });
-    this.durableEventAppendTail = previous.then(() => current);
-    await previous;
-    try {
-      return await issueWithDurableEventBindingAuthority(this, input);
-    } finally {
-      release();
-    }
+    return this.withBindingAuthority(() => issueWithDurableEventBindingAuthority(this, input));
   }
 
   registerStateQueryBindingWatcher(input) {
@@ -3268,6 +3260,7 @@ export class IntegrationRegistry {
        ORDER BY requested_at_ms ASC, group_key ASC
        LIMIT 1`
     ).toArray()[0];
+    if (job) await recoverLifecycleStateEvents(this, "/groups/revoke", { group: parseGroupKey(job.group_key) });
     return job
       ? await this.processGroupRevocationBatch(job.group_key)
       : { revoked: 0, pending: false };
@@ -3280,33 +3273,43 @@ export class IntegrationRegistry {
        ORDER BY requested_at_ms ASC, integration_id ASC
        LIMIT 1`
     ).toArray()[0];
+    if (job) await recoverLifecycleStateEvents(this, "/integrations/revoke", { integrationId: job.integration_id });
     return job
       ? await this.completeIntegrationRevocation(job.integration_id)
       : null;
   }
 
   async alarm() {
-    try {
-      await this.durableEventAppendTail;
-      await this.expireInvitations();
-      this.pruneTerminalInvitations();
-      await this.processNextGroupRevocation();
-      await this.processNextIntegrationRevocation();
-      await drainStateQueryBindingNotifications(this.state, this.env);
-      await drainDurableEventBindingNotifications(this.state, this.env);
-    } finally {
-      await this.armNextExpiration();
-    }
+    return this.withBindingAuthority(async () => {
+      try {
+        await this.expireInvitations();
+        this.pruneTerminalInvitations();
+        await this.processNextGroupRevocation();
+        await this.processNextIntegrationRevocation();
+        await drainStateQueryBindingNotifications(this.state, this.env);
+        await drainDurableEventBindingNotifications(this.state, this.env);
+      } finally {
+        await this.armNextExpiration();
+      }
+    });
   }
 
   async fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (request.method === "POST" && BINDING_LIFECYCLE_MUTATION_PATHS.has(path)) {
+      return this.withBindingAuthority(() => this.handleRequest(request));
+    }
+    return this.handleRequest(request);
+  }
+
+  async handleRequest(request) {
     const url = new URL(request.url);
     try {
       if (
         request.method === "POST" &&
         BINDING_LIFECYCLE_MUTATION_PATHS.has(url.pathname)
       ) {
-        await this.durableEventAppendTail;
+        await recoverLifecycleStateEvents(this, url.pathname, await request.clone().json());
         await prepareStateQueryBindingMutation(this.state);
         await prepareDurableEventBindingMutation(this.state);
       }
@@ -3381,6 +3384,23 @@ export class IntegrationRegistry {
           await request.json()
         ));
       }
+      if (request.method === "POST" && url.pathname === "/state-events/probe") {
+        if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
+        const input = await request.json();
+        return noStoreJson(await this.withBindingAuthority(() => probeWithStateEventBindingAuthority(this, input)));
+      }
+      if (request.method === "POST" && url.pathname === "/state-events/append") {
+        if (request.headers.get("x-elmybot-state-event-delivery") !== "v1") throw recoveryError("authority_required", 403);
+        const input = await request.json();
+        return noStoreJson(await this.withBindingAuthority(() => appendWithStateEventBindingAuthority(this, input, {
+          trustedSnapshot: request.headers.get(STATE_EVENT_SOURCE_SNAPSHOT_HEADER) === "snapshot-v1"
+        })));
+      }
+      if (request.method === "POST" && url.pathname === "/state-events/commit") {
+        if (request.headers.get(STATE_EVENT_ORIGIN_HEADER) !== "prepared-v1") throw recoveryError("origin_required", 403);
+        const input = await request.json();
+        return noStoreJson(await this.withBindingAuthority(() => commitWithStateEventBindingAuthority(this, input)));
+      }
       if (
         request.method === "POST" &&
         url.pathname === "/durable-events/append"
@@ -3429,6 +3449,7 @@ export class IntegrationRegistry {
       return new Response("Not found", { status: 404 });
     } catch (error) {
       if (
+        error instanceof StateEventRecoveryError ||
         error instanceof IntegrationRegistryError ||
         error instanceof StateQueryNotificationError ||
         error instanceof DurableEventBindingError ||

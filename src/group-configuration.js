@@ -1,3 +1,12 @@
+import { configureStateEventDiagnostics, traceStateEventForOwner } from "./state-events/diagnostics.js";
+import { handleStateEventCommand } from "./state-events/command-origin.js";
+import { drainStateEventRelay, handleStateEventDeliverySource, handleStateEventOriginRetirement } from "./state-events/delivery-source.js";
+import { commitPreparedSharedStateEvent } from "./state-events/shared-publication.js";
+import { commitLocalStateEvent } from "./state-events/local-commit.js";
+import { stateEventOutboxExists } from "./state-events/outbox.js";
+import { recoverStorageAlarm, runStorageAlarm } from "./storage-alarm.js";
+import { StateEventRecoveryError } from "./state-events/identity.js";
+import { handleLocalStateEventOwnerRequest } from "./state-events/owner-handler.js";
 import { jsonResponse, logError } from "./common.js";
 import {
   FeatureStorageUserFacingError,
@@ -208,9 +217,11 @@ export class GroupConfig {
    * Durable Object per group responsible for storing and retrieving group
    * configuration such as role-based command allowlists.
    */
-  constructor(state, env) {
+  constructor(state, env, featureRegistry = null) {
     this.state = state;
+    configureStateEventDiagnostics(state, env);
     this.env = env;
+    this.featureRegistry = featureRegistry;
     this.identityMigrationPromise = null;
     initializeFeatureStorageTables(state);
     initializeStateQueryGrantTables(state);
@@ -219,8 +230,9 @@ export class GroupConfig {
     if (hasNotificationTables) {
       initializeLocalStateNotificationTables(state);
     }
-    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state)) {
+    if (hasNotificationTables || hasPendingStateQueryGrantInvalidations(state) || stateEventOutboxExists(state)) {
       state.blockConcurrencyWhile(async () => {
+        await recoverStorageAlarm(state);
         await recoverStateQueryGrantInvalidations(state);
         if (hasNotificationTables) {
           await recoverStateQueryNotificationDelivery(state);
@@ -311,7 +323,19 @@ export class GroupConfig {
     }
 
     try {
+      const command = await handleStateEventCommand(this.state, this.env, this.featureRegistry, request, url.pathname);
+      if (command !== null) return jsonResponse(command);
+      const retirement = await handleStateEventOriginRetirement(this.state, this.env, request, url.pathname);
+      if (retirement !== null) return jsonResponse(retirement);
+      const delivery = await handleStateEventDeliverySource(this.state, this.env, request, new URL(request.url).pathname, "group_local");
+      if (delivery !== null) return new Response(JSON.stringify(delivery), { headers: { "content-type": "application/json" } });
       await this.ensureIdentityMigration(request.headers.get(LEGACY_GROUP_ID_HEADER));
+      if (request.method === "POST" && url.pathname === "/internal/state-events/origin/commit-shared") {
+        return jsonResponse(await commitPreparedSharedStateEvent(this.state, this.env, await request.json()));
+      }
+      const stateEventOwnerResult = await handleLocalStateEventOwnerRequest(this.state, this.env, request, url.pathname,
+        (input) => commitLocalStateEvent(this.state, this.env, this.featureRegistry, input));
+      if (stateEventOwnerResult !== null) return jsonResponse(stateEventOwnerResult);
       const featureStorageResult = await handleFeatureStorageRequest(
         this.state,
         request,
@@ -360,13 +384,14 @@ export class GroupConfig {
       return await pathHandlers.base(this.state, request, pathHandler);
     } catch (e) {
       if (
+        e instanceof StateEventRecoveryError ||
         e instanceof GroupConfigUserFacingError ||
         e instanceof FeatureStorageUserFacingError ||
         e instanceof StateQueryGrantStorageError ||
         e instanceof StateQueryNotificationError ||
         isDurableEventPublicationError(e)
       ) {
-        return jsonResponse({ userFacingError: e.message, code: e.code }, e.status);
+        return jsonResponse({ userFacingError: e.message, code: e.code, ...(e.retryAfterSeconds ? { retryAfterSeconds: e.retryAfterSeconds } : {}) }, e.status);
       }
 
       const correlationId = request.headers.get("x-correlation-id") ?? crypto.randomUUID();
@@ -381,9 +406,14 @@ export class GroupConfig {
   }
 
   async alarm() {
-    await drainStateQueryGrantInvalidations(this.state, this.env);
-    if (stateQueryNotificationTablesExist(this.state)) {
-      await drainStateQueryNotifications(this.state, this.env);
-    }
+    configureStateEventDiagnostics(this.state, this.env);
+    traceStateEventForOwner(this.state, "alarm.start");
+    await runStorageAlarm(this.state, async () => {
+      await drainStateEventRelay(this.state, this.env);
+      await drainStateQueryGrantInvalidations(this.state, this.env);
+      if (stateQueryNotificationTablesExist(this.state)) {
+        await drainStateQueryNotifications(this.state, this.env);
+      }
+    });
   }
 }

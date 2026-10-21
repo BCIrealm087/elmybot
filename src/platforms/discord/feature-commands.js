@@ -1,3 +1,4 @@
+import { formatStateEventCommandError } from "../../state-events/command-errors.js";
 import { ActionRegistryError } from "../../actions/index.js";
 import { SchemaValidationError } from "../../framework/index.js";
 import { formatCommandInputError } from "../../framework/command-input-error.js";
@@ -138,6 +139,8 @@ function userFacingError(error, definition) {
   if (error instanceof DiscordFeatureSchedulingError) {
     return ephemeralData(error.message);
   }
+  const stateEventError = formatStateEventCommandError(error);
+  if (stateEventError !== null) return ephemeralData(stateEventError);
   const commandName = definition.name;
   if (error instanceof ActionRegistryError && error.code === "action_forbidden") {
     return ephemeralData(`You are not authorized to use /${commandName}.`);

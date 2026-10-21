@@ -148,7 +148,8 @@ export function generateFeatureCatalogMarkdown(
     `${entry.delivery.kind}; ${entry.delivery.consumers} consumer; ` +
       `${entry.delivery.retentionSeconds}s; ` +
       `${entry.delivery.maxRetainedEvents} events; ` +
-      `${entry.delivery.maxRetainedBytes} bytes`
+      `${entry.delivery.maxRetainedBytes} bytes`,
+    entry.publication ? `${entry.publication.kind}; ${entry.publication.implementation}` : "event_only"
   ]);
   const workspaceRows = workspacePackages.map((workspacePackage) => [
     `\`${workspacePackage.packageName}\``,
@@ -261,6 +262,10 @@ export function generateFeatureCatalogMarkdown(
       "and commands that must each run. They are not job queues, permanent audit " +
       "logs, or exactly-once effects.",
     "",
+    "Publication distinguishes connected-consumer event-only append from atomic " +
+      "state/event acceptance. `implemented` describes code support, not environment " +
+      "enablement; see [state/event release controls](state-event-release.md).",
+    "",
     table(
       [
         "Feature",
@@ -270,7 +275,8 @@ export function generateFeatureCatalogMarkdown(
         "Scope",
         "Access eligibility",
         "Payload root",
-        "Delivery"
+        "Delivery",
+        "Publication"
       ],
       eventStreamRows
     ),

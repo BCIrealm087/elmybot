@@ -117,6 +117,8 @@ defineFeature({
   schedules: [],
   shareableState: [],
   readableState: [],
+  eventStreams: [],
+  stateEvents: [],
   effectAdapters: {
     discord: [],
     twitch: []
@@ -150,6 +152,26 @@ methods; it cannot mutate state or invoke command behavior.
 The complete implemented declaration and subject-metadata contract is in
 [`state-query-readable-state.md`](state-query-readable-state.md). Query
 evaluation, grants, and delivery are separate staged APIs.
+
+### Durable-event and combined-operation declarations
+
+`eventStreams` defaults to a frozen empty array and accepts up to ten branded
+`defineDurableEventStream()` declarations. Ordinary event-only streams use the
+[`eventStreams` service](durable-event-contract.md). Explicit combined streams
+add `publication: { kind: "state_event", source: scope }`; they MUST NOT accept
+ordinary independent publication. Both keep separate operator-grant access.
+
+`stateEvents` defaults to a frozen empty array and accepts up to twenty branded
+`defineStateEventOperation()` declarations. Each describes one finite mutation,
+input schema, local or effective-shareable scope, same-feature/version stream,
+and bounded event projection. Registry composition MUST validate namespace,
+stream, source-scope and origin compatibility. The normative declaration shapes,
+projection vocabulary and validation rules are in [state/event authoring](state-event-authoring.md);
+atomicity, identity, limits and lifecycle behavior are in the
+[state/event contract](state-event-contract.md).
+
+This is an additive API v1 capability. Code availability and operational
+enablement are separate; checked-in environments disable new combined acceptance.
 
 ### Shareable-state declarations
 
@@ -318,7 +340,8 @@ defineAction({
   uses: {
     routes: [],
     effects: [],
-    services: []
+    services: [],
+    stateEvents: []
   },
   execute
 });
@@ -341,7 +364,12 @@ Requirements:
 `uses.routes` lists route kinds the action may resolve. `uses.effects` lists
 effect kinds it may return. `uses.services` lists optional context services it
 requires, chosen from `authorization`, `config`, `integrationState`, `links`,
-`shareableState`, `state`, and `random` in API v1.
+`shareableState`, `state`, `eventStreams`, `stateEvents`, and `random` in API v1.
+`uses.stateEvents` explicitly allowlists operation IDs owned by the action
+feature. Combined actions MUST be directly command-bound, declare a group
+cooldown of at least one second, and request only `stateEvents` plus optional
+read-only `config` and `authorization`. Routes, effects and other mutable services
+MUST be rejected. Ordinary event-only actions retain their independent guards.
 
 The runtime MUST reject an undeclared route resolution or returned effect kind.
 This makes dependencies visible to startup validation, documentation, and
@@ -535,6 +563,14 @@ The action context has this exact API v1 surface:
       reset(): Promise<number>
     }
   },
+  eventStreams: {
+    local(streamId): Promise<{ publish(payload): Promise<EventReceipt> }>,
+    current(targetPlatform, streamId): Promise<{ publish(payload): Promise<EventReceipt> }>
+  },
+  stateEvents: {
+    local(operationId): Promise<{ commit(input): Promise<StateEventReceipt> }>,
+    current(targetPlatform, operationId): Promise<{ commit(input): Promise<StateEventReceipt> }>
+  },
   log: {
     debug(event, metadata = {}): void,
     info(event, metadata = {}): void,
@@ -560,7 +596,7 @@ Rules:
 - `routedMessage()` selects the registered Discord-message or Twitch-chat
   effect from the route target and applies the target platform's length limit.
 - `authorization`, `config`, `integrationState`, `links`, `shareableState`,
-  `state`, and `random`
+  `state`, `eventStreams`, `stateEvents`, and `random`
   may be used only when declared in `uses.services`. Undeclared access is a framework error. The
   namespace shape remains stable so feature code does not branch on service
   presence.
@@ -615,24 +651,29 @@ Rules:
 - Actions receive no raw `env`, `fetch`, request, interaction, EventSub payload,
   OAuth token, or Durable Object stub.
 
-Although `authorization`, `config`, `integrationState`, `links`,
-`shareableState`, `state`, and `random` are part of
-the approved v1 surface,
-the composition runtime MAY initially implement only the services required by
-installed features. A feature declaring an unavailable service MUST fail at
-composition rather than later during execution.
+`StateEventReceipt` contains only `accepted: true`, opaque operation/event IDs,
+original commit/expiry times, the mutation result and version-1 `stateEvent`
+correlation. Success means state saved and event durably queued at the owner;
+`EventReceipt` from ordinary `publish()` confirms destination append instead.
+See [the authoring receipt/error reference](state-event-authoring.md#commit-receipts-and-failures).
+A combined invocation MUST allow only one commit attempt across all handles,
+including after failure, and MUST return no routed effects. Runtime receipt
+recovery precedes fresh preparation/configuration and switch checks. A timeout
+MUST NOT be treated as proof that no mutation happened.
 
-Implementation status: all seven API v1 services are available in the installed
-composition. Authorization delegates to the platform policy. Links resolves
+Implementation status: all nine listed context services are available in the
+installed composition; fresh combined acceptance requires explicit switches.
+Authorization delegates to the platform policy. Links resolves
 the origin group's selected cross-platform relationship through the integration
 registry. Config and state are scoped through `GroupConfig`; integration state
 is scoped through the per-integration coordinator. Shareable state resolves to
-the dedicated realm Durable Object but is unused by installed features while
-feature migration remains staged. Its snapshot, fingerprint, comparison,
-sealing, cloning, finalization, permanent archive, and successor operations are
+the dedicated realm Durable Object and is used by installed features. Its
+snapshot, fingerprint, comparison, sealing, cloning, finalization, permanent
+archive, and successor operations are
 protected infrastructure capabilities and never appear in an action context.
-Declarative cooldowns use the per-group boundary and are enforced before action
-code.
+Declarative cooldowns use the per-group boundary. Ordinary actions claim them
+before action code; combined actions durably prepare them with the frozen request
+after original-outcome lookup, so retries do not consume another cooldown.
 
 ## Command definitions
 

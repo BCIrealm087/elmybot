@@ -2,6 +2,7 @@ import {
   isFrameworkDefinition,
   markFrameworkDefinition
 } from "./definition-brand.js";
+import { normalizeStateEventScope } from "./state-event-operation.js";
 
 const DURABLE_EVENT_STREAM_TYPE = "durable-event-stream";
 const STREAM_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
@@ -238,7 +239,8 @@ export function defineDurableEventStream(input) {
     "platforms",
     "scope",
     "access",
-    "payload"
+    "payload",
+    "publication"
   ]), path);
   if (typeof input.id !== "string" || !STREAM_ID_PATTERN.test(input.id)) {
     fail(`${path}.id`, "is invalid.");
@@ -250,6 +252,15 @@ export function defineDurableEventStream(input) {
   ) {
     fail(`${path}.version`, "must be a positive integer no greater than 1000000.");
   }
+  let publication;
+  if (input.publication !== undefined) {
+    requireObject(input.publication, `${path}.publication`);
+    onlyFields(input.publication, new Set(["kind", "source"]), `${path}.publication`);
+    if (input.publication.kind !== "state_event") fail(`${path}.publication.kind`, "is invalid.");
+    const source = normalizeStateEventScope(input.publication.source, `${path}.publication.source`);
+    if (source.kind !== input.scope?.kind) fail(`${path}.publication.source`, "must match the stream scope.");
+    publication = Object.freeze({ kind: "state_event", source });
+  }
   return markFrameworkDefinition({
     id: input.id,
     version: input.version,
@@ -258,7 +269,8 @@ export function defineDurableEventStream(input) {
     platforms: normalizePlatforms(input.platforms, `${path}.platforms`),
     scope: normalizeScope(input.scope, `${path}.scope`),
     access: normalizeAccess(input.access, `${path}.access`),
-    payload: normalizePayload(input.payload, `${path}.payload`)
+    payload: normalizePayload(input.payload, `${path}.payload`),
+    ...(publication ? { publication } : {})
   }, DURABLE_EVENT_STREAM_TYPE);
 }
 
@@ -287,6 +299,9 @@ export function publicDurableEventStream(definition, featureId) {
     scope: definition.scope,
     access: definition.access,
     payload: definition.payload,
+    ...(definition.publication ? {
+      publication: { ...definition.publication, implementation: "implemented" }
+    } : {}),
     delivery: DURABLE_EVENT_DELIVERY
   });
 }

@@ -9,6 +9,7 @@ function counterpart(platform) {
 
 export function createStateQuerySourceRuntime(env, {
   target,
+  registry,
   correlationId = crypto.randomUUID()
 }) {
   const group = createPlatformGroupRef({
@@ -29,6 +30,9 @@ export function createStateQuerySourceRuntime(env, {
         : `shareable\u0000${featureId}\u0000${definition.scope.namespace}`;
       if (sources.has(cacheKey)) return sources.get(cacheKey);
 
+      const stateEvent = Object.values(registry?.stateEvents ?? {}).some((entry) => entry.featureId === featureId &&
+        entry.definition.scope.kind === definition.scope.kind &&
+        (definition.scope.kind === "group_local" || entry.definition.scope.namespace === definition.scope.namespace));
       let source;
       if (definition.scope.kind === "group_local") {
         source = Object.freeze({
@@ -38,8 +42,8 @@ export function createStateQuerySourceRuntime(env, {
             sourceGroup: group,
             featureId
           }),
-          async revision() {
-            return await services.state.revision(featureId);
+          async observe() {
+            return await services.state.queryRevision(featureId, stateEvent);
           },
           async get(key) {
             return await services.state.queryRead(featureId, key);
@@ -91,8 +95,8 @@ export function createStateQuerySourceRuntime(env, {
             });
             return result.binding;
           },
-          async revision() {
-            return await services.shareableState.revision(featureId, scope);
+          async observe() {
+            return await services.shareableState.queryRevision(featureId, scope, stateEvent);
           },
           async get(key) {
             return await services.shareableState.queryRead(featureId, scope, key);

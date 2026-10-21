@@ -35,6 +35,16 @@ product surfaces. In version 1, one action must not combine `eventStreams` with
 must return no routed effects. The framework cannot atomically commit unrelated
 state, event, and effect owners, so implicit dual publication is rejected.
 
+The implemented additive [state-and-event contract](state-event-contract.md)
+provides an explicit `stateEvents` operation with a transaction at the state
+owner. Its success means state saved and event intent queued; it permits bounded
+offline acceptance without a consumer. This leaves the independent `eventStreams`
+guards, connected-consumer admission and confirmed-append success unchanged.
+Combined streams declare `publication.kind: "state_event"` and cannot use ordinary
+`publish()`. Existing versions retain their meaning. See [authoring](state-event-authoring.md)
+and [release controls](state-event-release.md); checked-in environments disable
+fresh combined acceptance.
+
 ## Stable version-1 identities
 
 These identities are fixed:
