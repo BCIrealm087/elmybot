@@ -7,7 +7,8 @@ Declarations, local/shareable atomic acceptance, recovery, bounded delivery,
 readable/browser correlation and health v2 are implemented. See the
 [failure evidence](state-event-verification.md), [measured costs](state-event-costs.md)
 and [release/rollout guide](state-event-release.md). Checked-in production and
-test environments disable fresh combined acceptance. No deployment is implied.
+test environments now enable fresh combined acceptance following operator live
+testing. Deployment remains operator-controlled.
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `9c3ebf82aae63f5d0ce27ee63a9a3de1fae9f170`.
@@ -469,8 +470,10 @@ explicit version-transition guidance in step 9, not an automatic conversion.
 
 Reserve `STATE_EVENT_OPERATIONS_ENABLED` as the new-acceptance switch; only the
 literal string `true` enables it. New combined acceptance also requires the
-existing event master switch. Missing/malformed values fail closed. Step 9 binds this switch to command preparation and owner acceptance; checked-in
-Wrangler environments leave it false for operator-controlled rollout.
+existing event master switch. Missing/malformed values fail closed. Step 9 binds
+this switch to command preparation and owner acceptance; checked-in Wrangler
+environments now set both switches to `"true"`. Operators can disable acceptance
+while retaining recovery as described below.
 
 Disabling new combined acceptance does not erase receipts, hide accepted
 results or stop safe drain/cleanup. Keep the event master switch enabled for

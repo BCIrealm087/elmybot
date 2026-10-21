@@ -2,10 +2,11 @@
 
 Roadmap step 4 implements the private `GroupConfig` storage adapter. Combined
 command execution is connected in [step 9](health-state-event-migration.md), with
-fresh acceptance disabled in checked-in Wrangler environments. [Shareable acceptance](state-event-shareable-storage.md)
+fresh acceptance now enabled in checked-in Wrangler environments. [Shareable acceptance](state-event-shareable-storage.md)
 is implemented in step 5 and [deferred append/gap handling](state-event-delivery.md)
-in step 6, and [automatic relay](state-event-relay.md) in step 7. Operational
-enablement follows later. These internals are not stable feature API exports.
+in step 6, and [automatic relay](state-event-relay.md) in step 7. See the
+[release review](state-event-release.md) for current operational status.
+These internals are not stable feature API exports.
 
 ## Commit boundary
 

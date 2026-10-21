@@ -10,8 +10,9 @@ The action is `fun.health.impact.v2`; new commands atomically commit through
 including accepted zero-applied impacts. Symmetric directional defaults share
 health; otherwise the normal selected/standalone realm applies.
 
-Fresh acceptance requires both event switches; `STATE_EVENT_OPERATIONS_ENABLED`
-remains explicitly false in checked-in Wrangler environments. Deployment and
+Fresh acceptance requires both event switches; checked-in Wrangler environments
+now set `STATE_EVENT_OPERATIONS_ENABLED` and the event master to `"true"` after
+successful operator live testing. Deployment and
 rollout remain operator-controlled; [release guidance](../../../docs/state-event-release.md)
 summarizes completed verification, measured costs and safe drain/rollback.
 

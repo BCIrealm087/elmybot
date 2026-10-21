@@ -1,8 +1,9 @@
 # Atomic state changes with durable events: development roadmap
 
 Status: steps 1–12 complete; implementation and review preparation finished.
-Fresh combined acceptance remains disabled in checked-in environments; deployment
-and live enablement remain operator-controlled.
+Fresh combined acceptance is now enabled in checked-in production/test environments
+following operator live testing; deployment remains operator-controlled. The
+subsequent latency-repair roadmap is also complete; see the [release review](state-event-release.md).
 Created: 2026-10-17.
 Work branch: `codex-state-ironing` in `BCIrealm087/elmybot`.
 Baseline reviewed: `df7e28c58670a7c110a8dc7b01aeb2b6b4e046ca`.
@@ -329,7 +330,8 @@ combined action/stream, authoritative shared bounded health and a normal readabl
 export. The v2 widget recovers bot state with separate grants and animates live
 impacts; an explicit v1 view preserves old backlog semantics. The command runtime
 recovers original receipts before configuration/cooldown and gates new acceptance
-behind the contract switch, left false in checked-in Wrangler environments.
+behind the contract switch, initially left false for operator-controlled rollout.
+Both checked-in environments now enable it; see the release review for final status.
 SQLite, feature and Chromium evidence and the one-time transition are documented
 in [`health-state-event-migration.md`](health-state-event-migration.md).
 
@@ -355,7 +357,7 @@ matrix](state-event-verification.md) maps commit/append/ACK/cleanup faults to
 executable local/shared tests. Step 10 fixes interrupted gap confirmation and
 post-retention recovery, validates accepted command receipts, and redacts
 private transport errors. The full suite and CI remain the completion gates;
-acceptance stays disabled in checked-in environments.
+acceptance was initially disabled pending operator rollout.
 
 ### 11. Measure cost and enforce bounded work
 
@@ -468,5 +470,9 @@ measurements must demonstrate bounded cost without polling idle consumers.
   record each step's evidence. Earlier progress entries describe their date.
 - 2026-10-18: Step 12 completes contributor/operator guidance and review
   preparation. See `state-event-release.md` for the review map, validation gates,
-  rollout/drain/reset instructions and limits. Checked-in acceptance remains
-  disabled; deployment and live operations are outside this milestone.
+  rollout/drain/reset instructions and limits. At that milestone, checked-in
+  acceptance was disabled; deployment and live operations remained operator-controlled.
+- 2026-10-20: The subsequent latency-repair roadmap and final release review are
+  complete. The operator reports no observed live-test delays and enables combined
+  acceptance in both checked-in environments; diagnostics are disabled. CI passes
+  the enabled configuration. See the release review for evidence and limits.

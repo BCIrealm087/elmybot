@@ -3,9 +3,17 @@
 Status: original implementation roadmap steps 1–12 completed on 2026-10-18;
 latency-repair roadmap steps 1–11 completed on 2026-10-20 on
 `codex-state-ironing`. The final review covers atomic command acceptance, health
-v2 and the subsequent latency repairs. Both checked-in Wrangler environments retain
-`STATE_EVENT_OPERATIONS_ENABLED: "false"`. Deployment, live enablement and
-operator grant changes remain separate operator decisions.
+v2 and the subsequent latency repairs. Both checked-in Wrangler environments now
+set `STATE_EVENT_OPERATIONS_ENABLED: "true"`, with the event master enabled and
+diagnostics disabled. Deployment and operator grant changes remain operator-controlled.
+
+The operator reports no observed delays during live health testing and considers
+the milestone finished. Commit `a259d8363868c66bbf3709c80dacff6bb54949ab` enables
+combined acceptance in production/test configuration and disables test state-query
+diagnostics. Its [CI run](https://github.com/BCIrealm087/elmybot/actions/runs/39520397040)
+passed 877 tests in 81 files, all four Chromium smokes, lint, syntax and the
+non-deploying Worker build; actual job logs were inspected. This live result
+supports the repairs without establishing a universal latency guarantee.
 
 The review found no new architectural blocker within the supported one-owner,
 one-stream scope. Automated evidence supports code review and operator rollout;

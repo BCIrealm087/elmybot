@@ -20,7 +20,7 @@ atomic storage with lifecycle authority, private deferred admission and
 [readable/browser correlation](state-event-browser.md).
 Combined command execution and the [health v2 migration](health-state-event-migration.md)
 are implemented behind `STATE_EVENT_OPERATIONS_ENABLED` plus the event master
-switch. Checked-in Wrangler environments keep new acceptance disabled; existing
+switch. Checked-in Wrangler environments now enable both switches; existing
 independent state/event service guards remain in force. See [state/event authoring](state-event-authoring.md)
 and [the implementation roadmap](state-event-roadmap.md).
 

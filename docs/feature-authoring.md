@@ -13,7 +13,7 @@ defined in [`framework-api.md`](framework-api.md).
 
 For explicit state-plus-event declarations, see
 [`state-event-authoring.md`](state-event-authoring.md). Atomic command execution, receipt recovery, bounded offline delivery and pure
-previews are implemented. Checked-in environments disable fresh acceptance; see
+previews are implemented. Checked-in environments now enable fresh acceptance; see
 [release controls and review evidence](state-event-release.md).
 
 The contributor framework is intentionally a build-time JavaScript API.

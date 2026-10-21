@@ -8,7 +8,7 @@ Step 6 adds [private deferred admission and gap/reset handling](state-event-deli
 Step 7 adds the private [bounded relay and producer wakeups](state-event-relay.md).
 Step 8 adds [readable snapshot correlation and browser coordination](state-event-browser.md).
 Step 9 implements [command acceptance and health v2](health-state-event-migration.md)
-behind explicit operational switches, disabled in checked-in Wrangler environments.
+behind explicit operational switches, now enabled in checked-in Wrangler environments.
 
 Import `defineStateEventOperation` and `StateEventOperationDefinitionError` from
 `@elmybot/framework` or `src/framework/index.js`. These are additive Framework
@@ -18,8 +18,8 @@ API v1 exports; the workspace facade exposes the same objects.
 
 Command execution for `stateEvents` is implemented. Fresh acceptance requires
 `STATE_EVENT_OPERATIONS_ENABLED === "true"` and the event master switch. Both
-checked-in Wrangler environments keep fresh combined acceptance disabled for
-operator-controlled rollout; [release evidence and procedures](state-event-release.md)
+checked-in Wrangler environments now enable both switches following operator live
+testing; [release evidence and procedures](state-event-release.md)
 cover completed failure, cost and contributor verification. Original accepted
 receipts remain recoverable when acceptance is disabled. Unregistered/injected runtimes still
 fail closed with `state_event_not_implemented`.
@@ -34,7 +34,7 @@ and state-only test/runtime behavior remains unchanged.
 
 This example is a declaration/preview fixture, not a deployable health migration.
 Its command requires explicit combined-acceptance and event-master enablement;
-checked-in Wrangler environments leave fresh combined acceptance disabled.
+both switches are now enabled in checked-in Wrangler environments.
 
 ```js
 import {

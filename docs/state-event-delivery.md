@@ -1,8 +1,8 @@
 # Deferred combined-event admission and gap reconciliation
 
 Roadmap step 6 adds private source/destination reconciliation to the atomic
-storage adapters. [Step 9](health-state-event-migration.md) adds opt-in combined
-production commands, with new acceptance disabled in checked-in environments. [Automatic relay, reconnect/capacity wakeups and
+storage adapters. [Step 9](health-state-event-migration.md) adds combined
+production commands behind explicit switches, now enabled in checked-in environments. [Automatic relay, reconnect/capacity wakeups and
 terminal source cleanup](state-event-relay.md) are implemented in step 7;
 [browser snapshot/event correlation](state-event-browser.md) is implemented in step 8.
 No feature, existing stream version or deployment is migrated here.
